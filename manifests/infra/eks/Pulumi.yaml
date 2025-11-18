@@ -1,0 +1,36 @@
+name: rem-eks-infra
+runtime: python
+description: REM EKS infrastructure with Karpenter autoscaling (2025 best practices)
+
+config:
+  aws:region:
+    description: AWS region for EKS cluster
+    default: us-east-1
+
+  rem:cluster_name:
+    description: EKS cluster name
+    default: rem-cluster
+
+  rem:cluster_version:
+    description: Kubernetes version
+    default: "1.31"
+
+  rem:vpc_cidr:
+    description: VPC CIDR block
+    default: 10.0.0.0/16
+
+  rem:enable_private_endpoint:
+    description: Enable private API endpoint
+    default: true
+
+  rem:enable_public_endpoint:
+    description: Enable public API endpoint (for initial access)
+    default: true
+
+  rem:karpenter_version:
+    description: Karpenter Helm chart version
+    default: "1.1.0"
+
+  rem:enable_cluster_logging:
+    description: Enable EKS control plane logging
+    default: true

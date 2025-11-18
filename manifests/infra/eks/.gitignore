@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# Pulumi
+.pulumi/
+Pulumi.*.yaml
+!Pulumi.yaml
+
+# Kubeconfig (contains secrets)
+*.kubeconfig
+kubeconfig-*
+
+# IDE
+.vscode/
+.idea/
+*.swp
