@@ -25,8 +25,8 @@ import os
 from typing import Any, Optional
 from uuid import uuid4
 
+import httpx
 from loguru import logger
-from openai import AsyncOpenAI
 from pydantic import BaseModel
 
 
@@ -81,16 +81,12 @@ class EmbeddingWorker:
         self.workers: list[asyncio.Task] = []
         self.running = False
 
-        # Initialize OpenAI client
-        api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
-        if not api_key:
+        # Store API key for direct HTTP requests
+        self.openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
+        if not self.openai_api_key:
             logger.warning(
                 "No OpenAI API key provided - embeddings will use zero vectors"
             )
-            self.openai_client = None
-        else:
-            self.openai_client = AsyncOpenAI(api_key=api_key)
-            logger.info("Initialized OpenAI client for embedding generation")
 
         logger.info(
             f"Initialized EmbeddingWorker: {num_workers} workers, "
@@ -265,25 +261,33 @@ class EmbeddingWorker:
         Returns:
             List of embedding vectors (1536 dimensions for text-embedding-3-small)
         """
-        if provider == "openai" and self.openai_client:
+        if provider == "openai" and self.openai_api_key:
             try:
                 logger.info(
                     f"Generating OpenAI embeddings for {len(texts)} texts using {model}"
                 )
 
-                # Call OpenAI embeddings API
-                response = await self.openai_client.embeddings.create(
-                    input=texts,
-                    model=model
-                )
+                # Call OpenAI embeddings API using httpx
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(
+                        "https://api.openai.com/v1/embeddings",
+                        headers={
+                            "Authorization": f"Bearer {self.openai_api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json={"input": texts, "model": model},
+                        timeout=60.0,
+                    )
+                    response.raise_for_status()
 
-                # Extract embeddings from response
-                embeddings = [item.embedding for item in response.data]
+                    # Extract embeddings from response
+                    data = response.json()
+                    embeddings = [item["embedding"] for item in data["data"]]
 
-                logger.info(
-                    f"Successfully generated {len(embeddings)} embeddings from OpenAI"
-                )
-                return embeddings
+                    logger.info(
+                        f"Successfully generated {len(embeddings)} embeddings from OpenAI"
+                    )
+                    return embeddings
 
             except Exception as e:
                 logger.error(

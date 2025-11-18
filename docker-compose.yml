@@ -69,6 +69,48 @@ services:
       --port 8000
       --reload
 
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rem-worker
+    environment:
+      # Database
+      POSTGRES__CONNECTION_STRING: postgresql://rem:rem@postgres:5432/rem
+
+      # LLM settings
+      LLM__OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LLM__ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+
+      # S3 (optional)
+      # S3__BUCKET_NAME: rem-storage
+      # S3__ENDPOINT_URL: http://minio:9000
+      # S3__ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      # S3__SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+
+      # SQS (for K8s deployment)
+      # SQS__QUEUE_URL: ${SQS_QUEUE_URL:-}
+      # AWS_REGION: ${AWS_REGION:-us-east-1}
+
+      # Environment
+      ENVIRONMENT: development
+      TEAM: rem
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      # Mount source for hot reload during development
+      - ./src:/app/src:ro
+    networks:
+      - rem-network
+    command: ["python", "-m", "rem.workers.sqs_file_processor"]
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "sqs_file_processor"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
   # Optional: MinIO for S3-compatible storage
   # minio:
   #   image: minio/minio:latest

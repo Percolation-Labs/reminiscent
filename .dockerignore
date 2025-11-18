@@ -27,6 +27,8 @@ env/
 .coverage
 htmlcov/
 .tox/
+tests/
+schemas/
 
 # Environment variables (should be passed via docker-compose)
 .env
@@ -41,9 +43,9 @@ docker-compose.yml
 .git/
 .gitignore
 
-# Documentation
-*.md
+# Documentation (keep README.md for package metadata)
 CLAUDE.md
+FILE_PROCESSING.md
 docs/
 
 # Manifests (separate from application)

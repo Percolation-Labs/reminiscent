@@ -1,15 +1,16 @@
 """
 Embedding API utilities for generating embeddings from text.
 
-Provides synchronous wrappers for embedding generation for use in
-non-async contexts like REMQueryService.
+Provides synchronous and async wrappers for embedding generation using
+raw HTTP requests (no OpenAI SDK dependency).
 """
 
 import os
 from typing import Optional
 
+import httpx
+import requests
 from loguru import logger
-from openai import OpenAI
 
 
 def generate_embedding(
@@ -19,7 +20,7 @@ def generate_embedding(
     api_key: Optional[str] = None,
 ) -> list[float]:
     """
-    Generate embedding for a single text string.
+    Generate embedding for a single text string using requests.
 
     Args:
         text: Text to embed
@@ -37,12 +38,21 @@ def generate_embedding(
             return [0.0] * 1536
 
         try:
-            client = OpenAI(api_key=api_key)
             logger.info(f"Generating OpenAI embedding for text using {model}")
 
-            response = client.embeddings.create(input=[text], model=model)
+            response = requests.post(
+                "https://api.openai.com/v1/embeddings",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={"input": [text], "model": model},
+                timeout=30,
+            )
+            response.raise_for_status()
 
-            embedding = response.data[0].embedding
+            data = response.json()
+            embedding = data["data"][0]["embedding"]
             logger.info(f"Successfully generated embedding (dimension: {len(embedding)})")
             return embedding
 
@@ -62,7 +72,7 @@ async def generate_embedding_async(
     api_key: Optional[str] = None,
 ) -> list[float]:
     """
-    Generate embedding for a single text string (async version).
+    Generate embedding for a single text string (async version) using httpx.
 
     Args:
         text: Text to embed
@@ -74,22 +84,32 @@ async def generate_embedding_async(
         Embedding vector (1536 dimensions for text-embedding-3-small)
     """
     if provider == "openai":
-        from openai import AsyncOpenAI
-
         api_key = api_key or os.getenv("OPENAI_API_KEY")
         if not api_key:
             logger.warning("No OpenAI API key - returning zero vector")
             return [0.0] * 1536
 
         try:
-            client = AsyncOpenAI(api_key=api_key)
             logger.info(f"Generating OpenAI embedding for text using {model}")
 
-            response = await client.embeddings.create(input=[text], model=model)
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    "https://api.openai.com/v1/embeddings",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={"input": [text], "model": model},
+                    timeout=30.0,
+                )
+                response.raise_for_status()
 
-            embedding = response.data[0].embedding
-            logger.info(f"Successfully generated embedding (dimension: {len(embedding)})")
-            return embedding
+                data = response.json()
+                embedding = data["data"][0]["embedding"]
+                logger.info(
+                    f"Successfully generated embedding (dimension: {len(embedding)})"
+                )
+                return embedding
 
         except Exception as e:
             logger.error(f"Failed to generate embedding from OpenAI: {e}", exc_info=True)
