@@ -1,0 +1,284 @@
+# Seed data for Resources table
+# Used for testing batch upsert, KV store population, and embedding generation
+
+resources:
+  - name: "getting-started-guide"
+    uri: "docs://getting-started.md"
+    content: |
+      # Getting Started with REM
+
+      REM (Reactive Event-driven Model) is a cloud-native system for agentic AI workloads.
+      It provides a PostgreSQL-based backend with pgvector for semantic search and graph
+      connectivity for knowledge management.
+
+      ## Key Features
+      - Multi-tenancy with tenant isolation
+      - Vector embeddings for semantic search
+      - UNLOGGED KV store for O(1) lookups
+      - Graph edges for knowledge graph construction
+      - Fuzzy search with trigram indexes
+
+      ## Quick Start
+      1. Install dependencies: `uv sync`
+      2. Start database: `docker compose up -d postgres`
+      3. Generate schema: `uv run python -m rem.cli.main schema generate`
+      4. Run API server: `uvicorn rem.api.main:app`
+    timestamp: "2025-01-15T10:00:00Z"
+    category: "documentation"
+    graph_edges:
+      - type: "references"
+        source: "docs://getting-started.md"
+        target: "docs://architecture/database.md"
+        metadata: {"context": "Mentions database architecture"}
+      - type: "references"
+        source: "docs://getting-started.md"
+        target: "docs://tutorials/api-quickstart.md"
+        metadata: {"context": "Links to API tutorial"}
+    related_entities:
+      - type: "concept"
+        name: "multi-tenancy"
+        metadata: {"importance": "high"}
+      - type: "concept"
+        name: "semantic-search"
+        metadata: {"importance": "high"}
+    tenant_id: "acme-corp"
+    user_id: "sarah-chen"
+
+  - name: "database-architecture"
+    uri: "docs://architecture/database.md"
+    content: |
+      # Database Architecture
+
+      REM uses PostgreSQL 18 with CloudNativePG for high availability and pgvector
+      for embedding storage.
+
+      ## Schema Design
+
+      ### Primary Tables
+      All entity tables inherit from CoreModel:
+      - id (UUID primary key)
+      - tenant_id (isolation)
+      - user_id (ownership)
+      - created_at, updated_at, deleted_at (temporal)
+      - graph_edges (JSONB for relationships)
+      - metadata (JSONB for flexible storage)
+
+      ### Embeddings Tables
+      Separate embeddings_<table> for each entity type:
+      - One row per entity per field per provider
+      - Unique constraint on (entity_id, field_name, provider)
+      - Vector(1536) for OpenAI text-embedding-3-small
+      - HNSW indexes for fast similarity search
+
+      ### KV Store
+      UNLOGGED table for fast entity lookups:
+      - Primary key: (tenant_id, entity_key)
+      - Trigram indexes for fuzzy search
+      - Automatically populated via triggers
+      - O(1) lookup performance
+    timestamp: "2025-01-15T11:30:00Z"
+    category: "documentation"
+    related_entities:
+      - type: "technology"
+        name: "postgresql"
+        metadata: {"version": "18"}
+      - type: "technology"
+        name: "pgvector"
+        metadata: {"purpose": "embeddings"}
+      - type: "pattern"
+        name: "unlogged-tables"
+        metadata: {"benefit": "performance"}
+    tenant_id: "acme-corp"
+    user_id: "sarah-chen"
+
+  - name: "meeting-notes-q4-planning"
+    uri: "slack://meetings/2025-01-10-q4-planning"
+    content: |
+      # Q4 Planning Meeting - January 10, 2025
+
+      Attendees: Sarah Chen, Mike Rodriguez, Alice Park
+
+      ## Discussion Points
+
+      1. **REM Deployment Strategy**
+         - Move from development to staging environment
+         - Set up monitoring with Arize Phoenix
+         - Configure autoscaling with Karpenter
+
+      2. **Feature Priorities**
+         - Complete REM query agent implementation ✅
+         - Add batch embedding generation
+         - Implement background index creation
+         - Set up CloudNativePG backup strategy
+
+      3. **Technical Debt**
+         - Migrate from Alembic to schema generation
+         - Consolidate type mapping utilities
+         - Add integration tests for KV store triggers
+
+      ## Action Items
+      - Sarah: Implement batch upsert with KV store integration
+      - Mike: Configure Phoenix OTLP endpoint
+      - Alice: Write deployment documentation
+
+      ## Next Meeting
+      January 24, 2025 - Sprint retrospective
+    timestamp: "2025-01-10T14:00:00Z"
+    category: "meeting"
+    related_entities:
+      - type: "person"
+        name: "sarah-chen"
+        metadata: {"role": "engineer"}
+      - type: "person"
+        name: "mike-rodriguez"
+        metadata: {"role": "sre"}
+      - type: "person"
+        name: "alice-park"
+        metadata: {"role": "product"}
+      - type: "project"
+        name: "rem-deployment"
+        metadata: {"status": "in-progress"}
+    tenant_id: "acme-corp"
+    user_id: "sarah-chen"
+
+  - name: "api-quickstart-tutorial"
+    uri: "docs://tutorials/api-quickstart.md"
+    content: |
+      # API Quickstart Tutorial
+
+      Learn how to use the REM API to store and query entities with semantic search.
+
+      ## Prerequisites
+      - Python 3.12+
+      - Docker Compose
+      - OpenAI or Anthropic API key
+
+      ## Installation
+      ```bash
+      git clone https://github.com/your-org/rem.git
+      cd rem
+      uv sync
+      docker compose up -d
+      ```
+
+      ## Basic Usage
+
+      ### Store a Resource
+      ```python
+      from rem.models.entities import Resource
+      from rem.services.postgres import PostgresService
+
+      pg = PostgresService()
+      resource = Resource(
+          name="my-document",
+          content="This is important content",
+          category="documentation",
+          tenant_id="my-tenant"
+      )
+      pg.repository(Resource).batch_upsert([resource])
+      ```
+
+      ### Semantic Search
+      ```python
+      from rem.services.rem import RemService
+
+      rem = RemService(pg)
+      results = await rem.execute_query(
+          RemQuery(
+              query_type=QueryType.SEARCH,
+              parameters={
+                  "query_text": "important information",
+                  "table_name": "resources",
+                  "limit": 10
+              },
+              tenant_id="my-tenant"
+          )
+      )
+      ```
+
+      ### Fuzzy Lookup
+      ```python
+      results = await rem.execute_query(
+          RemQuery(
+              query_type=QueryType.FUZZY,
+              parameters={
+                  "query_text": "my-doc",
+                  "threshold": 0.3,
+                  "limit": 5
+              },
+              tenant_id="my-tenant"
+          )
+      )
+      ```
+    timestamp: "2025-01-12T09:00:00Z"
+    category: "tutorial"
+    related_entities:
+      - type: "concept"
+        name: "api-usage"
+        metadata: {"difficulty": "beginner"}
+      - type: "concept"
+        name: "semantic-search"
+        metadata: {"importance": "high"}
+    tenant_id: "acme-corp"
+    user_id: "alice-park"
+
+  - name: "karpenter-configuration"
+    uri: "docs://infrastructure/karpenter.md"
+    content: |
+      # Karpenter Node Provisioning Configuration
+
+      REM uses Karpenter for dynamic node provisioning on AWS EKS with support
+      for spot instances and consolidation policies.
+
+      ## NodePool Strategy
+
+      ### Stateful Workloads (CloudNativePG)
+      - On-demand instances only
+      - Dedicated node pool with taints
+      - No consolidation to prevent disruption
+
+      ### Stateless Compute (API servers)
+      - Spot instances preferred (60% cost savings)
+      - Consolidation: WhenEmptyOrUnderutilized
+      - Interruption handling via SQS
+      - Multi-AZ for availability
+
+      ### GPU Workloads (Future)
+      - GPU instance types (g5, p4d)
+      - Reserved for ML inference
+      - Separate node pool with GPU taints
+
+      ## Configuration Example
+      ```yaml
+      apiVersion: karpenter.sh/v1beta1
+      kind: NodePool
+      metadata:
+        name: rem-stateless
+      spec:
+        template:
+          spec:
+            requirements:
+              - key: karpenter.sh/capacity-type
+                operator: In
+                values: ["spot", "on-demand"]
+              - key: kubernetes.io/arch
+                operator: In
+                values: ["amd64", "arm64"]
+        disruption:
+          consolidationPolicy: WhenEmptyOrUnderutilized
+          consolidateAfter: 30s
+      ```
+    timestamp: "2025-01-14T16:00:00Z"
+    category: "infrastructure"
+    related_entities:
+      - type: "technology"
+        name: "karpenter"
+        metadata: {"version": "0.35"}
+      - type: "technology"
+        name: "eks"
+        metadata: {"cluster": "rem-prod"}
+      - type: "concept"
+        name: "cost-optimization"
+        metadata: {"savings": "60%"}
+    tenant_id: "acme-corp"
+    user_id: "mike-rodriguez"

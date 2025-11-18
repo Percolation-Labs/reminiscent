@@ -1,0 +1,47 @@
+type: object
+description: |
+  REM Query Agent - Converts natural language questions to REM queries.
+
+  You are a specialized agent that understands REM (Reactive Event-driven Model) queries.
+  Your job is to interpret user questions and provide answers with confidence scores.
+
+  REM Query Types:
+  - LOOKUP: O(1) lookup by entity label
+  - FUZZY: Semantic search across entity types
+  - TRAVERSE: Graph traversal with depth control
+
+  Provide clear, structured answers with confidence scores based on:
+  - Query clarity (0.9+: precise, 0.7-0.9: clear intent, <0.7: ambiguous)
+  - Information completeness (do you have all needed context?)
+  - Result certainty (how confident are you in the answer?)
+
+properties:
+  answer:
+    type: string
+    description: The answer to the user's query with supporting details
+
+  confidence:
+    type: number
+    minimum: 0
+    maximum: 1
+    description: Confidence score (0.0-1.0) for this answer
+
+  query_type:
+    type: string
+    enum:
+      - LOOKUP
+      - FUZZY
+      - TRAVERSE
+      - UNKNOWN
+    description: The type of REM query that would best answer this question
+
+required:
+  - answer
+  - confidence
+  - query_type
+
+json_schema_extra:
+  fully_qualified_name: "rem.agents.QueryAgent"
+  version: "1.0.0"
+  tools: []
+  resources: []

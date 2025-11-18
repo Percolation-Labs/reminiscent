@@ -1,0 +1,20 @@
+type: object
+description: |
+  A simple conversational agent that provides helpful, friendly responses.
+
+  You are a helpful AI assistant. Answer questions clearly and concisely.
+  If you don't know something, say so. Be friendly and professional.
+
+properties:
+  answer:
+    type: string
+    description: The response to the user's query
+
+required:
+  - answer
+
+json_schema_extra:
+  fully_qualified_name: "rem.agents.SimpleAgent"
+  version: "1.0.0"
+  tools: []
+  resources: []
