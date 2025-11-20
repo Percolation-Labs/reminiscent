@@ -2,7 +2,7 @@ type: object
 description: |
   REM Query Agent - Converts natural language questions to REM queries.
 
-  You are a specialized agent that understands REM (Reactive Event-driven Model) queries.
+  You are a specialized agent that understands REM (Resources Entities Moments) queries.
   Your job is to interpret user questions and provide answers with confidence scores.
 
   REM Query Types:

@@ -182,7 +182,7 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title="REM API",
-        description="Reactive Event-driven Model system for agentic AI",
+        description="Resources Entities Moments system for agentic AI",
         version="0.1.0",
         lifespan=combined_lifespan,
         root_path=settings.root_path if settings.root_path else "",

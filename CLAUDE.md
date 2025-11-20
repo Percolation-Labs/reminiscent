@@ -2,7 +2,7 @@
 
 ## Architecture Overview
 
-This is a cloud-native REM (Reactive Event-driven Model) system for agentic AI workloads built on AWS EKS with modern best practices.
+This is a cloud-native REM (Resources Entities Moments) system for agentic AI workloads built on AWS EKS with modern best practices.
 
 ### Application Architecture (3 Namespaces, 2 Deployments)
 
@@ -120,15 +120,50 @@ see `manifests/infra/pulumi/eks-yaml/README.md`.
 
 ## REM System Architecture
 
-### Reactive Event-driven Model
-- Pydantic AI as core component
-- Event-driven agent orchestration
-- Reactive state management
-- Pydantic 2.0 models for:
-  - Agent definitions
-  - Event schemas
-  - State transitions
-  - Tool interfaces
+### Resources Entities Moments
+
+REM is a bio-inspired memory architecture mirroring human memory systems:
+
+**Resources**: Chunked, embedded content from documents, files, conversations
+- Semantic searchable via vector embeddings (pgvector)
+- Stored with metadata: source URI, timestamp, tenant, hash
+- Contains `related_entities` (extracted entity references)
+- Contains `graph_paths` (InlineEdge objects for knowledge graph)
+
+**Entities**: Domain knowledge nodes with properties and relationships
+- Natural language labels as identifiers (e.g., "sarah-chen", "tidb-migration-spec")
+- NOT UUIDs - enables conversational queries without internal ID knowledge
+- Entity types: person, project, technology, concept, document
+- Graph edges stored inline using InlineEdge pattern
+- Flexible properties stored as JSONB
+
+**Moments**: Temporal narratives and time-bound events
+- Time-indexed classifications of resources and entities
+- Enable chronological memory retrieval
+- Store temporal boundaries (start/end timestamps)
+- Present persons, speakers, emotion tags, topic tags
+- Reference resources and entities (does not duplicate)
+
+**Core Design Principles**:
+- Multi-index organization for different retrieval patterns
+- Iterated retrieval: LLMs conduct multi-turn database conversations
+- Hybrid storage: vectors + graph + time indexes + key-value
+- Human-readable entity labels (not UUIDs) for natural language queries
+- Tenant-scoped: complete data isolation per tenant
+
+**REM Query Language**: Custom dialect for flexible retrieval
+- `LOOKUP`: O(1) lookup by entity label
+- `SEARCH`: Semantic search across entity types (vector-based)
+- `TRAVERSE`: Graph traversal with depth control (follows InlineEdge relationships)
+- `SQL`: Direct SQL queries for temporal/structured queries
+- Supports predicate-based filtering and complex queries
+
+**Memory Evolution Through Dreaming**:
+- Stage 0: Raw resources only (0% answerable)
+- Stage 1: Entity extraction complete (20% answerable, LOOKUP works)
+- Stage 2: Moments generated (50% answerable, temporal queries work)
+- Stage 3: Affinity matching complete (80% answerable, semantic/graph queries work)
+- Stage 4: Multiple dreaming cycles (100% answerable, full query capabilities)
 
 ## Core Design Patterns (rem/src/rem/)
 

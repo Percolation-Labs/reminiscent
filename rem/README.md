@@ -1,4 +1,4 @@
-# REM - Reactive Event-driven Model System
+# REM - Resources Entities Moments
 
 Cloud-native unified memory infrastructure for agentic AI systems built with Pydantic AI, FastAPI, and FastMCP.
 

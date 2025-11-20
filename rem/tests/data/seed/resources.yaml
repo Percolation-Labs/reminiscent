@@ -7,7 +7,7 @@ resources:
     content: |
       # Getting Started with REM
 
-      REM (Reactive Event-driven Model) is a cloud-native system for agentic AI workloads.
+      REM (Resources Entities Moments) is a cloud-native system for agentic AI workloads.
       It provides a PostgreSQL-based backend with pgvector for semantic search and graph
       connectivity for knowledge management.
 

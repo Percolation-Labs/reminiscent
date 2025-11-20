@@ -1,6 +1,6 @@
 # REMStack
 
-Cloud-native REM (Reactive Event-driven Model) system for agentic AI workloads on AWS EKS.
+Cloud-native REM (Resources Entities Moments) system for agentic AI workloads on AWS EKS.
 
 ## Stack Components
 

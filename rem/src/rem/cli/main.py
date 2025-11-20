@@ -18,7 +18,7 @@ from loguru import logger
 @click.group()
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging")
 def cli(verbose: bool):
-    """REM - Reactive Event-driven Model system CLI."""
+    """REM - Resources Entities Moments system CLI."""
     if verbose:
         logger.remove()
         logger.add(sys.stderr, level="DEBUG")
