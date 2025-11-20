@@ -1,0 +1,22 @@
+# CloudNativePG Cluster definition
+#
+# Best practices (2025):
+# - PostgreSQL 18 with pgvector extension
+# - ImageVolume pattern for immutable extensions
+# - extension_control_path for extension management
+# - Streaming replication for HA
+# - Backup to S3 via Barman
+# - Monitoring with Prometheus
+
+# TODO: Define Cluster resource
+# TODO: Set PostgreSQL 18 image with pgvector
+# TODO: Configure instances (3 for HA)
+# TODO: Set up ImageVolume for pgvector extension
+# TODO: Configure extension_control_path
+# TODO: Configure dynamic_library_path
+# TODO: Set up storage class and size
+# TODO: Configure backup to S3 (IRSA)
+# TODO: Set up monitoring endpoints
+# TODO: Configure connection pooling (PgBouncer)
+# TODO: Set resource limits (CPU/memory)
+# TODO: Configure affinity for topology spread

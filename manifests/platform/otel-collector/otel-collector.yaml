@@ -1,0 +1,79 @@
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: otel-collector
+  namespace: observability
+spec:
+  mode: deployment
+  serviceAccount: otel-collector
+
+  # Environment variables for Phoenix API key
+  envFrom:
+    - secretRef:
+        name: rem-phoenix-api-key
+        optional: true
+
+  config:
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      batch:
+        timeout: 1s
+        send_batch_size: 1024
+
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 512
+
+      resource:
+        attributes:
+          - key: service.namespace
+            value: rem-api
+            action: upsert
+          - key: deployment.environment
+            value: production
+            action: upsert
+
+    exporters:
+      # Export to Phoenix via OTLP HTTP
+      otlphttp/phoenix:
+        endpoint: http://phoenix.phoenix-system.svc.cluster.local:6006/v1/traces
+        headers:
+          # Phoenix API key from secret (when available)
+          authorization: "Bearer ${PHOENIX_API_KEY}"
+        tls:
+          insecure: true
+
+      debug:
+        verbosity: detailed
+
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, batch, resource]
+          exporters: [otlphttp/phoenix, debug]
+
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, batch, resource]
+          exporters: [debug]
+
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, batch, resource]
+          exporters: [debug]
+
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"

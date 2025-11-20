@@ -1,0 +1,26 @@
+# PostgreSQL patches for production
+# High availability, larger resources, production tuning
+
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: rem-postgres
+spec:
+  # High availability: 3 instances
+  instances: 3
+
+  # Production storage size
+  storage:
+    size: 100Gi
+
+  # Production resources (already set in base, but ensure they're correct)
+  resources:
+    requests:
+      memory: "4Gi"
+      cpu: "2000m"
+    limits:
+      memory: "8Gi"
+      cpu: "4000m"
+
+  # PostgreSQL tuning for production (values from base are already good)
+  # Keeping this patch minimal - base values are production-ready

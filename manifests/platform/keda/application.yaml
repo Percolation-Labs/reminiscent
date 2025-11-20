@@ -1,0 +1,113 @@
+# ArgoCD Application for KEDA
+#
+# KEDA (Kubernetes Event-Driven Autoscaling) enables:
+# - Scale pods based on external metrics (SQS queue length, etc.)
+# - Scale to zero when no events
+# - Event-driven autoscaling independent of CPU/memory
+#
+# Integrates with Karpenter for pod→node scaling cascade
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: keda
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    # OCI Helm chart from KEDA official registry
+    chart: keda
+    repoURL: https://kedacore.github.io/charts
+    targetRevision: 2.16.0  # Latest stable (2025)
+    helm:
+      # Use OCI registry
+      enableOCI: false  # Traditional Helm repo, not OCI
+
+      values: |
+        # KEDA Operator configuration
+        operator:
+          name: keda-operator
+          replicaCount: 2
+
+          # Resource limits
+          resources:
+            limits:
+              cpu: 1000m
+              memory: 1000Mi
+            requests:
+              cpu: 100m
+              memory: 100Mi
+
+        # Metrics Server configuration
+        metricsServer:
+          replicaCount: 2
+
+          resources:
+            limits:
+              cpu: 1000m
+              memory: 1000Mi
+            requests:
+              cpu: 100m
+              memory: 100Mi
+
+        # Admission Webhooks
+        webhooks:
+          enabled: true
+
+        # Service Account (for IRSA)
+        serviceAccount:
+          create: true
+          name: keda-operator
+          annotations:
+            # IRSA annotation (set by Pulumi or manually)
+            # eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/keda-operator-role
+
+        # Pod Identity (AWS authentication)
+        podIdentity:
+          aws:
+            irsa:
+              enabled: true
+              roleArn: ""  # Set via annotation instead
+
+        # Logging
+        logging:
+          operator:
+            level: info
+          metricServer:
+            level: info
+
+        # Security context
+        securityContext:
+          operator:
+            runAsNonRoot: true
+            runAsUser: 1000
+            capabilities:
+              drop:
+                - ALL
+          metricServer:
+            runAsNonRoot: true
+            runAsUser: 1000
+            capabilities:
+              drop:
+                - ALL
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: keda
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true  # Required for KEDA CRDs (annotation length issue)
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

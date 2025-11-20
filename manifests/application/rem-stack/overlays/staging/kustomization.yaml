@@ -1,0 +1,59 @@
+# Kustomize Overlay: Staging Environment
+#
+# This overlay uses base configuration (no patches).
+# Staging serves as a production-like environment for testing before prod deployment.
+#
+# Usage:
+#   kubectl apply -k manifests/application/rem-stack/overlays/staging
+#
+# With semantic version:
+#   cd manifests/application/rem-stack/overlays/staging
+#   kustomize edit set image rem-api=<registry>/rem-api:v1.2.3-rc.1
+#   kubectl apply -k .
+#
+# Tagging strategy:
+#   - v1.2.3-rc.1    (release candidate)
+#   - v1.2.3-beta.1  (beta)
+#   - v1.2.3-alpha.1 (alpha)
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Reference base configuration
+resources:
+  - ../../base
+
+# Namespace: rem-app (inherited from base)
+
+# Environment labels
+commonLabels:
+  environment: staging
+
+# Override images with staging tags (semantic versioning)
+images:
+  - name: rem-api
+    newName: ${ECR_REGISTRY}/rem-api
+    newTag: ${IMAGE_TAG}  # e.g., v1.2.3-rc.1
+  - name: rem-mcp
+    newName: ${ECR_REGISTRY}/rem-mcp
+    newTag: ${IMAGE_TAG}
+  - name: rem-worker
+    newName: ${ECR_REGISTRY}/rem-worker
+    newTag: ${IMAGE_TAG}
+
+# ConfigMap generator for staging environment
+configMapGenerator:
+  - name: rem-version-info
+    behavior: merge
+    literals:
+      - VERSION=${IMAGE_TAG}
+      - ENVIRONMENT=staging
+      - GIT_COMMIT=${GIT_COMMIT:-unknown}
+      - BUILD_DATE=${BUILD_DATE:-unknown}
+
+# Labels for version tracking
+labels:
+  - pairs:
+      app.kubernetes.io/version: ${IMAGE_TAG}
+    includeSelectors: true
+    includeTemplates: true

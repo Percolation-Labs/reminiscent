@@ -1,0 +1,59 @@
+# KEDA ScaledObject for file-processor
+#
+# Scales deployment based on SQS queue depth
+# - Scales up when messages accumulate
+# - Scales down to 0 when queue is empty
+# - Works with Karpenter for node-level scaling
+
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: file-processor-scaler
+spec:
+  # Target deployment to scale
+  scaleTargetRef:
+    name: file-processor
+    kind: Deployment
+
+  # Scaling behavior
+  pollingInterval: 10   # Check SQS every 10 seconds
+  cooldownPeriod: 60    # Wait 60s before scaling down after last trigger
+  minReplicaCount: 0    # Scale to zero when no messages
+  maxReplicaCount: 20   # Max pods (adjust based on workload)
+
+  # Advanced scaling behavior (optional)
+  advanced:
+    # Scale up aggressively, scale down gradually
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 300  # 5 min stabilization
+          policies:
+          - type: Percent
+            value: 50        # Scale down max 50% of pods at a time
+            periodSeconds: 60
+        scaleUp:
+          stabilizationWindowSeconds: 0   # Scale up immediately
+          policies:
+          - type: Percent
+            value: 100       # Double pods at a time if needed
+            periodSeconds: 15
+          - type: Pods
+            value: 4         # Or add 4 pods at a time
+            periodSeconds: 15
+          selectPolicy: Max  # Use the policy that adds more pods
+
+  # Triggers (SQS queue)
+  # NOTE: KEDA doesn't support ConfigMap refs in trigger metadata
+  # This value MUST match rem-queues ConfigMap (FILE_PROCESSING_QUEUE_URL)
+  # Run: kubectl get configmap rem-queues -n rem-api -o jsonpath='{.data.FILE_PROCESSING_QUEUE_URL}'
+  # To regenerate: ./manifests/generate-configmap.sh | kubectl apply -f -
+  triggers:
+  - type: aws-sqs-queue
+    metadata:
+      # SQS Queue URL (from CDK stack output: FileProcessingQueueUrl)
+      queueURL: https://sqs.us-east-1.amazonaws.com/852140462228/application-cluster-a-file-processing-dev
+      queueLength: "10"      # Target: 1 pod per 10 messages
+      awsRegion: us-east-1
+    authenticationRef:
+      name: file-processor-trigger-auth

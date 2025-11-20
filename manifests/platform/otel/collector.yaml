@@ -1,0 +1,17 @@
+# OpenTelemetry Collector configuration
+#
+# Best practices:
+# - OTLP receiver for trace ingestion
+# - Batch processor for efficiency
+# - Multiple exporters (Phoenix, storage)
+# - Resource detection for K8s metadata
+# - Tail sampling for cost optimization
+
+# TODO: Configure OTLP receiver (gRPC and HTTP)
+# TODO: Set up batch processor
+# TODO: Configure Phoenix exporter (OTLP endpoint)
+# TODO: Add resource detection processor
+# TODO: Configure tail sampling processor
+# TODO: Set up service pipelines (traces, metrics, logs)
+# TODO: Configure health check extensions
+# TODO: Set resource limits

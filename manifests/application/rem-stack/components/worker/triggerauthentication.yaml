@@ -1,0 +1,13 @@
+# KEDA TriggerAuthentication for SQS
+#
+# Uses AWS Web Identity (IRSA) to assume the IAM role from the service account.
+# KEDA will use the file-processor service account's IRSA annotation to get credentials.
+
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: file-processor-trigger-auth
+spec:
+  podIdentity:
+    provider: aws
+    identityOwner: operator  # KEDA operator will use the service account

@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: phoenix-system
+  labels:
+    app.kubernetes.io/name: phoenix
+    app.kubernetes.io/component: observability

@@ -1,0 +1,65 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: rem-api
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: rem-api
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    # Allow from ALB ingress controller
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: TCP
+          port: 8000
+
+  egress:
+    # Allow DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+
+    # Allow PostgreSQL
+    - to:
+        - podSelector:
+            matchLabels:
+              cnpg.io/cluster: rem-postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+
+    # Allow OTEL collector
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: otel-collector
+      ports:
+        - protocol: TCP
+          port: 4317
+
+    # Allow Phoenix
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: phoenix-system
+      ports:
+        - protocol: TCP
+          port: 6006
+
+    # Allow HTTPS egress (for LLM APIs, external services)
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 443

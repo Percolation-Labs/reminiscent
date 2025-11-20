@@ -1,0 +1,243 @@
+# Karpenter NodePool and EC2NodeClass definitions
+# Apply these AFTER the Pulumi stack is deployed and Karpenter is installed
+#
+# Usage:
+#   kubectl apply -f karpenter-nodepools.yaml
+#
+# Prerequisites:
+#   1. EKS cluster created via Pulumi
+#   2. Karpenter Helm chart installed (see platform/argocd/applications/karpenter.yaml)
+#   3. OIDC provider configured
+#   4. Karpenter controller IRSA role created
+
+---
+# EC2NodeClass for all workloads
+# Defines the AMI, subnets, security groups, and IAM role for nodes
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: default
+  namespace: karpenter
+spec:
+  # Use AL2023 EKS-optimized AMI (latest)
+  amiSelectorTerms:
+    - alias: al2023@latest
+
+  # Subnet selection via Karpenter discovery tag
+  # Set by Pulumi: karpenter.sh/discovery: ${cluster_name}
+  subnetSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: "rem-cluster"  # ${cluster_name} from Pulumi
+
+  # Security group selection (use cluster default)
+  securityGroupSelectorTerms:
+    - tags:
+        aws:eks:cluster-name: "rem-cluster"  # ${cluster_name} from Pulumi
+
+  # IAM role for node instances (output from Pulumi)
+  role: "rem-cluster-karpenter-node-role"  # ${karpenter_node_role_arn} from Pulumi
+
+  # User data for node bootstrapping
+  userData: |
+    #!/bin/bash
+    # Bootstrap EKS node
+    /etc/eks/bootstrap.sh rem-cluster \
+      --use-max-pods false \
+      --kubelet-extra-args '--max-pods=110'
+
+  # Block device mappings
+  blockDeviceMappings:
+    - deviceName: /dev/xvda
+      ebs:
+        volumeSize: 100Gi
+        volumeType: gp3
+        iops: 3000
+        throughput: 125
+        deleteOnTermination: true
+        encrypted: true
+
+  # Instance metadata options
+  metadataOptions:
+    httpEndpoint: enabled
+    httpProtocolIPv6: disabled
+    httpPutResponseHopLimit: 2
+    httpTokens: required  # IMDSv2 required
+
+  # Tags for all instances
+  tags:
+    Name: karpenter-node
+    Environment: production
+    ManagedBy: Karpenter
+    Project: REM
+
+---
+# NodePool: stateful workloads (CloudNativePG)
+# On-demand instances for database reliability
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: stateful
+  namespace: karpenter
+spec:
+  # Reference to EC2NodeClass
+  template:
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: default
+
+      # Pod requirements for this NodePool
+      requirements:
+        # On-demand only for stateful workloads
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]
+
+        # Instance categories (general purpose + memory optimized)
+        - key: karpenter.k8s.aws/instance-category
+          operator: In
+          values: ["c", "m", "r"]
+
+        # Instance generations (6th gen and newer)
+        - key: karpenter.k8s.aws/instance-generation
+          operator: Gt
+          values: ["5"]
+
+        # CPU architecture (AMD64 only for CloudNativePG)
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]
+
+        # Availability zones
+        - key: topology.kubernetes.io/zone
+          operator: In
+          values: ["us-east-1a", "us-east-1b", "us-east-1c"]
+
+      # Taints for stateful workloads only
+      taints:
+        - key: workload
+          value: stateful
+          effect: NoSchedule
+
+  # Disruption budget - minimize disruption for databases
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 10m
+    budgets:
+      - nodes: "0"  # Never disrupt nodes with pods
+
+  # Limits for this NodePool
+  limits:
+    cpu: "100"
+    memory: 400Gi
+
+---
+# NodePool: stateless workloads (API, MCP, Phoenix)
+# Spot instances for cost optimization
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: stateless
+  namespace: karpenter
+spec:
+  template:
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: default
+
+      requirements:
+        # Prefer spot, fallback to on-demand
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["spot", "on-demand"]
+
+        # Wider instance type selection for spot availability
+        - key: karpenter.k8s.aws/instance-category
+          operator: In
+          values: ["c", "m", "t"]
+
+        # Instance generations (5th gen and newer for spot diversity)
+        - key: karpenter.k8s.aws/instance-generation
+          operator: Gt
+          values: ["4"]
+
+        # Multi-architecture support
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64", "arm64"]
+
+        # Availability zones
+        - key: topology.kubernetes.io/zone
+          operator: In
+          values: ["us-east-1a", "us-east-1b", "us-east-1c"]
+
+  # Disruption budget - allow consolidation for cost savings
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 1m
+    budgets:
+      - nodes: "10%"  # Disrupt max 10% of nodes at a time
+
+  # Limits for this NodePool
+  limits:
+    cpu: "200"
+    memory: 800Gi
+
+  # Weight for pod scheduling preference
+  weight: 100
+
+---
+# NodePool: GPU workloads (future ML inference)
+# Reserved for GPU-accelerated workloads
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: gpu
+  namespace: karpenter
+spec:
+  template:
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: default
+
+      requirements:
+        # On-demand for GPU instances (spot less reliable)
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["on-demand"]
+
+        # GPU instance families
+        - key: karpenter.k8s.aws/instance-family
+          operator: In
+          values: ["g4dn", "g5", "p3", "p4d"]
+
+        # AMD64 architecture for GPU compatibility
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]
+
+        # Availability zones
+        - key: topology.kubernetes.io/zone
+          operator: In
+          values: ["us-east-1a", "us-east-1b", "us-east-1c"]
+
+      # Taints for GPU workloads only
+      taints:
+        - key: nvidia.com/gpu
+          value: "true"
+          effect: NoSchedule
+
+  # Disruption budget - minimize GPU node churn
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 30m
+
+  # Limits for GPU NodePool
+  limits:
+    cpu: "50"
+    memory: 200Gi

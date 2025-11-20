@@ -1,0 +1,18 @@
+# ArgoCD Helm values
+#
+# Best practices (2025):
+# - OCI Helm chart repository
+# - External Secrets for credentials
+# - High availability deployment
+# - RBAC with SSO integration
+# - Declarative repository configuration
+
+# TODO: Configure ArgoCD server replicas
+# TODO: Enable HA for repo-server and application-controller
+# TODO: Configure Redis HA
+# TODO: Set up External Secrets for repo credentials
+# TODO: Configure OIDC for SSO
+# TODO: Enable OCI registry support (enableOCI: true)
+# TODO: Configure repository credentials template
+# TODO: Set resource limits and requests
+# TODO: Configure ingress (no ALB)

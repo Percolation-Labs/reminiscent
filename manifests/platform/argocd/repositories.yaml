@@ -1,0 +1,13 @@
+# ArgoCD repository definitions
+#
+# OCI registry pattern:
+# - enableOCI: true for all OCI repos
+# - URL contains only registry address
+# - No oci:// protocol prefix
+# - Credentials via External Secrets
+
+# TODO: Define OCI Helm chart repositories
+# TODO: Configure Docker Hub with enableOCI
+# TODO: Configure GHCR for application images
+# TODO: Configure ECR for private charts (with credential refresh)
+# TODO: Link External Secrets for authentication

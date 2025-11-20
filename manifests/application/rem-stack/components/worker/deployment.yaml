@@ -1,0 +1,184 @@
+# REM File Processor Worker
+#
+# Background worker that processes files from S3 triggered by SQS messages.
+#
+# Deployment Strategy:
+#   - Direct kubectl: kubectl apply -f manifests/application/file-processor/
+#   - ArgoCD: Point to your fork of this repo, path: manifests/application/file-processor
+#
+# Scaling:
+#   - KEDA ScaledObject scales based on SQS queue depth (see keda-scaledobject.yaml)
+#   - Starts at 0 replicas when queue is empty
+#   - Scales to 20 replicas max based on message count
+#   - Target: 1 pod per 10 messages (configurable)
+#
+# Prerequisites:
+#   - KEDA operator installed (platform layer)
+#   - SQS queue created (infrastructure layer)
+#   - IRSA/Pod Identity role with SQS + S3 permissions
+#
+# Monitoring:
+#   kubectl get scaledobject -n default
+#   kubectl describe scaledobject file-processor-scaler -n default
+#   kubectl get pods -n default -l app=file-processor
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: file-processor
+  labels:
+    app: file-processor
+    component: rem-consumer
+spec:
+  # KEDA manages replicas - set initial count
+  # KEDA will override this based on queue depth (see keda-scaledobject.yaml)
+  replicas: 0  # Start at 0, KEDA scales up when messages arrive
+
+  selector:
+    matchLabels:
+      app: file-processor
+
+  template:
+    metadata:
+      labels:
+        app: file-processor
+        component: rem-consumer
+
+    spec:
+      serviceAccountName: file-processor  # IRSA for S3 + SQS access
+
+      # Security context
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+
+      containers:
+      - name: processor
+        image: percolationlabs/rem:api-23da4cf
+        imagePullPolicy: Always
+
+        # Run file processor worker
+        command: ["python", "-m", "rem.workers.sqs_file_processor"]
+
+        # Environment variables from ConfigMaps (generated from CDK outputs)
+        envFrom:
+        - configMapRef:
+            name: rem-config  # S3__BUCKET_NAME, ENVIRONMENT, OTEL__, PHOENIX__
+        - configMapRef:
+            name: rem-queues  # FILE_PROCESSING_QUEUE_URL
+
+        env:
+        # Map FILE_PROCESSING_QUEUE_URL from ConfigMap to SQS__QUEUE_URL
+        - name: SQS__QUEUE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: rem-queues
+              key: FILE_PROCESSING_QUEUE_URL
+
+        # AWS Region
+        - name: AWS_REGION
+          value: us-east-1
+        - name: SQS__REGION
+          value: us-east-1
+
+        # Use regional STS endpoints (faster)
+        - name: AWS_STS_REGIONAL_ENDPOINTS
+          value: regional
+
+        # S3 Region (bucket name comes from rem-config ConfigMap)
+        - name: S3__REGION
+          value: us-east-1
+
+        # Resource limits
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+
+        # Liveness probe (restart if worker crashes)
+        livenessProbe:
+          exec:
+            command: ["pgrep", "-f", "sqs_file_processor"]
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+        # Readiness probe (worker is ready after startup)
+        readinessProbe:
+          exec:
+            command: ["pgrep", "-f", "sqs_file_processor"]
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 2
+
+        # Graceful shutdown
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh", "-c", "sleep 15"]
+
+        # Security context
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+
+        # Volume mounts for temp files (if needed)
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+
+      # Volumes
+      volumes:
+      - name: tmp
+        emptyDir: {}
+
+      # Affinity: prefer spot instances + spread across nodes
+      affinity:
+        # Node affinity: prefer spot instances (cost optimization)
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: karpenter.sh/capacity-type
+                operator: In
+                values:
+                - spot
+          # Also prefer instances with local NVMe storage for temp files
+          - weight: 50
+            preference:
+              matchExpressions:
+              - key: karpenter.k8s.aws/instance-local-nvme
+                operator: Exists
+
+        # Pod anti-affinity: spread across nodes
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - file-processor
+              topologyKey: kubernetes.io/hostname
+
+      # Tolerations for spot interruption
+      tolerations:
+      - key: karpenter.sh/disruption
+        operator: Exists
+        effect: NoSchedule
+
+      # Termination grace period (allow in-flight processing)
+      terminationGracePeriodSeconds: 45

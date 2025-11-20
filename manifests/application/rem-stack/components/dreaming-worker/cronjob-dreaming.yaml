@@ -1,0 +1,294 @@
+---
+# REM Dreaming Worker CronJob
+# Runs daily memory indexing: user models, moments, resource affinity
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: rem-dreaming-worker
+  namespace: rem-app
+  labels:
+    app: rem-dreaming
+    component: worker
+spec:
+  # Run daily at 3 AM UTC
+  schedule: "0 3 * * *"
+
+  # Keep last 3 successful and 1 failed job for debugging
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+
+  # Don't allow concurrent runs
+  concurrencyPolicy: Forbid
+
+  jobTemplate:
+    metadata:
+      labels:
+        app: rem-dreaming
+        component: worker
+    spec:
+      # Clean up completed jobs after 1 hour
+      ttlSecondsAfterFinished: 3600
+
+      # Retry failed jobs once
+      backoffLimit: 1
+
+      template:
+        metadata:
+          labels:
+            app: rem-dreaming
+            component: worker
+        spec:
+          restartPolicy: Never
+
+          # Service account for IRSA (AWS access)
+          serviceAccountName: rem-dreaming-sa
+
+          # Prefer spot instances for cost savings
+          tolerations:
+          - key: karpenter.sh/capacity-type
+            operator: Equal
+            value: spot
+            effect: NoSchedule
+
+          nodeSelector:
+            karpenter.sh/nodepool: stateless
+
+          containers:
+          - name: dreaming-worker
+            image: ${ECR_REGISTRY}/rem-stack:${IMAGE_TAG}
+            imagePullPolicy: IfNotPresent
+
+            command:
+            - python
+            - -m
+            - rem.cli.dreaming
+            - full
+            - --all-users
+
+            env:
+            # REM Configuration
+            - name: REM_API_URL
+              value: "http://rem-api.rem-app.svc.cluster.local:8000"
+
+            - name: REM_EMBEDDING_PROVIDER
+              value: "text-embedding-3-small"
+
+            - name: REM_DEFAULT_MODEL
+              value: "gpt-4o"
+
+            - name: REM_LOOKBACK_HOURS
+              value: "24"
+
+            # OpenAI API Key (from External Secrets)
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: rem-api-keys
+                  key: openai-api-key
+
+            # Anthropic API Key (optional, for Claude models)
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: rem-api-keys
+                  key: anthropic-api-key
+                  optional: true
+
+            # OpenTelemetry (disabled for workers)
+            - name: OTEL__ENABLED
+              value: "false"
+
+            resources:
+              requests:
+                memory: "256Mi"
+                cpu: "250m"
+              limits:
+                memory: "512Mi"
+                cpu: "1000m"
+
+            # Health check: Job should complete within 1 hour
+            livenessProbe:
+              exec:
+                command:
+                - /bin/sh
+                - -c
+                - "pgrep -f 'rem.cli.dreaming' || exit 1"
+              initialDelaySeconds: 60
+              periodSeconds: 300
+              timeoutSeconds: 5
+              failureThreshold: 3
+
+---
+# ServiceAccount for IRSA (if AWS access needed)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rem-dreaming-sa
+  namespace: rem-app
+  annotations:
+    eks.amazonaws.com/role-arn: ${REM_WORKER_ROLE_ARN}
+
+---
+# Additional CronJob: Frequent Affinity Updates (Every 6 hours)
+# Uses fast semantic mode for continuous graph updates
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: rem-affinity-frequent
+  namespace: rem-app
+  labels:
+    app: rem-dreaming
+    component: affinity-worker
+spec:
+  # Run every 6 hours
+  schedule: "0 */6 * * *"
+
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  concurrencyPolicy: Forbid
+
+  jobTemplate:
+    metadata:
+      labels:
+        app: rem-dreaming
+        component: affinity-worker
+    spec:
+      ttlSecondsAfterFinished: 3600
+      backoffLimit: 1
+
+      template:
+        metadata:
+          labels:
+            app: rem-dreaming
+            component: affinity-worker
+        spec:
+          restartPolicy: Never
+          serviceAccountName: rem-dreaming-sa
+
+          tolerations:
+          - key: karpenter.sh/capacity-type
+            operator: Equal
+            value: spot
+            effect: NoSchedule
+
+          nodeSelector:
+            karpenter.sh/nodepool: stateless
+
+          containers:
+          - name: affinity-worker
+            image: ${ECR_REGISTRY}/rem-stack:${IMAGE_TAG}
+            imagePullPolicy: IfNotPresent
+
+            command:
+            - python
+            - -m
+            - rem.cli.dreaming
+            - affinity
+            - --all-users
+            - --lookback-hours=6
+
+            env:
+            - name: REM_API_URL
+              value: "http://rem-api.rem-app.svc.cluster.local:8000"
+
+            - name: REM_EMBEDDING_PROVIDER
+              value: "text-embedding-3-small"
+
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: rem-api-keys
+                  key: openai-api-key
+
+            resources:
+              requests:
+                memory: "256Mi"
+                cpu: "250m"
+              limits:
+                memory: "512Mi"
+                cpu: "1000m"
+
+---
+# Weekly LLM Affinity Analysis (Sundays at 2 AM)
+# Deep intelligent analysis, more expensive
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: rem-affinity-weekly-llm
+  namespace: rem-app
+  labels:
+    app: rem-dreaming
+    component: affinity-llm-worker
+spec:
+  # Run every Sunday at 2 AM
+  schedule: "0 2 * * 0"
+
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 1
+  concurrencyPolicy: Forbid
+
+  jobTemplate:
+    metadata:
+      labels:
+        app: rem-dreaming
+        component: affinity-llm-worker
+    spec:
+      ttlSecondsAfterFinished: 3600
+      backoffLimit: 1
+
+      template:
+        metadata:
+          labels:
+            app: rem-dreaming
+            component: affinity-llm-worker
+        spec:
+          restartPolicy: Never
+          serviceAccountName: rem-dreaming-sa
+
+          tolerations:
+          - key: karpenter.sh/capacity-type
+            operator: Equal
+            value: spot
+            effect: NoSchedule
+
+          nodeSelector:
+            karpenter.sh/nodepool: stateless
+
+          containers:
+          - name: affinity-llm-worker
+            image: ${ECR_REGISTRY}/rem-stack:${IMAGE_TAG}
+            imagePullPolicy: IfNotPresent
+
+            command:
+            - python
+            - -m
+            - rem.cli.dreaming
+            - affinity
+            - --all-users
+            - --use-llm
+            - --lookback-hours=168
+            - --limit=500
+
+            env:
+            - name: REM_API_URL
+              value: "http://rem-api.rem-app.svc.cluster.local:8000"
+
+            - name: REM_EMBEDDING_PROVIDER
+              value: "text-embedding-3-small"
+
+            - name: REM_DEFAULT_MODEL
+              value: "gpt-4o"
+
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: rem-api-keys
+                  key: openai-api-key
+
+            resources:
+              requests:
+                memory: "512Mi"
+                cpu: "500m"
+              limits:
+                memory: "1Gi"
+                cpu: "2000m"

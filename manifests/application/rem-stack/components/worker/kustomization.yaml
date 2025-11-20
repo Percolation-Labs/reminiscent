@@ -1,0 +1,12 @@
+# File Processor Worker Component
+#
+# KEDA-scaled worker for async file processing from SQS
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - serviceaccount.yaml
+  - deployment.yaml
+  - keda-scaledobject.yaml
+  - triggerauthentication.yaml

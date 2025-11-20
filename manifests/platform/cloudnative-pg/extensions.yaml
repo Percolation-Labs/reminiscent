@@ -1,0 +1,14 @@
+# PostgreSQL extensions configuration
+#
+# Immutable extension pattern (2025):
+# - ImageVolume mounts for extensions
+# - extension_control_path in postgresql.conf
+# - No runtime extension installation
+# - Version-pinned extension images
+
+# TODO: Define ImageVolume for pgvector
+# TODO: Mount pgvector at /extensions/pgvector
+# TODO: Configure postgresql.conf bootstrap
+# TODO: Set extension_control_path=/extensions/pgvector/share
+# TODO: Set dynamic_library_path=/extensions/pgvector/lib
+# TODO: Create initdb SQL for CREATE EXTENSION

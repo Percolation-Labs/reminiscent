@@ -1,0 +1,75 @@
+# Kustomize Overlay: Production Environment
+#
+# This overlay customizes the base REM stack for production:
+# - High availability (3 replicas for stateless services)
+# - Higher resource allocations
+# - Strict security policies
+# - Production-grade PostgreSQL (3 instances)
+#
+# Usage:
+#   kubectl apply -k manifests/application/rem-stack/overlays/prod
+#
+# With semantic version:
+#   cd manifests/application/rem-stack/overlays/prod
+#   kustomize edit set image rem-api=<registry>/rem-api:v1.2.3
+#   kubectl apply -k .
+#
+# Tagging strategy:
+#   - v1.2.3   (stable release)
+#   - v1.2.4   (patch release)
+#   - v1.3.0   (minor release)
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Reference base configuration
+resources:
+  - ../../base
+
+# Namespace: rem-app (inherited from base)
+
+# Environment labels
+commonLabels:
+  environment: production
+
+# Override images with production tags (semantic versioning)
+images:
+  - name: rem-api
+    newName: ${ECR_REGISTRY}/rem-api
+    newTag: ${IMAGE_TAG}  # e.g., v1.2.3
+  - name: rem-mcp
+    newName: ${ECR_REGISTRY}/rem-mcp
+    newTag: ${IMAGE_TAG}
+  - name: rem-worker
+    newName: ${ECR_REGISTRY}/rem-worker
+    newTag: ${IMAGE_TAG}
+
+# ConfigMap generator for production environment
+configMapGenerator:
+  - name: rem-version-info
+    behavior: merge
+    literals:
+      - VERSION=${IMAGE_TAG}
+      - ENVIRONMENT=production
+      - GIT_COMMIT=${GIT_COMMIT:-unknown}
+      - BUILD_DATE=${BUILD_DATE:-unknown}
+      - LOG_LEVEL=INFO
+
+# Patches for production environment
+patchesStrategicMerge:
+  - deployment-patch.yaml
+  - postgres-patch.yaml
+
+# Scale replicas for HA
+replicas:
+  - name: rem-api
+    count: 3
+  - name: rem-mcp
+    count: 3
+
+# Labels for version tracking
+labels:
+  - pairs:
+      app.kubernetes.io/version: ${IMAGE_TAG}
+    includeSelectors: true
+    includeTemplates: true

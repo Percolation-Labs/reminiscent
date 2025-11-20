@@ -1,0 +1,87 @@
+# ArgoCD Application for REM Stack (Staging)
+#
+# Deploys the REM stack using Kustomize overlays with semantic versioning.
+#
+# Deployment:
+#   kubectl apply -f manifests/application/rem-stack/argocd-staging.yaml
+#
+# To point to your fork:
+#   1. Fork this repository
+#   2. Update spec.source.repoURL to your fork
+#   3. Update spec.source.targetRevision to your branch (e.g., staging)
+#   4. Apply this manifest
+#
+# Image versioning:
+#   ArgoCD will use the image tags specified in the Kustomize overlay.
+#   Update kustomization.yaml with semantic versions (e.g., v1.2.3-rc.1)
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: rem-stack-staging
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: rem-stack
+    environment: staging
+spec:
+  project: default
+
+  # Source: Git repository with Kustomize
+  source:
+    repoURL: https://github.com/YOUR-ORG/remstack.git  # Change to your fork
+    targetRevision: staging  # Git branch for staging
+    path: manifests/application/rem-stack/overlays/staging
+
+    # Kustomize build options
+    kustomize:
+      # Set image tags dynamically (optional)
+      # images:
+      #   - rem-api=<registry>/rem-api:v1.2.3-rc.1
+      #   - rem-mcp=<registry>/rem-mcp:v1.2.3-rc.1
+      #   - rem-worker=<registry>/rem-worker:v1.2.3-rc.1
+
+      # Common labels
+      commonLabels:
+        argocd.argoproj.io/instance: rem-stack-staging
+
+      # Common annotations
+      commonAnnotations:
+        argocd.argoproj.io/tracking-id: rem-stack-staging
+
+  # Destination: Kubernetes cluster and namespace
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: rem-staging
+
+  # Sync policy
+  syncPolicy:
+    automated:
+      prune: true       # Delete resources removed from git
+      selfHeal: true    # Sync when cluster state differs from git
+      allowEmpty: false # Don't sync if source is empty
+
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - RespectIgnoreDifferences=true
+
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+
+  # Ignore differences for certain fields
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas  # Ignore replica count (managed by HPA/KEDA)
+    - group: keda.sh
+      kind: ScaledObject
+      jsonPointers:
+        - /spec/triggers  # KEDA manages triggers
+
+  # Health checks
+  revisionHistoryLimit: 10

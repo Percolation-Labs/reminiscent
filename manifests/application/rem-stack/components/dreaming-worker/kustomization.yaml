@@ -1,0 +1,14 @@
+---
+# REM Dreaming Worker Component
+# Daily memory indexing: user models, moments, resource affinity
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - cronjob-dreaming.yaml
+
+commonLabels:
+  app: rem-dreaming
+  component: worker
+
+namespace: rem-app

@@ -1,0 +1,103 @@
+# ArgoCD Application for REM Stack (Production)
+#
+# Deploys the REM stack to production using Kustomize overlays with semantic versioning.
+#
+# Deployment:
+#   kubectl apply -f manifests/application/rem-stack/argocd-prod.yaml
+#
+# To point to your fork:
+#   1. Fork this repository
+#   2. Update spec.source.repoURL to your fork
+#   3. Update spec.source.targetRevision to your branch (e.g., main or production)
+#   4. Apply this manifest
+#
+# Image versioning:
+#   Production uses stable semantic versions (e.g., v1.2.3)
+#   Update kustomization.yaml images section before promoting to prod
+#
+# Promotion workflow:
+#   1. Test in staging with v1.2.3-rc.1
+#   2. Promote to prod by updating prod overlay to v1.2.3
+#   3. ArgoCD auto-syncs the change
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: rem-stack-prod
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: rem-stack
+    environment: production
+spec:
+  project: default
+
+  # Source: Git repository with Kustomize
+  source:
+    repoURL: https://github.com/YOUR-ORG/remstack.git  # Change to your fork
+    targetRevision: main  # Git branch for production (e.g., main or production)
+    path: manifests/application/rem-stack/overlays/prod
+
+    # Kustomize build options
+    kustomize:
+      # Set image tags dynamically (optional)
+      # images:
+      #   - rem-api=<registry>/rem-api:v1.2.3
+      #   - rem-mcp=<registry>/rem-mcp:v1.2.3
+      #   - rem-worker=<registry>/rem-worker:v1.2.3
+
+      # Common labels
+      commonLabels:
+        argocd.argoproj.io/instance: rem-stack-prod
+
+      # Common annotations
+      commonAnnotations:
+        argocd.argoproj.io/tracking-id: rem-stack-prod
+
+  # Destination: Kubernetes cluster and namespace
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: rem-prod
+
+  # Sync policy - more conservative for production
+  syncPolicy:
+    automated:
+      prune: true       # Delete resources removed from git
+      selfHeal: false   # Manual sync for production (change to true if desired)
+      allowEmpty: false # Don't sync if source is empty
+
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - RespectIgnoreDifferences=true
+
+    retry:
+      limit: 3
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 5m
+
+  # Ignore differences for certain fields
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas  # Ignore replica count (managed by HPA/KEDA)
+    - group: keda.sh
+      kind: ScaledObject
+      jsonPointers:
+        - /spec/triggers  # KEDA manages triggers
+    - group: postgresql.cnpg.io
+      kind: Cluster
+      jsonPointers:
+        - /spec/instances  # CloudNativePG may adjust instances
+
+  # Health checks
+  revisionHistoryLimit: 10
+
+  # Production-specific: require manual sync for safety
+  # Remove this section if you want automatic sync in production
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: false  # Require manual approval for production changes

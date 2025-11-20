@@ -1,0 +1,65 @@
+# Kustomize Base for REM Stack
+#
+# This is the base configuration containing all components:
+# - REM API (FastAPI)
+# - REM MCP (FastMCP)
+# - File Processor (KEDA-scaled worker)
+# - PostgreSQL (CloudNativePG) - optional, can deploy separately
+#
+# This base is environment-agnostic. Use overlays for environment-specific config.
+#
+# Usage:
+#   kubectl apply -k manifests/application/rem-stack/base
+#   kubectl apply -k manifests/application/rem-stack/overlays/staging
+#   kubectl apply -k manifests/application/rem-stack/overlays/prod
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Single namespace for all application components
+namespace: rem-api
+
+# Common labels applied to all resources
+commonLabels:
+  app.kubernetes.io/part-of: rem-stack
+  app.kubernetes.io/managed-by: kustomize
+
+# Common annotations
+commonAnnotations:
+  kustomize.toolkit.fluxcd.io/prune: "Enabled"
+
+# Components (each has its own kustomization.yaml)
+resources:
+  - ../components/api
+  - ../components/worker
+  - ../components/dreaming-worker
+  # Postgres is separate - deploy to its own namespace
+  # kubectl apply -k ../components/postgres --namespace postgres
+
+# Images - will be overridden in overlays with semantic versions
+images:
+  - name: rem-api
+    newName: ${ECR_REGISTRY}/rem-api
+    newTag: latest
+  - name: rem-mcp
+    newName: ${ECR_REGISTRY}/rem-mcp
+    newTag: latest
+  - name: rem-worker
+    newName: ${ECR_REGISTRY}/rem-worker
+    newTag: latest
+
+# Generate ConfigMap with version info
+configMapGenerator:
+  - name: rem-version-info
+    literals:
+      - VERSION=unset
+      - GIT_COMMIT=unset
+      - BUILD_DATE=unset
+      - ENVIRONMENT=base
+
+# Generate labels for version tracking
+labels:
+  - pairs:
+      app.kubernetes.io/version: unset
+    includeSelectors: true
+    includeTemplates: true

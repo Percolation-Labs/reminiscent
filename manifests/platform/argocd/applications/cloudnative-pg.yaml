@@ -1,0 +1,41 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cloudnative-pg
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: oci://ghcr.io/cloudnative-pg/charts
+    chart: cloudnative-pg
+    targetRevision: 0.26.1
+    helm:
+      valuesObject:
+        crds:
+          create: true
+        monitoring:
+          podMonitorEnabled: true
+          grafanaDashboard:
+            create: false
+        config:
+          data:
+            INHERITED_ANNOTATIONS: "external-secrets.io/*"
+            INHERITED_LABELS: "app.kubernetes.io/*"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cnpg-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m

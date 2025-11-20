@@ -1,0 +1,12 @@
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: rem-postgres-backup
+  namespace: rem-api
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM UTC
+  backupOwnerReference: self
+  cluster:
+    name: rem-postgres
+  immediate: true
+  method: barmanObjectStore
