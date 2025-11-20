@@ -72,7 +72,7 @@ async def rem_query(
     # SEARCH parameters
     table_name: str | None = None,
     field_name: str | None = None,
-    provider: str = "openai",
+    provider: str | None = None,
     min_similarity: float = 0.7,
     # SQL parameters
     where_clause: str | None = None,

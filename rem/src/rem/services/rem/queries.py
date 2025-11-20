@@ -151,12 +151,16 @@ def get_search_params(
     table_name: str,
     field_name: str,
     tenant_id: str,
-    provider: str = "openai",
+    provider: str,
     min_similarity: float = 0.7,
     limit: int = 10,
     user_id: str | None = None,
 ) -> tuple:
-    """Get parameters for SEARCH query."""
+    """
+    Get parameters for SEARCH query.
+
+    Note: provider parameter is required (no default) - should come from settings.
+    """
     return (
         query_embedding,
         table_name,

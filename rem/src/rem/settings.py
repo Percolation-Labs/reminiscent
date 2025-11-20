@@ -71,6 +71,8 @@ class LLMSettings(BaseSettings):
         LLM__EVALUATOR_MODEL - Model for LLM-as-judge evaluation
         LLM__OPENAI_API_KEY - OpenAI API key
         LLM__ANTHROPIC_API_KEY - Anthropic API key
+        LLM__EMBEDDING_PROVIDER - Default embedding provider (openai, cohere, jina, etc.)
+        LLM__EMBEDDING_MODEL - Default embedding model name
     """
 
     model_config = SettingsConfigDict(
@@ -115,6 +117,16 @@ class LLMSettings(BaseSettings):
     anthropic_api_key: str | None = Field(
         default=None,
         description="Anthropic API key for Claude models",
+    )
+
+    embedding_provider: str = Field(
+        default="openai",
+        description="Default embedding provider (openai, cohere, jina, etc.)",
+    )
+
+    embedding_model: str = Field(
+        default="text-embedding-3-small",
+        description="Default embedding model (provider-specific model name)",
     )
 
 

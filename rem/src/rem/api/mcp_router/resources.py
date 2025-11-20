@@ -179,7 +179,7 @@ Parameters:
 - query_text (required): Natural language query
 - table_name (required): Table to search (resources, moments, etc.)
 - field_name (optional): Field to search (defaults to "content")
-- provider (optional): Embedding provider (default: "openai")
+- provider (optional): Embedding provider (default: from LLM__EMBEDDING_PROVIDER setting)
 - min_similarity (optional): Minimum similarity 0.0-1.0 (default: 0.7)
 - limit (optional): Max results (default: 10)
 - user_id (optional): User scoping
@@ -301,6 +301,8 @@ def register_status_resources(mcp: FastMCP):
 ## LLM Configuration
 - Default Model: {settings.llm.default_model}
 - Default Temperature: {settings.llm.default_temperature}
+- Embedding Provider: {settings.llm.embedding_provider}
+- Embedding Model: {settings.llm.embedding_model}
 - OpenAI API Key: {"✓ Configured" if settings.llm.openai_api_key else "✗ Not configured"}
 - Anthropic API Key: {"✓ Configured" if settings.llm.anthropic_api_key else "✗ Not configured"}
 

@@ -285,14 +285,16 @@ class PostgresService:
                         # Queue embedding task (non-blocking)
                         from ..embeddings import EmbeddingTask
 
+                        from ...settings import settings
+
                         task = EmbeddingTask(
                             task_id=f"{entity_id}:{field_name}",
                             entity_id=str(entity_id),
                             table_name=table_name,
                             field_name=field_name,
                             content=content,
-                            provider="openai",
-                            model="text-embedding-3-small",
+                            provider=settings.llm.embedding_provider,
+                            model=settings.llm.embedding_model,
                         )
 
                         await self.embedding_worker.queue_task(task)

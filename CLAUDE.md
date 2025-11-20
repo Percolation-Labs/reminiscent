@@ -247,6 +247,68 @@ REM is a bio-inspired memory architecture mirroring human memory systems:
 - Prevents trace spam during local testing
 - Clean integration with Pydantic AI's built-in OTEL support
 
+### 11. Pydantic Serialization Pattern (agentic/serialization.py)
+**CRITICAL: Always serialize Pydantic models before returning from MCP tools or API endpoints**
+
+When agent results contain Pydantic model instances (e.g., `result.output` or `result.data`), they MUST be explicitly serialized using `.model_dump()` or `.model_dump_json()` before returning. Frameworks like FastMCP and FastAPI may use their own serialization logic that silently drops fields from unserialized Pydantic models.
+
+**Anti-Pattern (causes field loss):**
+```python
+# ❌ BAD: Returns Pydantic model directly
+return {
+    "status": "success",
+    "response": result.output,  # Pydantic model instance - fields may be lost!
+}
+```
+
+**Correct Pattern:**
+```python
+# ✅ GOOD: Explicitly serialize first
+return {
+    "status": "success",
+    "response": result.output.model_dump(),  # Serialized dict - all fields preserved
+}
+```
+
+**Helper utilities:**
+- `serialize_agent_result(result)` - Returns dict or primitive, handles Pydantic models
+- `serialize_agent_result_json(result)` - Returns JSON string (for SSE, API responses)
+- `is_pydantic_model(obj)` - Check if object is Pydantic model
+- `safe_serialize_dict(data)` - Recursively serialize nested Pydantic models
+
+**Where to apply:**
+- MCP tool return values (tools.py)
+- Service layer methods called by MCP tools (services/rem/service.py)
+- API endpoint responses (api/routers/*)
+- SSE streaming events (api/routers/chat/streaming.py)
+- Any context where data crosses serialization boundary
+
+**Examples:**
+```python
+# Service layer (already correct)
+async def ask_rem(query: str) -> dict[str, Any]:
+    result = await agent.run(query)
+    return {
+        "query_output": result.data.model_dump(),  # ✅ Serialized
+        "natural_query": query,
+    }
+
+# MCP tool
+async def ask_rem_tool(query: str) -> dict[str, Any]:
+    result = await service.ask_rem(query)
+    return result  # ✅ Already serialized by service layer
+
+# API endpoint with Pydantic check
+if hasattr(result.output, "model_dump_json"):
+    content = result.output.model_dump_json()  # ✅ Serialized
+else:
+    content = str(result.output)
+
+# SSE streaming
+chunk = ChatCompletionStreamResponse(...)
+yield f"data: {chunk.model_dump_json()}\n\n"  # ✅ Serialized
+```
+
 ## REM-Specific Patterns
 
 ### REM Query System (models/core/rem_query.py)

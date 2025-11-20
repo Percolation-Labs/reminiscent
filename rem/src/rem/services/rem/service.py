@@ -269,13 +269,14 @@ class RemService:
             )
 
         # Generate embedding for query text
+        from ...settings import settings
         from ..embeddings.api import generate_embedding_async
         from .queries import SEARCH_QUERY, get_search_params
 
         query_embedding = await generate_embedding_async(
             text=params.query_text,
-            model="text-embedding-3-small",
-            provider=params.provider or "openai",
+            model=settings.llm.embedding_model,
+            provider=params.provider or settings.llm.embedding_provider,
         )
 
         # Execute vector search via rem_search() PostgreSQL function
@@ -284,7 +285,7 @@ class RemService:
             table_name,
             field_name,
             tenant_id,
-            params.provider or "openai",
+            params.provider or settings.llm.embedding_provider,
             params.min_similarity or 0.7,
             params.limit or 10,
             params.user_id,
