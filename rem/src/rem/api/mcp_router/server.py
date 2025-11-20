@@ -155,28 +155,26 @@ def create_mcp_server() -> FastMCP:
         ),
     )
 
-    # TODO: Register REM query tools
-    # from .tools import rem_query, ask_rem
-    # mcp.tool()(rem_query)
-    # mcp.tool()(ask_rem)
+    # Register REM query tools
+    from .tools import ask_rem, create_moment, create_resource, rem_query, update_graph_edges
 
-    # TODO: Register resource management tools
-    # from .tools import create_resource, create_moment, update_graph_edges
-    # mcp.tool()(create_resource)
-    # mcp.tool()(create_moment)
-    # mcp.tool()(update_graph_edges)
+    mcp.tool()(rem_query)
+    mcp.tool()(ask_rem)
 
-    # TODO: Register file operation tools
+    # Register resource management tools
+    mcp.tool()(create_resource)
+    mcp.tool()(create_moment)
+    mcp.tool()(update_graph_edges)
+
+    # File operation tools TODO: Implement upload_file, download_file
     # from .tools import upload_file, download_file
     # mcp.tool()(upload_file)
     # mcp.tool()(download_file)
 
-    # TODO: Register schema resources
-    # from .resources import register_schema_resources
-    # register_schema_resources(mcp)
+    # Register schema resources
+    from .resources import register_schema_resources, register_status_resources
 
-    # TODO: Register status resources
-    # from .resources import register_status_resources
-    # register_status_resources(mcp)
+    register_schema_resources(mcp)
+    register_status_resources(mcp)
 
     return mcp

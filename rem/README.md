@@ -277,16 +277,32 @@ See [`manifests/`](../../manifests/) for Pulumi infrastructure and Kubernetes ma
 - CloudNativePG (PostgreSQL 18 with pgvector)
 - Arize Phoenix (LLM observability)
 
-## Next Steps (TODOs in code)
+## Implementation Status
 
-- [ ] Implement PostgresService, RemService
-- [ ] Create MCP tools (rem_query, ask_rem, create_resource)
-- [ ] Create MCP resources (schema docs, status)
-- [ ] Add auth middleware and OAuth routes
-- [ ] Add REM query router
-- [ ] Add resource/moment CRUD routers
-- [ ] Set up OTEL instrumentation
-- [ ] Write tests
+### ✅ Completed
+- [x] **PostgresService** - Fully implemented with batch_upsert, connection pooling, tenant isolation
+- [x] **RemService** - Query execution for LOOKUP, FUZZY, SQL, TRAVERSE implemented
+- [x] **Models** - All entity models (Resource, Entity, Moment, Message, File, User) complete
+- [x] **Settings** - Nested Pydantic settings with environment variable support
+- [x] **MCP Server** - FastMCP integration with instructions and mounting patterns
+- [x] **Chat Completions** - OpenAI-compatible API (streaming & non-streaming)
+- [x] **Agent Factory** - JSON Schema to Pydantic AI conversion
+- [x] **File System** - S3 and local providers with format detection
+
+### 🚧 In Progress
+- [ ] **MCP Tools** - Implement rem_query, ask_rem, create_resource, create_moment tools
+- [ ] **MCP Resources** - Register schema docs and status resources
+- [ ] **SEARCH Query** - Embedding generation integration (OpenAI/Anthropic API)
+- [ ] **REM Query Router** - REST endpoint for direct REM query execution
+- [ ] **CRUD Routers** - Resource and moment creation/update endpoints
+- [ ] **Auth Implementation** - Complete OAuth providers and JWT validation
+- [ ] **Tests** - Unit and integration tests for core services
+
+### 📝 Design Complete (Stubs Present)
+- [ ] **update_graph_edges** - PostgresService method (stub present)
+- [ ] **vector_search** - PostgresService method (delegated to RemService)
+- [ ] **OAuth routes** - Auth router stubs with redirect handling
+- [ ] **OTEL setup** - Conditional instrumentation pattern defined
 
 ## License
 
