@@ -164,21 +164,10 @@ class RemService:
         Returns:
             Dict with entity metadata from KV_STORE
         """
-        query = """
-        SELECT
-            entity_key,
-            entity_type,
-            entity_id,
-            user_id,
-            content_summary,
-            metadata
-        FROM rem_lookup($1, $2, $3)
-        """
+        from .queries import LOOKUP_QUERY, get_lookup_params
 
-        results = await self.db.execute(
-            query,
-            (params.entity_key, tenant_id, params.user_id),
-        )
+        query_params = get_lookup_params(params.entity_key, tenant_id, params.user_id)
+        results = await self.db.execute(LOOKUP_QUERY, query_params)
 
         return {
             "query_type": "LOOKUP",
@@ -202,28 +191,16 @@ class RemService:
         Returns:
             Dict with fuzzy-matched entities ordered by similarity
         """
-        query = """
-        SELECT
-            entity_key,
-            entity_type,
-            entity_id,
-            user_id,
-            content_summary,
-            metadata,
-            similarity_score
-        FROM rem_fuzzy($1, $2, $3, $4, $5)
-        """
+        from .queries import FUZZY_QUERY, get_fuzzy_params
 
-        results = await self.db.execute(
-            query,
-            (
-                params.query_text,
-                tenant_id,
-                params.threshold,
-                params.limit,
-                params.user_id,
-            ),
+        query_params = get_fuzzy_params(
+            params.query_text,
+            tenant_id,
+            params.threshold,
+            params.limit,
+            params.user_id,
         )
+        results = await self.db.execute(FUZZY_QUERY, query_params)
 
         return {
             "query_type": "FUZZY",
@@ -293,6 +270,7 @@ class RemService:
 
         # Generate embedding for query text
         from ..embeddings.api import generate_embedding_async
+        from .queries import SEARCH_QUERY, get_search_params
 
         query_embedding = await generate_embedding_async(
             text=params.query_text,
@@ -301,29 +279,17 @@ class RemService:
         )
 
         # Execute vector search via rem_search() PostgreSQL function
-        query = """
-        SELECT
-            entity_key,
-            entity_type,
-            entity_id,
-            similarity_score,
-            content_summary
-        FROM rem_search($1, $2, $3, $4, $5, $6, $7, $8)
-        """
-
-        results = await self.db.execute(
-            query,
-            (
-                query_embedding,
-                table_name,
-                field_name,
-                tenant_id,
-                params.provider or "openai",
-                params.min_similarity or 0.7,
-                params.limit or 10,
-                params.user_id,
-            ),
+        query_params = get_search_params(
+            query_embedding,
+            table_name,
+            field_name,
+            tenant_id,
+            params.provider or "openai",
+            params.min_similarity or 0.7,
+            params.limit or 10,
+            params.user_id,
         )
+        results = await self.db.execute(SEARCH_QUERY, query_params)
 
         return {
             "query_type": "SEARCH",
@@ -349,24 +315,21 @@ class RemService:
         Returns:
             Query results
         """
+        from .queries import build_sql_query
+
         # Build SQL query with tenant isolation
-        # Note: Consider parameterized queries for WHERE clause in production
-        table_name = params.table_name
-        where_clause = params.where_clause or "1=1"
+        query = build_sql_query(
+            table_name=params.table_name,
+            where_clause=params.where_clause or "1=1",
+            tenant_id=tenant_id,
+            limit=params.limit,
+        )
 
-        # Add tenant isolation
-        where_clause = f"tenant_id = '{tenant_id}' AND ({where_clause})"
-
-        query = f"SELECT * FROM {table_name} WHERE {where_clause}"
-
-        if params.limit:
-            query += f" LIMIT {params.limit}"
-
-        results = await self.db.execute(query)
+        results = await self.db.execute(query, (tenant_id,))
 
         return {
             "query_type": "SQL",
-            "table_name": table_name,
+            "table_name": params.table_name,
             "results": results,
             "count": len(results),
         }
@@ -386,28 +349,16 @@ class RemService:
         Returns:
             Dict with traversed entities and paths
         """
-        query = """
-        SELECT
-            depth,
-            entity_key,
-            entity_type,
-            entity_id,
-            rel_type,
-            rel_weight,
-            path
-        FROM rem_traverse($1, $2, $3, $4, $5)
-        """
+        from .queries import TRAVERSE_QUERY, get_traverse_params
 
-        results = await self.db.execute(
-            query,
-            (
-                params.start_key,
-                tenant_id,
-                params.max_depth or 1,
-                params.rel_type,
-                params.user_id,
-            ),
+        query_params = get_traverse_params(
+            params.start_key,
+            tenant_id,
+            params.max_depth or 1,
+            params.rel_type,
+            params.user_id,
         )
+        results = await self.db.execute(TRAVERSE_QUERY, query_params)
 
         return {
             "query_type": "TRAVERSE",
