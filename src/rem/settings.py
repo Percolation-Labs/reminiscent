@@ -250,23 +250,79 @@ class PhoenixSettings(BaseSettings):
     )
 
 
+class GoogleOAuthSettings(BaseSettings):
+    """
+    Google OAuth settings.
+
+    Environment variables:
+        AUTH__GOOGLE__CLIENT_ID - Google OAuth client ID
+        AUTH__GOOGLE__CLIENT_SECRET - Google OAuth client secret
+        AUTH__GOOGLE__REDIRECT_URI - OAuth callback URL
+        AUTH__GOOGLE__HOSTED_DOMAIN - Restrict to Google Workspace domain
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="AUTH__GOOGLE__",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    client_id: str = Field(default="", description="Google OAuth client ID")
+    client_secret: str = Field(default="", description="Google OAuth client secret")
+    redirect_uri: str = Field(
+        default="http://localhost:8000/api/auth/google/callback",
+        description="OAuth redirect URI",
+    )
+    hosted_domain: str | None = Field(
+        default=None, description="Restrict to Google Workspace domain (e.g., example.com)"
+    )
+
+
+class MicrosoftOAuthSettings(BaseSettings):
+    """
+    Microsoft Entra ID OAuth settings.
+
+    Environment variables:
+        AUTH__MICROSOFT__CLIENT_ID - Application (client) ID
+        AUTH__MICROSOFT__CLIENT_SECRET - Client secret
+        AUTH__MICROSOFT__REDIRECT_URI - OAuth callback URL
+        AUTH__MICROSOFT__TENANT - Tenant ID or common/organizations/consumers
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="AUTH__MICROSOFT__",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    client_id: str = Field(default="", description="Microsoft Application ID")
+    client_secret: str = Field(default="", description="Microsoft client secret")
+    redirect_uri: str = Field(
+        default="http://localhost:8000/api/auth/microsoft/callback",
+        description="OAuth redirect URI",
+    )
+    tenant: str = Field(
+        default="common",
+        description="Tenant ID or common/organizations/consumers",
+    )
+
+
 class AuthSettings(BaseSettings):
     """
-    Authentication settings for OAuth/OIDC.
+    Authentication settings for OAuth 2.1 / OIDC.
 
     Supports multiple providers:
     - Google OAuth
     - Microsoft Entra ID
-    - Custom OAuth provider
-
-    FastMCP has built-in auth that can be disabled for testing.
+    - Custom OIDC provider
 
     Environment variables:
         AUTH__ENABLED - Enable authentication (default: false)
-        AUTH__OIDC_ISSUER_URL - OIDC issuer URL
-        AUTH__OIDC_CLIENT_ID - OAuth client ID
-        AUTH__OIDC_CLIENT_SECRET - OAuth client secret
         AUTH__SESSION_SECRET - Secret for session cookie signing
+        AUTH__GOOGLE__* - Google OAuth settings
+        AUTH__MICROSOFT__* - Microsoft OAuth settings
     """
 
     model_config = SettingsConfigDict(
@@ -281,35 +337,14 @@ class AuthSettings(BaseSettings):
         description="Enable authentication (disabled by default for testing)",
     )
 
-    oidc_issuer_url: str = Field(
-        default="https://accounts.google.com",
-        description="OIDC issuer URL",
-    )
-
-    oidc_audience: str = Field(
-        default="api",
-        description="Expected audience claim in tokens",
-    )
-
-    oidc_client_id: str = Field(
-        default="",
-        description="OIDC client ID",
-    )
-
-    oidc_client_secret: str = Field(
-        default="",
-        description="OIDC client secret",
-    )
-
-    oidc_redirect_uri: str = Field(
-        default="http://localhost:8000/api/auth/callback",
-        description="OAuth redirect URI (callback URL)",
-    )
-
     session_secret: str = Field(
         default="",
-        description="Secret key for session cookie signing",
+        description="Secret key for session cookie signing (generate with secrets.token_hex(32))",
     )
+
+    # OAuth provider settings
+    google: GoogleOAuthSettings = Field(default_factory=GoogleOAuthSettings)
+    microsoft: MicrosoftOAuthSettings = Field(default_factory=MicrosoftOAuthSettings)
 
 
 class PostgresSettings(BaseSettings):
@@ -416,6 +451,48 @@ class S3Settings(BaseSettings):
     use_ssl: bool = Field(
         default=True,
         description="Use SSL for S3 connections",
+    )
+
+
+class ChunkingSettings(BaseSettings):
+    """
+    Document chunking settings for semantic text splitting.
+
+    Uses semchunk for semantic-aware text chunking that respects document structure.
+    Generous chunk sizes (couple paragraphs) with reasonable overlaps for context.
+
+    Environment variables:
+        CHUNKING__CHUNK_SIZE - Target chunk size in characters
+        CHUNKING__OVERLAP - Overlap between chunks in characters
+        CHUNKING__MIN_CHUNK_SIZE - Minimum chunk size (avoid tiny chunks)
+        CHUNKING__MAX_CHUNK_SIZE - Maximum chunk size (hard limit)
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="CHUNKING__",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    chunk_size: int = Field(
+        default=1500,
+        description="Target chunk size in characters (couple paragraphs, ~300-400 words)",
+    )
+
+    overlap: int = Field(
+        default=200,
+        description="Overlap between chunks in characters for context preservation",
+    )
+
+    min_chunk_size: int = Field(
+        default=100,
+        description="Minimum chunk size to avoid tiny fragments",
+    )
+
+    max_chunk_size: int = Field(
+        default=2500,
+        description="Maximum chunk size (hard limit, prevents oversized chunks)",
     )
 
 
@@ -567,6 +644,7 @@ class Settings(BaseSettings):
     postgres: PostgresSettings = Field(default_factory=PostgresSettings)
     s3: S3Settings = Field(default_factory=S3Settings)
     sqs: SQSSettings = Field(default_factory=SQSSettings)
+    chunking: ChunkingSettings = Field(default_factory=ChunkingSettings)
 
 
 # Global settings singleton

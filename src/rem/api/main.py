@@ -212,13 +212,15 @@ def create_app() -> FastAPI:
     # Add SSE buffering middleware (for MCP SSE transport)
     app.add_middleware(SSEBufferingMiddleware)
 
-    # TODO: Add authentication middleware
-    # from ..auth.middleware import AuthMiddleware
-    # app.add_middleware(
-    #     AuthMiddleware,
-    #     protected_paths=["/api/v1"],
-    #     excluded_paths=["/api/auth", "/api/v1/mcp/auth"],
-    # )
+    # Add authentication middleware (if enabled)
+    if settings.auth.enabled:
+        from ..auth.middleware import AuthMiddleware
+
+        app.add_middleware(
+            AuthMiddleware,
+            protected_paths=["/api/v1"],
+            excluded_paths=["/api/auth", "/api/v1/mcp/auth"],
+        )
 
     # Add CORS middleware LAST (runs first in middleware chain)
     # Must expose mcp-session-id header for MCP session management
@@ -259,13 +261,17 @@ def create_app() -> FastAPI:
 
     app.include_router(chat_router)
 
+    # Register auth router (if enabled)
+    if settings.auth.enabled:
+        from .routers.auth import router as auth_router
+
+        app.include_router(auth_router)
+
     # TODO: Register additional routers
-    # from .routers.auth import router as auth_router
     # from .routers.query import router as query_router
     # from .routers.resources import router as resources_router
     # from .routers.moments import router as moments_router
     #
-    # app.include_router(auth_router)
     # app.include_router(query_router)
     # app.include_router(resources_router)
     # app.include_router(moments_router)

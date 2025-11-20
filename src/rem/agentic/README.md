@@ -77,11 +77,17 @@ The `properties` section defines the **structured output schema**. Each property
 - Has a `description` explaining what the field should contain
 - May have validation constraints (`minimum`, `maximum`, `pattern`, etc.)
 
-##### `json_schema_extra` - Metadata and Tools
-The `json_schema_extra` section contains:
+##### `json_schema_extra` - REM Extensions (see `schema.py`)
 
-- **`fully_qualified_name`**: Python module path for the agent (e.g., `rem.agents.QueryAgent`)
-- **`tools`**: MCP tools available to the agent
+The `json_schema_extra` section contains REM-specific metadata. See `agentic/schema.py` for the complete Pydantic model documentation with detailed field descriptions.
+
+**Core Fields:**
+
+- **`fully_qualified_name`** (required): Python module path (e.g., `rem.agents.QueryAgent`)
+- **`name`** (optional): Human-readable agent name (e.g., "Query Agent")
+- **`short_name`** (optional): URL-safe identifier (e.g., "query-agent")
+- **`version`** (optional): Semantic version (e.g., "1.0.0")
+- **`tools`** (optional): MCP tools available to the agent
   ```json
   {
     "name": "lookup_entity",
@@ -89,13 +95,127 @@ The `json_schema_extra` section contains:
     "description": "Optional override description"
   }
   ```
-- **`resources`**: MCP resources accessible to the agent
+- **`resources`** (optional): MCP resources accessible to the agent
   ```json
   {
     "uri_pattern": "rem://resources/.*",
     "mcp_server": "rem"
   }
   ```
+- **`tags`** (optional): Categorization tags (e.g., `["query", "knowledge-graph"]`)
+- **`author`** (optional): Agent author or team
+
+**Complete Protocol Documentation:**
+
+See `rem/src/rem/agentic/schema.py` for:
+- `AgentSchema`: Complete schema structure with validation
+- `AgentSchemaMetadata`: REM-specific metadata fields
+- `MCPToolReference`: Tool configuration structure
+- `MCPResourceReference`: Resource pattern structure
+- Helper functions: `validate_agent_schema()`, `create_agent_schema()`
+
+#### Working with Agent Schemas
+
+**Validate a schema:**
+
+```python
+from rem.agentic.schema import validate_agent_schema
+
+# Load schema from file
+import json
+with open("agents/query_agent.json") as f:
+    schema_dict = json.load(f)
+
+# Validate structure
+validated = validate_agent_schema(schema_dict)
+
+# Access metadata
+print(validated.json_schema_extra.fully_qualified_name)
+# "rem.agents.QueryAgent"
+
+print(validated.json_schema_extra.version)
+# "1.0.0"
+
+print(validated.json_schema_extra.tools[0].name)
+# "lookup_entity"
+```
+
+**Create a schema programmatically:**
+
+```python
+from rem.agentic.schema import create_agent_schema
+
+schema = create_agent_schema(
+    description=(
+        "You are a helpful assistant that answers questions.\n\n"
+        "Guidelines:\n"
+        "- Be concise and accurate\n"
+        "- Cite sources when available\n"
+        "- Acknowledge uncertainty"
+    ),
+    properties={
+        "answer": {
+            "type": "string",
+            "description": "Clear, concise answer to the question"
+        },
+        "sources": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "List of source entity keys"
+        },
+        "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Confidence score (0-1)"
+        }
+    },
+    required=["answer", "confidence"],
+    fully_qualified_name="rem.agents.Assistant",
+    tools=[
+        {"name": "search", "mcp_server": "rem"},
+        {"name": "lookup", "mcp_server": "rem"}
+    ],
+    resources=[
+        {"uri_pattern": "rem://.*", "mcp_server": "rem"}
+    ],
+    version="1.0.0",
+    tags=["assistant", "general"],
+    author="REM Team"
+)
+
+# Convert to dict for JSON serialization
+schema_dict = schema.model_dump(exclude_none=True)
+
+# Save to file
+import json
+with open("agents/assistant.json", "w") as f:
+    json.dump(schema_dict, f, indent=2)
+```
+
+**Schema versioning best practices:**
+
+```python
+# Version format: MAJOR.MINOR.PATCH
+
+# MAJOR: Breaking changes to schema structure
+# - Removing required fields
+# - Changing field types
+# - Removing tools that agents depend on
+# Example: "1.0.0" → "2.0.0"
+
+# MINOR: Backward-compatible additions
+# - Adding optional fields
+# - Adding new tools
+# - Expanding allowed values
+# Example: "1.0.0" → "1.1.0"
+
+# PATCH: Bug fixes and clarifications
+# - Fixing typos in descriptions
+# - Clarifying field documentation
+# - Updating examples
+# Example: "1.0.0" → "1.0.1"
+```
 
 ### 2. Pydantic AI Integration
 

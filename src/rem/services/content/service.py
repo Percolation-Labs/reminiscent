@@ -1,14 +1,15 @@
 """
 ContentService for file processing.
 
-Handles:
-- File downloads from S3
-- Content extraction via provider plugins
-- Embedding generation
-- PostgreSQL storage with pgvector
+Pipeline:
+1. Extract content via provider plugins
+2. Convert to markdown
+3. Chunk markdown
+4. Save File + Resources to database via repositories
 """
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -17,26 +18,36 @@ import boto3
 from botocore.exceptions import ClientError
 from loguru import logger
 
+from rem.models.entities import File, Resource
+from rem.services.repositories import FileRepository, ResourceRepository
 from rem.settings import settings
-from .providers import MarkdownProvider, ContentProvider
+from rem.utils.chunking import chunk_text
+from rem.utils.markdown import to_markdown
+
+from .providers import ContentProvider, MarkdownProvider, PDFProvider
 
 
 class ContentService:
     """
-    Service for processing files and extracting content.
+    Service for processing files: extract → markdown → chunk → save.
 
     Supports:
     - S3 URIs (s3://bucket/key)
     - Local file paths
-    - Pluggable content providers (markdown, PDF, HTML, etc.)
+    - Pluggable content providers
     """
 
-    def __init__(self):
+    def __init__(
+        self, file_repo: FileRepository | None = None, resource_repo: ResourceRepository | None = None
+    ):
         self.s3_client = self._create_s3_client()
         self.providers: dict[str, ContentProvider] = {
             ".md": MarkdownProvider(),
             ".markdown": MarkdownProvider(),
+            ".pdf": PDFProvider(),
         }
+        self.file_repo = file_repo
+        self.resource_repo = resource_repo
 
     def _create_s3_client(self):
         """Create S3 client with IRSA or configured credentials."""
@@ -188,3 +199,67 @@ class ContentService:
             ext_lower = ext.lower() if ext.startswith(".") else f".{ext.lower()}"
             self.providers[ext_lower] = provider
             logger.debug(f"Registered provider '{provider.name}' for {ext_lower}")
+
+    async def process_and_save(self, uri: str, user_id: str | None = None) -> dict[str, Any]:
+        """
+        Process file end-to-end: extract → markdown → chunk → save.
+
+        Args:
+            uri: File URI (s3://bucket/key or local path)
+            user_id: Optional user ID for multi-tenancy
+
+        Returns:
+            dict with file metadata and chunk count
+        """
+        logger.info(f"Processing and saving: {uri}")
+
+        # Extract content
+        result = self.process_uri(uri)
+        filename = Path(uri).name
+
+        # Convert to markdown
+        markdown = to_markdown(result["content"], filename)
+
+        # Chunk markdown
+        chunks = chunk_text(markdown)
+        logger.info(f"Created {len(chunks)} chunks from {filename}")
+
+        # Save File entity
+        file = File(
+            name=filename,
+            uri=uri,
+            content=result["content"],
+            size_bytes=result["metadata"].get("size"),
+            mime_type=result["metadata"].get("content_type"),
+            processing_status="completed",
+            tenant_id=user_id or "default",  # Required field
+            user_id=user_id,
+        )
+
+        if self.file_repo:
+            await self.file_repo.upsert(file)
+            logger.info(f"Saved File: {filename}")
+
+        # Create Resource entities for each chunk
+        resources = [
+            Resource(
+                name=f"{filename}#chunk-{i}",
+                uri=f"{uri}#chunk-{i}",
+                ordinal=i,
+                content=chunk,
+                category="document",
+                tenant_id=user_id or "default",  # Required field
+                user_id=user_id,
+            )
+            for i, chunk in enumerate(chunks)
+        ]
+
+        if self.resource_repo:
+            await self.resource_repo.batch_upsert(resources)
+            logger.info(f"Saved {len(resources)} Resource chunks")
+
+        return {
+            "file": file.model_dump(),
+            "chunk_count": len(chunks),
+            "status": "completed",
+        }

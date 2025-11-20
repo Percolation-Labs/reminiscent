@@ -65,7 +65,13 @@ class PostgresService:
         self.connection_string = connection_string
         self.pool_size = pool_size
         self.pool: Optional[asyncpg.Pool] = None
-        self.embedding_worker = embedding_worker
+
+        # Auto-create embedding worker if not provided
+        if embedding_worker is None:
+            from ..embeddings import EmbeddingWorker
+            self.embedding_worker = EmbeddingWorker(postgres_service=self)
+        else:
+            self.embedding_worker = embedding_worker
 
     async def connect(self) -> None:
         """Establish database connection pool."""
@@ -77,8 +83,18 @@ class PostgresService:
         )
         logger.info("PostgreSQL connection pool established")
 
+        # Start embedding worker if available
+        if self.embedding_worker and hasattr(self.embedding_worker, "start"):
+            await self.embedding_worker.start()
+            logger.info("Embedding worker started")
+
     async def disconnect(self) -> None:
         """Close database connection pool."""
+        # Stop embedding worker first
+        if self.embedding_worker and hasattr(self.embedding_worker, "stop"):
+            await self.embedding_worker.stop()
+            logger.info("Embedding worker stopped")
+
         if self.pool:
             logger.info("Closing PostgreSQL connection pool")
             await self.pool.close()

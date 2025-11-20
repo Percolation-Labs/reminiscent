@@ -77,7 +77,7 @@ curl -X POST http://localhost:8000/api/v1/chat/completions \
 2. **Services** (`services/`)
    - **PostgresService**: CloudNativePG database operations
    - **RemService**: REM query execution with O(1) guarantees
-   - **S3Service**: S3 storage for files and artifacts
+   - **FS**: Unified file system (S3 + local) with format detection
 
 3. **Agent System** (`agents/`, `providers/`)
    - **AgentContext**: Session context from HTTP headers
@@ -86,8 +86,11 @@ curl -X POST http://localhost:8000/api/v1/chat/completions \
 
 4. **MCP Server** (`mcp/`)
    - FastMCP server with REM query tools and resources
-   - Mounted at `/api/v1/mcp` on FastAPI
+   - Mounted at `/api/v1/mcp` on FastAPI (not a separate deployment)
    - Stateless HTTP mode for Kubernetes compatibility
+
+**Important**: The MCP (Model Context Protocol) server is not a separate deployment.
+It is mounted as part of the rem-api FastAPI application.
 
 5. **API** (`api/`)
    - OpenAI-compatible chat completions (streaming & non-streaming)
@@ -276,7 +279,7 @@ See [`manifests/`](../../manifests/) for Pulumi infrastructure and Kubernetes ma
 
 ## Next Steps (TODOs in code)
 
-- [ ] Implement PostgresService, RemService, S3Service
+- [ ] Implement PostgresService, RemService
 - [ ] Create MCP tools (rem_query, ask_rem, create_resource)
 - [ ] Create MCP resources (schema docs, status)
 - [ ] Add auth middleware and OAuth routes

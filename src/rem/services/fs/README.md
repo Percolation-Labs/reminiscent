@@ -350,8 +350,233 @@ When adding new format support:
 4. Add format documentation to this README
 5. Consider ContentService for complex formats (PDF, DOCX, etc.)
 
+## Path Conventions
+
+REM uses standardized path conventions for consistent file organization across local and S3 storage.
+
+### Path Structure
+
+```
+{base_uri}/rem/{version}/{category}/{scope}/{date_parts}/
+```
+
+**Base URI:**
+- **Local**: `$REM_HOME/fs/` (defaults to `~/.rem/fs`)
+- **S3**: `s3://{bucket}/` (from settings)
+- **Auto-detection**: Uses S3 in production, local in development
+
+**Components:**
+
+| Component | Description | Example |
+|-----------|-------------|---------|
+| `base_uri` | Storage location | `s3://rem-bucket` or `/Users/user/.rem/fs` |
+| `rem` | Namespace | `rem` |
+| `version` | API version | `v1`, `v2` |
+| `category` | Resource type | `uploads`, `schemas`, `users`, `temp` |
+| `scope` | User or system | `system`, `user-123` |
+| `date_parts` | Date hierarchy | `2025/01/19` or `2025/01/19/14_30` |
+
+### Upload Paths
+
+Standard structure for file uploads with date-based partitioning:
+
+```python
+from rem.services.fs import get_uploads_path, FS
+
+# System uploads (no user)
+path = get_uploads_path()
+# /Users/user/.rem/fs/rem/v1/uploads/system/2025/01/19
+
+# User-specific uploads
+path = get_uploads_path(user_id="user-123")
+# /Users/user/.rem/fs/rem/v1/uploads/user-123/2025/01/19
+
+# With specific date
+from datetime import date
+path = get_uploads_path(user_id="user-456", dt=date(2025, 1, 15))
+# /Users/user/.rem/fs/rem/v1/uploads/user-456/2025/01/15
+
+# Include hour/minute for high-frequency uploads
+from datetime import datetime
+path = get_uploads_path(user_id="user-789", dt=datetime.now(), include_time=True)
+# /Users/user/.rem/fs/rem/v1/uploads/user-789/2025/01/19/14_30
+
+# Force S3
+path = get_uploads_path(user_id="user-123", use_s3=True)
+# s3://rem-bucket/rem/v1/uploads/user-123/2025/01/19
+
+# Use with FS
+fs = FS()
+upload_dir = get_uploads_path(user_id="user-123")
+fs.write(f"{upload_dir}/data.json", {"key": "value"})
+```
+
+### Versioned Resource Paths
+
+For schemas, agents, tools, and datasets:
+
+```python
+from rem.services.fs import get_versioned_path
+
+# Schemas
+path = get_versioned_path("schemas", "user-schema")
+# /Users/user/.rem/fs/rem/v1/schemas/user-schema
+
+# Agents (with version)
+path = get_versioned_path("agents", "query-agent", version="v2")
+# /Users/user/.rem/fs/rem/v2/agents/query-agent
+
+# Tools
+path = get_versioned_path("tools", "web-scraper")
+# /Users/user/.rem/fs/rem/v1/tools/web-scraper
+
+# Datasets
+path = get_versioned_path("datasets", "training-data")
+# /Users/user/.rem/fs/rem/v1/datasets/training-data
+```
+
+### User-Scoped Paths
+
+For user-specific storage:
+
+```python
+from rem.services.fs import get_user_path
+
+# User root
+path = get_user_path("user-123")
+# /Users/user/.rem/fs/rem/v1/users/user-123
+
+# User documents
+path = get_user_path("user-123", "documents")
+# /Users/user/.rem/fs/rem/v1/users/user-123/documents
+
+# User images
+path = get_user_path("user-456", "images")
+# /Users/user/.rem/fs/rem/v1/users/user-456/images
+```
+
+### Temporary Paths
+
+For temporary file processing with timestamps:
+
+```python
+from rem.services.fs import get_temp_path
+
+# Default temp
+path = get_temp_path()
+# /Users/user/.rem/fs/rem/v1/temp/tmp/20250119_143045
+
+# Processing temp
+path = get_temp_path("processing")
+# /Users/user/.rem/fs/rem/v1/temp/processing/20250119_143045
+
+# Conversion temp
+path = get_temp_path("conversion")
+# /Users/user/.rem/fs/rem/v1/temp/conversion/20250119_143045
+```
+
+### Path Utilities
+
+```python
+from rem.services.fs import (
+    get_base_uri,
+    get_rem_home,
+    ensure_dir_exists,
+    join_path
+)
+
+# Get base URI (auto-detect based on environment)
+base = get_base_uri()
+
+# Force local or S3
+base = get_base_uri(use_s3=False)  # /Users/user/.rem/fs
+base = get_base_uri(use_s3=True)   # s3://rem-bucket
+
+# Get REM_HOME directory
+home = get_rem_home()  # /Users/user/.rem
+
+# Ensure directory exists (local only, no-op for S3)
+path = ensure_dir_exists("/path/to/dir")
+
+# Join paths (auto-detects S3 vs local)
+path = join_path("s3://bucket", "rem", "v1", "uploads")
+# s3://bucket/rem/v1/uploads
+
+path = join_path("/home/user", "rem", "data")
+# /home/user/rem/data
+```
+
+### Best Practices
+
+1. **Always use path functions** - Don't hardcode paths
+```python
+# ✅ Good
+from rem.services.fs import get_uploads_path
+path = get_uploads_path(user_id="user-123")
+
+# ❌ Bad
+path = "/Users/user/.rem/fs/rem/v1/uploads/user-123/2025/01/19"
+```
+
+2. **Trust auto-detection** - Let environment determine S3 vs local
+```python
+# ✅ Good - auto-detects based on ENVIRONMENT
+path = get_uploads_path(user_id="user-123")
+
+# ❌ Unnecessary - only force when you have a specific reason
+path = get_uploads_path(user_id="user-123", use_s3=False)
+```
+
+3. **Use date partitioning** - Leverage hierarchy for scalability
+```python
+# ✅ Good - partitioned by date
+path = get_uploads_path(user_id="user-123", dt=datetime.now())
+
+# ✅ Also good - include time for high-frequency uploads
+path = get_uploads_path(user_id="user-123", include_time=True)
+```
+
+4. **User vs system scope** - Use user_id for user files, omit for system files
+```python
+# User files
+user_upload = get_uploads_path(user_id="user-123")
+
+# System files (logs, configs, etc.)
+system_upload = get_uploads_path()  # Uses "system"
+```
+
+5. **Ensure directories exist** - For local paths before writing
+```python
+from rem.services.fs import get_uploads_path, ensure_dir_exists, FS
+
+path = get_uploads_path(user_id="user-123")
+ensure_dir_exists(path)  # No-op for S3
+
+fs = FS()
+fs.write(f"{path}/data.json", data)
+```
+
+### Path Reference
+
+Quick reference for all path types:
+
+| Function | Path Structure | Example |
+|----------|----------------|---------|
+| `get_uploads_path()` | `rem/v1/uploads/{system\|user_id}/{yyyy}/{mm}/{dd}[/{hh_mm}]` | `rem/v1/uploads/user-123/2025/01/19` |
+| `get_versioned_path()` | `rem/{version}/{resource_type}/{name}` | `rem/v1/schemas/user-schema` |
+| `get_user_path()` | `rem/v1/users/{user_id}[/{subpath}]` | `rem/v1/users/user-123/documents` |
+| `get_temp_path()` | `rem/v1/temp/{prefix}/{timestamp}` | `rem/v1/temp/processing/20250119_143045` |
+
+### Examples
+
+See `rem/src/rem/services/fs/examples_paths.py` for complete working examples:
+
+```bash
+python -m rem.services.fs.examples_paths
+```
+
 ## See Also
 
-- `/Users/sirsh/code/mr_saoirse/remstack/rem/src/rem/services/content/` - ContentService for specialized parsing
-- `/Users/sirsh/code/mr_saoirse/remstack/rem/src/rem/services/s3/` - S3Service for tenant-scoped operations
-- `/Users/sirsh/code/mr_saoirse/remstack/rem/settings.py` - S3Settings configuration
+- ContentService: `rem/src/rem/services/content/` - Specialized parsing (PDF, DOCX, etc.)
+- Settings: `rem/settings.py` - S3Settings, REM_HOME configuration
+- Examples: `rem/src/rem/services/fs/examples_paths.py` - Path convention examples

@@ -45,6 +45,9 @@ dependencies = [
     "pyyaml>=6.0.0",
     # Schema Tools
     "json-schema-to-pydantic>=0.2.0",
+    # Document Processing
+    "kreuzberg>=3.21.0",
+    "semchunk>=2.2.0",
 ]
 
 [project.optional-dependencies]

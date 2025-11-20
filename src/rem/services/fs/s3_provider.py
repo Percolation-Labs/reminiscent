@@ -419,7 +419,15 @@ class S3Provider:
         bucket, prefix = self._split_bucket_and_blob_from_path(uri)
 
         def write_object(writer_fn):
-            """Helper to write via BytesIO stream."""
+            """
+            Helper to write via BytesIO stream.
+
+            Pattern: write_object(lambda s: data.write_parquet(s))
+            - Creates in-memory buffer
+            - Calls writer function to populate buffer
+            - Uploads buffer contents to S3
+            - Avoids writing temporary files to disk
+            """
             stream = io.BytesIO()
             writer_fn(stream)
             self._client.put_object(Bucket=bucket, Key=prefix, Body=stream.getvalue())

@@ -193,15 +193,18 @@ class LocalProvider:
         """
         Write data to local file with format detection.
 
+        Mirrors S3Provider.write() interface for seamless filesystem abstraction.
+        Key difference: writes directly to disk instead of BytesIO buffer.
+
         Args:
             uri: Local file path
-            data: Data to write
+            data: Data to write (DataFrame, dict, Image, bytes, str)
             **options: Format-specific options
         """
         p = Path(uri)
         suffix = p.suffix.lower()
 
-        # Ensure parent directory exists
+        # Ensure parent directory exists (unlike S3, local FS needs explicit mkdir)
         p.parent.mkdir(parents=True, exist_ok=True)
 
         # Dataframes

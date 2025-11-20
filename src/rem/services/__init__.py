@@ -4,11 +4,12 @@ REM Services
 Service layer for REM system operations:
 - PostgresService: PostgreSQL/CloudNativePG database operations
 - RemService: REM query execution and graph operations
-- S3Service: S3 storage operations for files and artifacts
+
+For file/S3 operations, use rem.services.fs instead:
+    from rem.services.fs import FS, S3Provider
 """
 
 from .postgres import PostgresService
 from .rem import RemService
-from .s3 import S3Service
 
-__all__ = ["PostgresService", "RemService", "S3Service"]
+__all__ = ["PostgresService", "RemService"]

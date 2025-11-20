@@ -10,6 +10,7 @@ Users can be discovered through:
 - Direct user registration
 """
 
+from datetime import datetime
 from typing import Optional
 
 from pydantic import Field
@@ -24,6 +25,12 @@ class User(CoreModel):
     Represents people in the REM system, either as active users
     or entities extracted from content. Tenant isolation is provided
     via CoreModel.tenant_id field.
+
+    Enhanced by dreaming worker:
+    - summary: Generated from activity analysis
+    - interests: Extracted from resources and sessions
+    - activity_level: Computed from recent engagement
+    - preferred_topics: Extracted from moment/resource topics
     """
 
     name: str = Field(
@@ -37,4 +44,24 @@ class User(CoreModel):
     role: Optional[str] = Field(
         default=None,
         description="User role (employee, contractor, external, etc.)",
+    )
+    summary: Optional[str] = Field(
+        default=None,
+        description="LLM-generated user profile summary (updated by dreaming worker)",
+    )
+    interests: list[str] = Field(
+        default_factory=list,
+        description="User interests extracted from activity",
+    )
+    preferred_topics: list[str] = Field(
+        default_factory=list,
+        description="Frequently discussed topics in kebab-case",
+    )
+    activity_level: Optional[str] = Field(
+        default=None,
+        description="Activity level: active, moderate, inactive",
+    )
+    last_active_at: Optional[datetime] = Field(
+        default=None,
+        description="Last activity timestamp",
     )
