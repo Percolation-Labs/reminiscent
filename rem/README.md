@@ -2,6 +2,23 @@
 
 Cloud-native unified memory infrastructure for agentic AI systems built with Pydantic AI, FastAPI, and FastMCP.
 
+## Killer Features
+
+| Feature | Description | Benefits |
+|---------|-------------|----------|
+| **OpenAI-Compatible Chat API** | Drop-in replacement for OpenAI chat completions API with streaming support | Use with existing OpenAI clients, switch models across providers (OpenAI, Anthropic, etc.) |
+| **Built-in MCP Server** | FastMCP server with 5 tools + 3 resources for memory operations | Export memory to Claude Desktop, Cursor, or any MCP-compatible host |
+| **REM Query Engine** | Multi-index query system (LOOKUP, FUZZY, SEARCH, SQL, TRAVERSE) with custom dialect | O(1) lookups, semantic search, graph traversal - all tenant-isolated |
+| **Dreaming Workers** | Background workers for entity extraction, moment generation, and affinity matching | Automatic knowledge graph construction from resources (0% → 100% query answerable) |
+| **PostgreSQL + pgvector** | CloudNativePG with PostgreSQL 18, pgvector extension, streaming replication | Production-ready vector search, no external vector DB needed |
+| **AWS EKS Recipe** | Complete infrastructure-as-code with Pulumi, Karpenter, ArgoCD | Deploy to production EKS in minutes with auto-scaling and GitOps |
+| **JSON Schema Agents** | Dynamic agent creation from YAML schemas via Pydantic AI factory | Define agents declaratively, version control schemas, load dynamically |
+| **Content Providers** | Audio transcription (Whisper), vision (GPT-4V, Claude), PDFs, DOCX, images | Multimodal ingestion out of the box with format detection |
+| **Configurable Embeddings** | Provider-agnostic embedding system (OpenAI, Cohere, Jina) | Switch embedding providers via env vars, no code changes |
+| **Multi-Tenancy** | Tenant isolation at database level with automatic scoping | SaaS-ready with complete data separation per tenant |
+| **Streaming Everything** | SSE for chat, background workers for embeddings, async throughout | Real-time responses, non-blocking operations, scalable |
+| **Zero Vendor Lock-in** | Raw HTTP clients (no OpenAI SDK), swappable providers, open standards | Not tied to any vendor, easy to migrate, full control |
+
 ## Quick Start
 
 ### Docker Compose (Recommended)
