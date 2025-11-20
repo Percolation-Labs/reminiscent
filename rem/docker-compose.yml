@@ -1,0 +1,138 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg18
+    container_name: rem-postgres
+    environment:
+      POSTGRES_DB: rem
+      POSTGRES_USER: rem
+      POSTGRES_PASSWORD: rem
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5050:5432"
+    volumes:
+      # Mount migrations for automatic execution
+      - ./sql/migrations:/docker-entrypoint-initdb.d:ro
+      # Persistent data volume (PostgreSQL 18 format)
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rem -d rem"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - rem-network
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rem-api
+    environment:
+      # Database
+      POSTGRES__CONNECTION_STRING: postgresql://rem:rem@postgres:5432/rem
+
+      # LLM settings
+      LLM__DEFAULT_MODEL: anthropic:claude-sonnet-4-5-20250929
+      LLM__DEFAULT_TEMPERATURE: "0.5"
+      # IMPORTANT: Set these in your .env file or export them before running docker compose
+      LLM__OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LLM__ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+
+      # Auth (disabled for local dev)
+      AUTH__ENABLED: "false"
+
+      # OTEL (disabled for local dev)
+      OTEL__ENABLED: "false"
+
+      # S3 (optional - use MinIO or comment out)
+      # S3__BUCKET_NAME: rem-storage
+      # S3__ENDPOINT_URL: http://minio:9000
+
+      # Environment
+      ENVIRONMENT: development
+      TEAM: rem
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      # Mount source for hot reload during development
+      - ./src:/app/src:ro
+    networks:
+      - rem-network
+    command: >
+      uvicorn rem.api.main:app
+      --host 0.0.0.0
+      --port 8000
+      --reload
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rem-worker
+    environment:
+      # Database
+      POSTGRES__CONNECTION_STRING: postgresql://rem:rem@postgres:5432/rem
+
+      # LLM settings
+      LLM__OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LLM__ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+
+      # S3 (optional)
+      # S3__BUCKET_NAME: rem-storage
+      # S3__ENDPOINT_URL: http://minio:9000
+      # S3__ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      # S3__SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+
+      # SQS (for K8s deployment)
+      # SQS__QUEUE_URL: ${SQS_QUEUE_URL:-}
+      # AWS_REGION: ${AWS_REGION:-us-east-1}
+
+      # Environment
+      ENVIRONMENT: development
+      TEAM: rem
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      # Mount source for hot reload during development
+      - ./src:/app/src:ro
+    networks:
+      - rem-network
+    command: ["python", "-m", "rem.workers.sqs_file_processor"]
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "sqs_file_processor"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  # Optional: MinIO for S3-compatible storage
+  # minio:
+  #   image: minio/minio:latest
+  #   container_name: rem-minio
+  #   environment:
+  #     MINIO_ROOT_USER: minioadmin
+  #     MINIO_ROOT_PASSWORD: minioadmin
+  #   ports:
+  #     - "9000:9000"
+  #     - "9001:9001"
+  #   volumes:
+  #     - minio_data:/data
+  #   networks:
+  #     - rem-network
+  #   command: server /data --console-address ":9001"
+
+volumes:
+  postgres_data:
+    driver: local
+  # minio_data:
+  #   driver: local
+
+networks:
+  rem-network:
+    driver: bridge

@@ -1,0 +1,655 @@
+"""Content provider plugins for different file types."""
+
+import json
+import multiprocessing
+import os
+import random
+import subprocess
+import sys
+import tempfile
+from abc import ABC, abstractmethod
+from pathlib import Path
+from typing import Any, Optional
+
+from loguru import logger
+
+
+class ContentProvider(ABC):
+    """Base class for content extraction providers."""
+
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Provider name for logging/debugging."""
+        pass
+
+    @abstractmethod
+    def extract(self, content: bytes, metadata: dict[str, Any]) -> dict[str, Any]:
+        """
+        Extract text content from file bytes.
+
+        Args:
+            content: Raw file bytes
+            metadata: File metadata (size, type, etc.)
+
+        Returns:
+            dict with:
+                - text: Extracted text content
+                - metadata: Additional metadata from extraction (optional)
+        """
+        pass
+
+
+class TextProvider(ContentProvider):
+    """
+    Text content provider for plain text formats.
+
+    Supports:
+    - Markdown (.md, .markdown) - With heading detection
+    - JSON (.json) - Pretty-printed text extraction
+    - YAML (.yaml, .yml) - Text extraction
+    - Plain text (.txt) - Direct UTF-8 extraction
+    - Code files (.py, .js, .ts, etc.) - Source code as text
+
+    Simple UTF-8 text extraction with basic metadata.
+    Future: Could add frontmatter parsing, JSON schema validation, etc.
+    """
+
+    @property
+    def name(self) -> str:
+        return "text"
+
+    def extract(self, content: bytes, metadata: dict[str, Any]) -> dict[str, Any]:
+        """
+        Extract text content from plain text files.
+
+        Args:
+            content: Text file bytes
+            metadata: File metadata
+
+        Returns:
+            dict with text and optional metadata (line count, headings for markdown, etc.)
+        """
+        # Decode UTF-8 (with fallback to latin-1)
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError:
+            logger.debug("UTF-8 decode failed, falling back to latin-1")
+            text = content.decode("latin-1")
+
+        # Basic text analysis
+        lines = text.split("\n")
+
+        # Detect headings (for markdown files)
+        headings = [line for line in lines if line.strip().startswith("#")]
+
+        extraction_metadata = {
+            "line_count": len(lines),
+            "heading_count": len(headings) if headings else None,
+            "char_count": len(text),
+            "encoding": "utf-8",
+        }
+
+        return {
+            "text": text,
+            "metadata": extraction_metadata,
+        }
+
+
+class DocProvider(ContentProvider):
+    """
+    Document content provider using Kreuzberg.
+
+    Supports multiple document formats via Kreuzberg:
+    - PDF (.pdf) - Text extraction with OCR fallback
+    - Word (.docx) - Native format support
+    - PowerPoint (.pptx) - Slide content extraction
+    - Excel (.xlsx) - Spreadsheet data extraction
+    - Images (.png, .jpg) - OCR text extraction
+
+    Handles:
+    - Text extraction with OCR fallback
+    - Table detection and extraction
+    - Daemon process workaround for multiprocessing restrictions
+    """
+
+    @property
+    def name(self) -> str:
+        return "doc"
+
+    def _is_daemon_process(self) -> bool:
+        """Check if running in a daemon process."""
+        try:
+            return multiprocessing.current_process().daemon
+        except Exception:
+            return False
+
+    def _parse_in_subprocess(self, file_path: Path) -> dict:
+        """Run kreuzberg in a separate subprocess to bypass daemon restrictions."""
+        script = """
+import json
+import sys
+from pathlib import Path
+from kreuzberg import ExtractionConfig, extract_file_sync
+
+# Parse document with table extraction
+config = ExtractionConfig(
+    extract_tables=True,
+    chunk_content=False,
+    extract_keywords=False,
+)
+
+result = extract_file_sync(Path(sys.argv[1]), config=config)
+
+# Serialize result to JSON
+output = {
+    'content': result.content,
+    'tables': [
+        {
+            'page_number': t.get('page_number', 0),
+            'text': t.get('text', ''),
+        }
+        for t in result.tables
+    ],
+    'metadata': result.metadata
+}
+print(json.dumps(output))
+"""
+
+        # Run in subprocess
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(file_path)],
+            capture_output=True,
+            text=True,
+            timeout=300,  # 5 minute timeout
+        )
+
+        if result.returncode != 0:
+            raise RuntimeError(f"Subprocess parsing failed: {result.stderr}")
+
+        return json.loads(result.stdout)
+
+    def extract(self, content: bytes, metadata: dict[str, Any]) -> dict[str, Any]:
+        """
+        Extract document content using Kreuzberg.
+
+        Args:
+            content: Document file bytes
+            metadata: File metadata (should include content_type or extension)
+
+        Returns:
+            dict with text and extraction metadata
+        """
+        # Write bytes to temp file for kreuzberg
+        # Detect extension from metadata
+        content_type = metadata.get("content_type", "")
+        extension_map = {
+            "application/pdf": ".pdf",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+            "image/png": ".png",
+            "image/jpeg": ".jpg",
+        }
+        suffix = extension_map.get(content_type, ".pdf")  # Default to PDF
+
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp.write(content)
+            tmp_path = Path(tmp.name)
+
+        try:
+            # Check if running in daemon process
+            if self._is_daemon_process():
+                logger.info("Daemon process detected - using subprocess workaround for document parsing")
+                try:
+                    result_dict = self._parse_in_subprocess(tmp_path)
+                    text = result_dict["content"]
+                    extraction_metadata = {
+                        "table_count": len(result_dict["tables"]),
+                        "parser": "kreuzberg_subprocess",
+                        "file_extension": tmp_path.suffix,
+                    }
+                except Exception as e:
+                    logger.error(f"Subprocess parsing failed: {e}. Falling back to text-only.")
+                    # Fallback to simple text extraction
+                    from kreuzberg import ExtractionConfig, extract_file_sync
+                    config = ExtractionConfig(extract_tables=False)
+                    result = extract_file_sync(tmp_path, config=config)
+                    text = result.content
+                    extraction_metadata = {
+                        "parser": "kreuzberg_fallback",
+                        "file_extension": tmp_path.suffix,
+                    }
+            else:
+                # Normal execution (not in daemon)
+                from kreuzberg import ExtractionConfig, extract_file_sync
+                config = ExtractionConfig(
+                    extract_tables=True,
+                    chunk_content=False,
+                    extract_keywords=False,
+                )
+                result = extract_file_sync(tmp_path, config=config)
+                text = result.content
+                extraction_metadata = {
+                    "table_count": len(result.tables),
+                    "parser": "kreuzberg",
+                    "file_extension": tmp_path.suffix,
+                }
+
+            return {
+                "text": text,
+                "metadata": extraction_metadata,
+            }
+
+        finally:
+            # Clean up temp file
+            tmp_path.unlink(missing_ok=True)
+
+
+class AudioProvider(ContentProvider):
+    """
+    Audio content provider using AudioChunker + OpenAI Whisper.
+
+    Handles:
+    - Audio chunking by silence near minute boundaries
+    - Transcription via OpenAI Whisper API
+    - Converts chunks to markdown format
+    - Supports WAV, M4A, MP3, FLAC, OGG (via pydub + ffmpeg)
+
+    Process:
+    1. Write audio bytes to temp file
+    2. Chunk audio by silence (AudioChunker)
+    3. Transcribe chunks (AudioTranscriber)
+    4. Combine into markdown format with timestamps
+    5. Clean up temp files
+
+    Returns markdown-formatted transcription that integrates
+    seamlessly with ContentService's markdown → chunk → embed pipeline.
+    """
+
+    @property
+    def name(self) -> str:
+        return "audio"
+
+    def extract(self, content: bytes, metadata: dict[str, Any]) -> dict[str, Any]:
+        """
+        Extract audio content via transcription.
+
+        Args:
+            content: Audio file bytes
+            metadata: File metadata (size, type, etc.)
+
+        Returns:
+            dict with:
+                - text: Markdown-formatted transcription with timestamps
+                - metadata: Extraction metadata (chunk_count, duration, cost)
+
+        Raises:
+            RuntimeError: If transcription fails or pydub not available
+            ValueError: If OpenAI API key missing
+        """
+        # Check for OpenAI API key
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            logger.warning("No OPENAI_API_KEY found - audio transcription disabled")
+            return {
+                "text": "[Audio transcription requires OPENAI_API_KEY environment variable]",
+                "metadata": {"error": "missing_api_key"},
+            }
+
+        # Import audio services (lazy import)
+        try:
+            from rem.services.audio import AudioChunker, AudioTranscriber
+        except ImportError as e:
+            logger.error(f"Audio services not available: {e}")
+            return {
+                "text": "[Audio processing requires: pip install rem[audio]]",
+                "metadata": {"error": "missing_dependencies"},
+            }
+
+        # Write bytes to temp file
+        # Detect extension from metadata or use .wav as fallback
+        content_type = metadata.get("content_type", "audio/wav")
+        extension_map = {
+            "audio/wav": ".wav",
+            "audio/mpeg": ".mp3",
+            "audio/mp4": ".m4a",
+            "audio/x-m4a": ".m4a",
+            "audio/flac": ".flac",
+            "audio/ogg": ".ogg",
+        }
+        extension = extension_map.get(content_type, ".wav")
+
+        with tempfile.NamedTemporaryFile(suffix=extension, delete=False) as tmp:
+            tmp.write(content)
+            tmp_path = Path(tmp.name)
+
+        try:
+            logger.info(f"Processing audio file: {tmp_path.name} ({len(content) / 1024 / 1024:.1f} MB)")
+
+            # Step 1: Chunk audio by silence
+            chunker = AudioChunker(
+                target_chunk_seconds=60.0,
+                chunk_window_seconds=2.0,
+                silence_threshold_db=-40.0,
+                min_silence_ms=500,
+            )
+
+            chunks = chunker.chunk_audio(tmp_path)
+            logger.info(f"Created {len(chunks)} audio chunks")
+
+            # Step 2: Transcribe chunks
+            transcriber = AudioTranscriber(api_key=api_key)
+            results = transcriber.transcribe_chunks(chunks)
+            logger.info(f"Transcribed {len(results)} chunks")
+
+            # Step 3: Combine into markdown format
+            # Format: Each chunk becomes a section with timestamp
+            markdown_parts = []
+            for result in results:
+                timestamp = f"{result.start_seconds:.1f}s - {result.end_seconds:.1f}s"
+                markdown_parts.append(f"## [{timestamp}]\n\n{result.text}\n")
+
+            markdown_text = "\n".join(markdown_parts)
+
+            # Calculate metadata
+            total_duration = sum(r.duration_seconds for r in results)
+            estimated_cost = (total_duration / 60) * 0.006  # $0.006 per minute
+            successful_chunks = sum(1 for r in results if r.confidence > 0)
+
+            extraction_metadata = {
+                "chunk_count": len(chunks),
+                "transcribed_chunks": successful_chunks,
+                "duration_seconds": total_duration,
+                "estimated_cost": estimated_cost,
+                "parser": "whisper_api",
+            }
+
+            logger.info(
+                f"Transcription complete: {successful_chunks}/{len(chunks)} chunks, "
+                f"${estimated_cost:.3f} cost"
+            )
+
+            return {
+                "text": markdown_text,
+                "metadata": extraction_metadata,
+            }
+
+        except Exception as e:
+            logger.error(f"Audio extraction failed: {e}")
+            raise RuntimeError(f"Audio transcription failed: {e}") from e
+
+        finally:
+            # Clean up temp file and chunks
+            try:
+                tmp_path.unlink(missing_ok=True)
+                if 'chunker' in locals() and 'chunks' in locals():
+                    chunker.cleanup_chunks(chunks)
+            except Exception as e:
+                logger.warning(f"Cleanup failed: {e}")
+
+
+class ImageProvider(ContentProvider):
+    """
+    Image content provider with vision LLM analysis and CLIP embeddings.
+
+    Features:
+    - Tier-based vision analysis (gold tier always gets analysis)
+    - Sampling-based vision analysis for non-gold users
+    - Vision LLM description generation (Anthropic, Gemini, OpenAI)
+    - Future: CLIP embeddings for semantic image search
+
+    Process:
+    1. Check user tier and sampling rate
+    2. If eligible, run vision LLM analysis
+    3. Extract image metadata (dimensions, format)
+    4. Return markdown description or basic metadata
+    5. Save to ImageResource table (not Resource)
+
+    Vision analysis is expensive, so it's gated by:
+    - User tier (gold = always, silver/free = sampled)
+    - Sample rate setting (0.0 = never, 1.0 = always)
+    """
+
+    def __init__(self, user_tier: Optional[str] = None):
+        """
+        Initialize image provider.
+
+        Args:
+            user_tier: User tier (free, silver, gold) for vision gating
+        """
+        self.user_tier = user_tier
+
+    @property
+    def name(self) -> str:
+        return "image"
+
+    def _should_analyze_with_vision(self, sample_rate: float) -> bool:
+        """
+        Determine if image should get vision LLM analysis.
+
+        Args:
+            sample_rate: Sampling rate from settings (0.0-1.0)
+
+        Returns:
+            True if should analyze, False otherwise
+        """
+        # Import here to avoid circular dependency
+        from rem.models.entities import UserTier
+
+        # Gold tier always gets vision analysis
+        if self.user_tier == UserTier.GOLD.value:
+            logger.info("Gold tier user - vision analysis enabled")
+            return True
+
+        # For non-gold users, use sampling
+        if sample_rate > 0.0:
+            should_analyze = random.random() < sample_rate
+            if should_analyze:
+                logger.info(f"Vision analysis sampled (rate={sample_rate})")
+            return should_analyze
+
+        return False
+
+    def extract(self, content: bytes, metadata: dict[str, Any]) -> dict[str, Any]:
+        """
+        Extract image content with optional vision LLM analysis.
+
+        Args:
+            content: Image file bytes
+            metadata: File metadata (size, type, etc.)
+
+        Returns:
+            dict with:
+                - text: Markdown description (if vision enabled) or basic metadata
+                - metadata: Extraction metadata (dimensions, format, vision info)
+                - image_specific: Additional image metadata for ImageResource
+
+        Raises:
+            RuntimeError: If vision analysis fails
+        """
+        # Import settings here to avoid circular dependency
+        from rem.settings import settings
+
+        # Extract basic image metadata using PIL
+        try:
+            from PIL import Image
+            import io
+
+            img = Image.open(io.BytesIO(content))
+            image_width = img.width
+            image_height = img.height
+            image_format = img.format or "UNKNOWN"
+        except ImportError:
+            logger.warning("PIL not available - image metadata extraction disabled")
+            image_width = None
+            image_height = None
+            image_format = None
+        except Exception as e:
+            logger.warning(f"Failed to extract image metadata: {e}")
+            image_width = None
+            image_height = None
+            image_format = None
+
+        # Check if vision analysis should be performed
+        sample_rate = settings.content.image_vllm_sample_rate
+        should_analyze = self._should_analyze_with_vision(sample_rate)
+
+        vision_description = None
+        vision_provider = None
+        vision_model = None
+
+        if should_analyze:
+            # Perform vision LLM analysis
+            try:
+                from rem.utils.vision import ImageAnalyzer, VisionProvider
+
+                # Get provider from settings
+                provider_str = settings.content.image_vllm_provider.lower()
+                provider_map = {
+                    "anthropic": VisionProvider.ANTHROPIC,
+                    "gemini": VisionProvider.GEMINI,
+                    "openai": VisionProvider.OPENAI,
+                }
+                provider = provider_map.get(provider_str, VisionProvider.ANTHROPIC)
+
+                # Create analyzer
+                analyzer = ImageAnalyzer(
+                    provider=provider,
+                    model=settings.content.image_vllm_model,
+                )
+
+                # Write bytes to temp file for analysis
+                content_type = metadata.get("content_type", "image/png")
+                extension_map = {
+                    "image/png": ".png",
+                    "image/jpeg": ".jpg",
+                    "image/gif": ".gif",
+                    "image/webp": ".webp",
+                }
+                extension = extension_map.get(content_type, ".png")
+
+                with tempfile.NamedTemporaryFile(suffix=extension, delete=False) as tmp:
+                    tmp.write(content)
+                    tmp_path = Path(tmp.name)
+
+                try:
+                    # Analyze image
+                    result = analyzer.analyze_image(tmp_path)
+                    vision_description = result.description
+                    vision_provider = result.provider.value
+                    vision_model = result.model
+
+                    logger.info(f"Vision analysis complete: {len(vision_description)} chars")
+                finally:
+                    # Clean up temp file
+                    tmp_path.unlink(missing_ok=True)
+
+            except ImportError as e:
+                logger.warning(f"Vision analysis not available: {e}")
+            except Exception as e:
+                logger.error(f"Vision analysis failed: {e}")
+
+        # Build text content
+        if vision_description:
+            # Use vision description as primary content
+            text = f"# Image Analysis\n\n{vision_description}"
+            if image_width and image_height:
+                text += f"\n\n**Image Details:** {image_width}x{image_height} {image_format}"
+        else:
+            # Fallback to basic metadata
+            if image_width and image_height:
+                text = f"**Image:** {image_width}x{image_height} {image_format}"
+            else:
+                text = "**Image:** Metadata extraction unavailable"
+
+        # Generate CLIP embedding (if Jina API key available)
+        clip_embedding = None
+        clip_dimensions = None
+        clip_tokens = None
+
+        try:
+            from rem.utils.clip_embeddings import JinaCLIPEmbedder
+
+            # Only attempt CLIP embeddings if using Jina provider
+            if settings.content.clip_provider != "jina":
+                logger.debug(
+                    f"CLIP provider set to '{settings.content.clip_provider}' - "
+                    "skipping Jina embeddings (self-hosted not yet implemented)"
+                )
+            else:
+                embedder = JinaCLIPEmbedder(
+                    api_key=settings.content.jina_api_key,
+                    model=settings.content.clip_model,
+                )
+
+                if embedder.is_available():
+                    # Write bytes to temp file for CLIP embedding
+                    content_type = metadata.get("content_type", "image/png")
+                    extension_map = {
+                        "image/png": ".png",
+                        "image/jpeg": ".jpg",
+                        "image/gif": ".gif",
+                        "image/webp": ".webp",
+                    }
+                    extension = extension_map.get(content_type, ".png")
+
+                    with tempfile.NamedTemporaryFile(suffix=extension, delete=False) as tmp:
+                        tmp.write(content)
+                        tmp_path = Path(tmp.name)
+
+                    try:
+                        # Generate CLIP embedding
+                        result = embedder.embed_image(tmp_path)
+                        if result:
+                            clip_embedding = result.embedding
+                            clip_dimensions = result.dimensions
+                            clip_tokens = result.tokens_used
+                            logger.info(
+                                f"CLIP embedding generated: {clip_dimensions} dims, {clip_tokens} tokens"
+                            )
+                    finally:
+                        # Clean up temp file
+                        tmp_path.unlink(missing_ok=True)
+                else:
+                    logger.debug(
+                        "CLIP embeddings disabled - set CONTENT__JINA_API_KEY to enable. "
+                        "Get free API key at https://jina.ai/embeddings/"
+                    )
+
+        except ImportError:
+            logger.debug("CLIP embedding module not available")
+        except Exception as e:
+            logger.warning(f"CLIP embedding generation failed (non-fatal): {e}")
+
+        # Build extraction metadata
+        extraction_metadata = {
+            "parser": "image_provider",
+            "vision_enabled": vision_description is not None,
+            "vision_provider": vision_provider,
+            "vision_model": vision_model,
+            "image_width": image_width,
+            "image_height": image_height,
+            "image_format": image_format,
+            "clip_enabled": clip_embedding is not None,
+            "clip_dimensions": clip_dimensions,
+            "clip_tokens": clip_tokens,
+        }
+
+        # Add image-specific metadata for ImageResource
+        image_specific = {
+            "image_width": image_width,
+            "image_height": image_height,
+            "image_format": image_format,
+            "vision_description": vision_description,
+            "vision_provider": vision_provider,
+            "vision_model": vision_model,
+            "clip_embedding": clip_embedding,
+            "clip_dimensions": clip_dimensions,
+        }
+
+        return {
+            "text": text,
+            "metadata": extraction_metadata,
+            "image_specific": image_specific,
+        }

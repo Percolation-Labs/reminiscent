@@ -1,0 +1,176 @@
+[project]
+name = "rem"
+version = "0.1.0"
+description = "Reactive Event-driven Model system for agentic AI workloads"
+readme = "README.md"
+authors = [
+    { name = "mr-saoirse", email = "amartey@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    # Core Framework
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.6.0",
+    # Agentic AI
+    "pydantic-ai>=0.0.14",
+    # API Framework
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "hypercorn>=0.17.0",
+    # MCP (Model Context Protocol)
+    "fastmcp>=0.5.0",
+    # Database
+    "asyncpg>=0.30.0", # PostgreSQL async driver
+    "psycopg[binary]>=3.2.0", # PostgreSQL sync driver (for migrations if needed)
+    # AWS/S3
+    "boto3>=1.35.0",
+    "aioboto3>=13.0.0",
+    # Observability
+    "loguru>=0.7.0",
+    "opentelemetry-api>=1.28.0",
+    "opentelemetry-sdk>=1.28.0",
+    "opentelemetry-instrumentation>=0.49b0",
+    "opentelemetry-instrumentation-fastapi>=0.49b0",
+    "opentelemetry-exporter-otlp>=1.28.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.28.0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.28.0",
+    "arize-phoenix>=5.0.0",
+    "openinference-instrumentation-pydantic-ai>=0.1.0",
+    # Utilities
+    "python-dotenv>=1.0.0",
+    "click>=8.1.0",
+    "requests>=2.32.0",
+    "tenacity>=9.0.0",
+    "itsdangerous>=2.0.0",
+    "pyyaml>=6.0.0",
+    # Schema Tools
+    "json-schema-to-pydantic>=0.2.0",
+    # Document Processing
+    "kreuzberg>=3.21.0",
+    "semchunk>=2.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    # Testing
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "pytest-mock>=3.14.0",
+
+    # Code Quality
+    "ruff>=0.8.0",
+    "mypy>=1.13.0",
+
+    # Development Tools
+    "ipython>=8.29.0",
+    "ipdb>=0.13.0",
+]
+
+schema = [
+    # JSON Schema to Pydantic conversion
+    "json-schema-to-pydantic>=0.2.0",
+]
+
+fs = [
+    # File system service dependencies
+    # Core columnar data (choose one or both)
+    "polars>=1.0.0",  # Recommended for performance
+    # "pandas>=2.0.0",  # Alternative/supplement to Polars
+
+    # Image processing
+    "pillow>=10.0.0",
+
+    # Excel support (optional - add if needed)
+    # "openpyxl>=3.1.0",  # For .xlsx files
+    # "xlrd>=2.0.0",      # For .xls files
+
+    # Document parsing (optional - add when specialist providers ready)
+    # "python-docx>=1.0.0",  # For .docx files
+    # "pypdf>=3.0.0",        # For .pdf files (alternative to ContentService)
+
+    # Audio processing (required for AudioChunker/AudioTranscriber)
+    "pydub>=0.25.0",    # For audio format conversion and chunking
+]
+
+audio = [
+    # Audio processing dependencies
+    "pydub>=0.25.0",  # Audio manipulation and format conversion (requires ffmpeg)
+]
+
+all = [
+    "rem[dev,schema,fs,audio]",
+]
+
+[project.scripts]
+rem = "rem.cli.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rem"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+addopts = [
+    "-v",
+    "--strict-markers",
+    "--tb=short",
+]
+markers = [
+    "asyncio: marks tests as async",
+    "unit: marks tests as unit tests",
+    "integration: marks tests as integration tests",
+    "slow: marks tests as slow running",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "B008",  # do not perform function calls in argument defaults
+    "C901",  # too complex
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]  # Allow unused imports in __init__.py
+
+[tool.mypy]
+python_version = "3.12"
+strict = false
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+
+[[tool.mypy.overrides]]
+module = [
+    "fastmcp.*",
+    "pydantic_ai.*",
+    "arize.*",
+    "phoenix.*",
+]
+ignore_missing_imports = true
