@@ -291,47 +291,48 @@ class RemService:
                 embeddable_fields,
             )
 
-        raise QueryExecutionError(
-            "SEARCH",
-            "Embedding generation not implemented. "
-            "Integrate OpenAI/Anthropic API to generate embedding for query_text.",
+        # Generate embedding for query text
+        from ..embeddings.api import generate_embedding_async
+
+        query_embedding = await generate_embedding_async(
+            text=params.query_text,
+            model="text-embedding-3-small",
+            provider=params.provider or "openai",
         )
 
-        # When implemented:
-        # query_embedding = await generate_embedding(params.query_text)
-        #
-        # query = """
-        # SELECT
-        #     entity_key,
-        #     entity_type,
-        #     entity_id,
-        #     similarity_score,
-        #     content_summary
-        # FROM rem_search($1, $2, $3, $4, $5, $6, $7, $8)
-        # """
-        #
-        # results = await self.db.execute(
-        #     query,
-        #     (
-        #         query_embedding,
-        #         table_name,
-        #         field_name,
-        #         tenant_id,
-        #         params.provider or "openai",
-        #         params.min_similarity or 0.7,
-        #         params.limit or 10,
-        #         params.user_id,
-        #     ),
-        # )
-        #
-        # return {
-        #     "query_type": "SEARCH",
-        #     "query_text": params.query_text,
-        #     "table_name": table_name,
-        #     "field_name": field_name,
-        #     "results": results,
-        #     "count": len(results),
-        # }
+        # Execute vector search via rem_search() PostgreSQL function
+        query = """
+        SELECT
+            entity_key,
+            entity_type,
+            entity_id,
+            similarity_score,
+            content_summary
+        FROM rem_search($1, $2, $3, $4, $5, $6, $7, $8)
+        """
+
+        results = await self.db.execute(
+            query,
+            (
+                query_embedding,
+                table_name,
+                field_name,
+                tenant_id,
+                params.provider or "openai",
+                params.min_similarity or 0.7,
+                params.limit or 10,
+                params.user_id,
+            ),
+        )
+
+        return {
+            "query_type": "SEARCH",
+            "query_text": params.query_text,
+            "table_name": table_name,
+            "field_name": field_name,
+            "results": results,
+            "count": len(results),
+        }
 
     async def _execute_sql(
         self, params: SQLParameters, tenant_id: str

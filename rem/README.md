@@ -281,22 +281,24 @@ See [`manifests/`](../../manifests/) for Pulumi infrastructure and Kubernetes ma
 
 ### ✅ Completed
 - [x] **PostgresService** - Fully implemented with batch_upsert, connection pooling, tenant isolation
-- [x] **RemService** - Query execution for LOOKUP, FUZZY, SQL, TRAVERSE implemented
+- [x] **RemService** - All query types implemented (LOOKUP, FUZZY, SEARCH, SQL, TRAVERSE)
+- [x] **SEARCH Query** - Embedding generation via OpenAI API integrated
+- [x] **MCP Tools** - rem_query, ask_rem, create_resource, create_moment, update_graph_edges
+- [x] **MCP Resources** - Schema docs and status resources registered
 - [x] **Models** - All entity models (Resource, Entity, Moment, Message, File, User) complete
 - [x] **Settings** - Nested Pydantic settings with environment variable support
 - [x] **MCP Server** - FastMCP integration with instructions and mounting patterns
 - [x] **Chat Completions** - OpenAI-compatible API (streaming & non-streaming)
 - [x] **Agent Factory** - JSON Schema to Pydantic AI conversion
 - [x] **File System** - S3 and local providers with format detection
+- [x] **Embeddings** - OpenAI embedding generation (sync & async)
 
 ### 🚧 In Progress
-- [ ] **MCP Tools** - Implement rem_query, ask_rem, create_resource, create_moment tools
-- [ ] **MCP Resources** - Register schema docs and status resources
-- [ ] **SEARCH Query** - Embedding generation integration (OpenAI/Anthropic API)
 - [ ] **REM Query Router** - REST endpoint for direct REM query execution
 - [ ] **CRUD Routers** - Resource and moment creation/update endpoints
 - [ ] **Auth Implementation** - Complete OAuth providers and JWT validation
 - [ ] **Tests** - Unit and integration tests for core services
+- [ ] **SQL Functions** - PostgreSQL functions (rem_lookup, rem_fuzzy, rem_search, rem_traverse)
 
 ### 📝 Design Complete (Stubs Present)
 - [ ] **update_graph_edges** - PostgresService method (stub present)
