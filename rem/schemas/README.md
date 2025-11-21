@@ -426,9 +426,72 @@ When adding new schemas:
 6. **Document changes** in git commit messages
 7. **Use semantic versioning** for tags
 
+## Experiments
+
+Experiments are stored alongside schemas in the repository using the **`.experiments/` directory convention**. See [../.experiments/README.md](../.experiments/README.md) for complete documentation.
+
+### Quick Start
+
+```bash
+# Create experiment
+rem experiments create my-experiment \
+  --agent cv-parser \
+  --evaluator default \
+  --description "Test CV parsing accuracy"
+
+# Generated structure:
+.experiments/my-experiment/
+├── experiment.yaml          # Configuration (ExperimentConfig model)
+├── README.md                # Auto-generated docs
+└── datasets/                # Optional: small datasets
+
+# Run experiment
+rem experiments run my-experiment
+
+# Commit to Git
+git add .experiments/my-experiment/
+git commit -m "feat: Add my-experiment v1.0.0"
+git tag -a experiments/my-experiment/v1.0.0 \
+  -m "my-experiment v1.0.0: Initial experiment"
+```
+
+### Storage Convention: Git + S3 Hybrid
+
+| Type | Git (`.experiments/`) | S3 (`s3://bucket/experiments/`) |
+|------|----------------------|----------------------------------|
+| Configuration | ✅ `experiment.yaml` | ❌ |
+| Documentation | ✅ `README.md` | ❌ |
+| Small datasets (<1MB) | ✅ `datasets/*.csv` | ❌ |
+| Large datasets (>1MB) | ❌ | ✅ `datasets/*.parquet` |
+| Metrics summary | ✅ `results/metrics.json` | ❌ |
+| Full traces | ❌ | ✅ `results/run-*/traces.jsonl` |
+
+### Experiment Versioning
+
+Experiments follow semantic versioning like schemas:
+
+- **Tag Format**: `experiments/{experiment-name}/vMAJOR.MINOR.PATCH`
+- **Example**: `experiments/cv-parser-accuracy/v1.0.0`
+- **GitProvider**: Load versioned experiments via GitService
+
+```python
+from rem.services.git import GitService
+from rem.models.core.experiment import ExperimentConfig
+
+git_svc = GitService()
+
+# Load experiment at specific version
+exp_yaml = git_svc.fs.read(
+    "git://rem/.experiments/my-experiment/experiment.yaml?ref=experiments/my-experiment/v1.0.0"
+)
+config = ExperimentConfig(**exp_yaml)
+```
+
 ## Resources
 
 - [GitProvider Documentation](../src/rem/services/git/README.md)
+- [Experiments Documentation](../.experiments/README.md)
+- [ExperimentConfig Model](../src/rem/models/core/experiment.py)
 - [Pydantic AI Documentation](https://ai.pydantic.dev/)
 - [JSON Schema Reference](https://json-schema.org/)
 - [Semantic Versioning](https://semver.org/)
