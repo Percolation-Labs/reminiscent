@@ -15,6 +15,8 @@ import io
 
 from rem.services.fs.s3_provider import S3Provider
 from rem.services.fs.local_provider import LocalProvider
+from rem.services.fs.git_provider import GitProvider, is_git
+from rem.settings import settings
 
 
 def is_s3(uri: str) -> bool:
@@ -36,9 +38,10 @@ class FS:
     """
 
     def __init__(self):
-        """Initialize filesystem with S3 and local providers."""
+        """Initialize filesystem with S3, local, and Git providers."""
         self._s3_provider = S3Provider()
         self._local_provider = LocalProvider()
+        self._git_provider = GitProvider() if settings.git.enabled else None
 
     def https_to_file(self, web_request_uri: str, target_uri: str, token: str | None = None):
         """
@@ -83,12 +86,16 @@ class FS:
         Check if file or folder exists.
 
         Args:
-            uri: File or directory path
+            uri: File or directory path (s3://, git://, or local)
 
         Returns:
             True if exists, False otherwise
         """
-        if is_s3(uri):
+        if is_git(uri):
+            if not self._git_provider:
+                raise ValueError("Git provider not enabled. Set GIT__ENABLED=true")
+            return self._git_provider.exists(uri)
+        elif is_s3(uri):
             return self._s3_provider.exists(uri)
         else:
             return self._local_provider.exists(uri)
@@ -123,14 +130,18 @@ class FS:
             - Spreadsheets: .xlsx, .xls
 
         Args:
-            uri: File path
+            uri: File path (s3://, git://, or local)
             use_polars: Use Polars for dataframes (default: True)
             **options: Format-specific options
 
         Returns:
             Parsed data in appropriate format
         """
-        if is_s3(uri):
+        if is_git(uri):
+            if not self._git_provider:
+                raise ValueError("Git provider not enabled. Set GIT__ENABLED=true")
+            return self._git_provider.read(uri, **options)
+        elif is_s3(uri):
             return self._s3_provider.read(uri, use_polars=use_polars, **options)
         else:
             return self._local_provider.read(uri, use_polars=use_polars, **options)
@@ -199,13 +210,17 @@ class FS:
         List files from a prefix recursively.
 
         Args:
-            uri: Directory path or prefix
+            uri: Directory path or prefix (s3://, git://, or local)
             **options: Provider-specific options
 
         Returns:
             List of file URIs
         """
-        if is_s3(uri):
+        if is_git(uri):
+            if not self._git_provider:
+                raise ValueError("Git provider not enabled. Set GIT__ENABLED=true")
+            return self._git_provider.ls(uri, **options)
+        elif is_s3(uri):
             return self._s3_provider.ls(uri, **options)
         else:
             return self._local_provider.ls(uri, **options)

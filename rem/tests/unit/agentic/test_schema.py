@@ -69,7 +69,7 @@ def test_agent_schema_metadata_complete():
     metadata = AgentSchemaMetadata(
         fully_qualified_name="rem.agents.QueryAgent",
         name="Query Agent",
-        short_name="query-agent",
+        short_name="query",
         version="1.0.0",
         tools=[
             {"name": "lookup", "mcp_server": "rem"},
@@ -84,7 +84,7 @@ def test_agent_schema_metadata_complete():
 
     assert metadata.fully_qualified_name == "rem.agents.QueryAgent"
     assert metadata.name == "Query Agent"
-    assert metadata.short_name == "query-agent"
+    assert metadata.short_name == "query"
     assert metadata.version == "1.0.0"
     assert len(metadata.tools) == 2
     assert len(metadata.resources) == 1

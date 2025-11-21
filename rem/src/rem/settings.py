@@ -758,6 +758,141 @@ class APISettings(BaseSettings):
     )
 
 
+class GitSettings(BaseSettings):
+    """
+    Git repository provider settings for versioned schema/experiment syncing.
+
+    Enables syncing of agent schemas, evaluators, and experiments from Git repositories
+    using either SSH or HTTPS authentication. Designed for cluster environments where
+    secrets are provided via Kubernetes Secrets or similar mechanisms.
+
+    **Use Cases**:
+    - Sync agent schemas from versioned repos (repo/schemas/)
+    - Sync experiments and evaluation datasets (repo/experiments/)
+    - Clone specific tags/releases for reproducible evaluations
+    - Support multi-tenancy with per-tenant repo configurations
+
+    **Authentication Methods**:
+    1. **SSH** (recommended for production):
+       - Uses SSH keys from filesystem or Kubernetes Secrets
+       - Path specified via GIT__SSH_KEY_PATH or mounted at /etc/git-secret/ssh
+       - Known hosts file at /etc/git-secret/known_hosts
+
+    2. **HTTPS with Personal Access Token** (PAT):
+       - GitHub: 5,000 API requests/hour per authenticated user
+       - GitLab: Similar rate limits
+       - Store PAT in GIT__PERSONAL_ACCESS_TOKEN environment variable
+
+    **Kubernetes Deployment Pattern** (git-sync sidecar):
+    ```yaml
+    # Secret creation (one-time setup)
+    kubectl create secret generic git-creds \\
+      --from-file=ssh=$HOME/.ssh/id_rsa \\
+      --from-file=known_hosts=$HOME/.ssh/known_hosts
+
+    # Pod spec with secret mounting
+    volumes:
+      - name: git-secret
+        secret:
+          secretName: git-creds
+          defaultMode: 0400  # Read-only for owner
+    containers:
+      - name: rem-api
+        volumeMounts:
+          - name: git-secret
+            mountPath: /etc/git-secret
+            readOnly: true
+        securityContext:
+          fsGroup: 65533  # Make secrets readable by git user
+    ```
+
+    **Path Conventions**:
+    - Agent schemas: {repo_root}/schemas/
+    - Experiments: {repo_root}/experiments/
+    - Evaluators: {repo_root}/schemas/evaluators/
+
+    **Performance & Caching**:
+    - Clones cached locally in {cache_dir}/{repo_hash}/
+    - Supports shallow clones (--depth=1) for faster syncing
+    - Periodic refresh via cron jobs or git-sync sidecar
+
+    Environment variables:
+        GIT__ENABLED - Enable Git provider (default: False)
+        GIT__DEFAULT_REPO_URL - Default Git repository URL (ssh:// or https://)
+        GIT__DEFAULT_BRANCH - Default branch to clone (default: main)
+        GIT__SSH_KEY_PATH - Path to SSH private key (default: /etc/git-secret/ssh)
+        GIT__KNOWN_HOSTS_PATH - Path to known_hosts file (default: /etc/git-secret/known_hosts)
+        GIT__PERSONAL_ACCESS_TOKEN - GitHub/GitLab PAT for HTTPS auth
+        GIT__CACHE_DIR - Local cache directory for cloned repos
+        GIT__SHALLOW_CLONE - Use shallow clone (--depth=1) for faster sync
+        GIT__VERIFY_SSL - Verify SSL certificates for HTTPS (default: True)
+
+    **Security Best Practices**:
+    - Store SSH keys in Kubernetes Secrets, never in environment variables
+    - Use read-only SSH keys (deploy keys) with minimal permissions
+    - Enable known_hosts verification to prevent MITM attacks
+    - Rotate PATs regularly (90-day expiration recommended)
+    - Use IRSA/Workload Identity for cloud-provider Git services
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="GIT__",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable Git provider for syncing schemas/experiments from Git repos",
+    )
+
+    default_repo_url: str | None = Field(
+        default=None,
+        description="Default Git repository URL (ssh://git@github.com/org/repo.git or https://github.com/org/repo.git)",
+    )
+
+    default_branch: str = Field(
+        default="main",
+        description="Default branch to clone/checkout (main, master, develop, etc.)",
+    )
+
+    ssh_key_path: str = Field(
+        default="/etc/git-secret/ssh",
+        description="Path to SSH private key (Kubernetes Secret mount point or local path)",
+    )
+
+    known_hosts_path: str = Field(
+        default="/etc/git-secret/known_hosts",
+        description="Path to known_hosts file for SSH host verification",
+    )
+
+    personal_access_token: str | None = Field(
+        default=None,
+        description="Personal Access Token (PAT) for HTTPS authentication (GitHub, GitLab, etc.)",
+    )
+
+    cache_dir: str = Field(
+        default="/tmp/rem-git-cache",
+        description="Local cache directory for cloned repositories",
+    )
+
+    shallow_clone: bool = Field(
+        default=True,
+        description="Use shallow clone (--depth=1) for faster syncing (recommended for large repos)",
+    )
+
+    verify_ssl: bool = Field(
+        default=True,
+        description="Verify SSL certificates for HTTPS connections (disable for self-signed certs)",
+    )
+
+    sync_interval: int = Field(
+        default=300,
+        description="Sync interval in seconds for git-sync sidecar pattern (default: 5 minutes)",
+    )
+
+
 class Settings(BaseSettings):
     """
     Global application settings.
@@ -808,6 +943,7 @@ class Settings(BaseSettings):
     auth: AuthSettings = Field(default_factory=AuthSettings)
     postgres: PostgresSettings = Field(default_factory=PostgresSettings)
     s3: S3Settings = Field(default_factory=S3Settings)
+    git: GitSettings = Field(default_factory=GitSettings)
     sqs: SQSSettings = Field(default_factory=SQSSettings)
     chunking: ChunkingSettings = Field(default_factory=ChunkingSettings)
     content: ContentSettings = Field(default_factory=ContentSettings)

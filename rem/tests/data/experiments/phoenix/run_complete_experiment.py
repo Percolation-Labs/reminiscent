@@ -190,7 +190,7 @@ def main():
             return None
 
         # Load agent schema
-        with open("schemas/agents/hello-world-agent.yaml") as f:
+        with open("schemas/agents/hello-world.yaml") as f:
             agent_schema = yaml.safe_load(f)
 
         # Create prompt for agent
@@ -203,14 +203,14 @@ def main():
         })
 
         agent_prompt = client.prompts.create(
-            name="hello-world-agent-v1",
+            name="hello-world-v1",
             prompt_description="Hello World agent prompt for testing",
             version=agent_prompt_version,
         )
         print(f"  ✓ Created agent prompt version: {agent_prompt.id}")
 
         # Get parent prompt ID for label assignment
-        parent_prompt_id = get_parent_prompt_id("hello-world-agent-v1", BASE_URL, API_KEY)
+        parent_prompt_id = get_parent_prompt_id("hello-world-v1", BASE_URL, API_KEY)
         if parent_prompt_id:
             print(f"    Parent Prompt ID: {parent_prompt_id}")
             # Assign labels to agent prompt
@@ -320,7 +320,7 @@ def main():
             experiment_name="hello-world-v1",
             experiment_description="Baseline hello-world agent test",
             experiment_metadata={
-                "agent": "hello-world-agent",
+                "agent": "hello-world",
                 "version": "v1",
                 "task": "hello-world"
             }

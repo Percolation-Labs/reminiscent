@@ -19,6 +19,57 @@ Cloud-native unified memory infrastructure for agentic AI systems built with Pyd
 | **Streaming Everything** | SSE for chat, background workers for embeddings, async throughout | Real-time responses, non-blocking operations, scalable |
 | **Zero Vendor Lock-in** | Raw HTTP clients (no OpenAI SDK), swappable providers, open standards | Not tied to any vendor, easy to migrate, full control |
 
+## Installation
+
+### 🚀 Published to PyPI
+
+**Package:** `remdb` | **PyPI:** https://pypi.org/project/remdb/ | **CLI Command:** `rem`
+
+```bash
+# Install from PyPI (includes CLI + library)
+pip install remdb[all]
+
+# Verify installation
+rem --help
+```
+
+### Three Deployment Options
+
+**Option 1: Standalone Docker** (Zero Python installation)
+```bash
+git clone https://github.com/mr-saoirse/remstack.git
+cd remstack/rem
+export ANTHROPIC_API_KEY="your-key"
+docker compose up -d
+
+# Use CLI via docker exec
+docker exec rem-api rem --help
+```
+
+**Option 2: Hybrid** (Recommended for development)
+```bash
+# Docker for PostgreSQL only
+docker compose up postgres -d
+
+# Install from PyPI
+pip install remdb[all]
+export POSTGRES__CONNECTION_STRING="postgresql://rem:rem@localhost:5050/rem"
+
+# Use CLI directly (no docker exec!)
+rem --help
+rem ask "What is REM?"
+```
+
+**Option 3: Library Usage** (Embed in your projects)
+```python
+from rem.services.rem.service import RemService
+from rem.agentic.context import AgentContext
+
+service = RemService()
+context = AgentContext(user_id="user-123", tenant_id="acme-corp")
+result = await service.ask_rem("What resources do we have?", context=context)
+```
+
 ## Quick Start
 
 ### Docker Compose (Recommended)
@@ -81,6 +132,25 @@ curl -X POST http://localhost:8000/api/v1/chat/completions \
     "stream": false
   }'
 ```
+
+## Publishing to PyPI
+
+**Prerequisites:**
+```bash
+pip install build twine
+export PYPI_API_KEY="pypi-..."  # Create at https://pypi.org/manage/account/token/
+```
+
+**Quick Publish:**
+```bash
+# Update version in pyproject.toml
+# version = "0.1.x"
+
+# Build and publish using the archived script
+./.claude/archive/publish.sh
+```
+
+The `publish.sh` script handles cleaning, building, and uploading to PyPI automatically. See `.claude/archive/PUBLISH.md` for detailed publishing documentation.
 
 ## Architecture
 

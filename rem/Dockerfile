@@ -64,6 +64,8 @@ WORKDIR /app
 # tesseract-ocr: OCR engine for PDF parsing (Kreuzberg)
 # tesseract-ocr-eng: English language data for Tesseract
 # ffmpeg: Audio/video processing (required by pydub for M4A, MP3, etc.)
+# git: GitProvider for versioned schema/experiment syncing
+# openssh-client: SSH authentication for private Git repositories
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     curl \
@@ -72,6 +74,8 @@ RUN apt-get update && \
     tesseract-ocr \
     tesseract-ocr-eng \
     ffmpeg \
+    git \
+    openssh-client \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 

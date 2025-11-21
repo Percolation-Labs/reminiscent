@@ -58,6 +58,7 @@ dependencies = [
     # Document Processing
     "kreuzberg>=3.21.0",
     "semchunk>=2.2.0",
+    "gitpython>=3.1.45",
 ]
 
 [project.urls]

@@ -124,7 +124,7 @@ def main():
             experiment_name="hello-world-v1",
             experiment_description="Baseline hello-world agent test",
             experiment_metadata={
-                "agent": "hello-world-agent",
+                "agent": "hello-world",
                 "version": "v1",
                 "task": "hello-world"
             }
@@ -295,7 +295,7 @@ def main():
     print(f"  Labels: Test, Integration, HelloWorld")
     print(f"\nAgent Experiment: {exp_name}")
     print(f"  ID: {exp_id}")
-    print(f"  Metadata: agent=hello-world-agent, version=v1, task=hello-world")
+    print(f"  Metadata: agent=hello-world, version=v1, task=hello-world")
     print(f"\nEval Experiment: {eval_name}")
     print(f"  ID: {eval_id}")
     print(f"  Metadata: evaluator=hello-world-evaluator, version=v1")
