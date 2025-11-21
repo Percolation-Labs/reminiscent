@@ -3,17 +3,24 @@ type: object
 description: |
   Test agent for Git provider versioning.
 
-  This is version 1.0.0 - initial release.
+  This is version 2.0.0 - added confidence scoring.
 
 properties:
   message:
     type: string
     description: A simple message field
 
+  confidence:
+    type: number
+    minimum: 0
+    maximum: 1
+    description: Confidence score for the message
+
 required:
   - message
+  - confidence
 
 json_schema_extra:
   fully_qualified_name: rem.agents.TestAgent
-  version: "1.0.0"
+  version: "2.0.0"
   tags: [test, git-provider]
