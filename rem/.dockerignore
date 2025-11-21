@@ -28,7 +28,6 @@ env/
 htmlcov/
 .tox/
 tests/
-schemas/
 
 # Environment variables (should be passed via docker-compose)
 .env

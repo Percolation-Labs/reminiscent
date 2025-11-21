@@ -446,6 +446,15 @@ rem experiments create my-experiment \
 └── datasets/                # Optional: small datasets
 
 # Run experiment
+# Note: REM typically runs on Kubernetes with Phoenix
+# Production (on cluster):
+export PHOENIX_BASE_URL=http://phoenix-svc.observability.svc.cluster.local:6006
+export PHOENIX_API_KEY=<your-key>
+kubectl exec -it deployment/rem-api -- rem experiments run my-experiment
+
+# Development (port-forward):
+kubectl port-forward -n observability svc/phoenix-svc 6006:6006
+export PHOENIX_API_KEY=<your-key>
 rem experiments run my-experiment
 
 # Commit to Git

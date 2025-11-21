@@ -14,21 +14,47 @@ class PhoenixConfig:
     - PHOENIX_BASE_URL: Phoenix server URL (default: http://localhost:6006)
     - PHOENIX_API_KEY: API key for authentication (required for cluster Phoenix)
 
-    Standard Setup:
-    --------------
-    1. Port-forward Phoenix service (if on Kubernetes):
-       kubectl port-forward -n observability svc/phoenix-svc 6006:6006
+    Deployment Patterns:
+    --------------------
 
-    2. Set API key in environment:
-       export PHOENIX_API_KEY=<your-key>
+    **Production (Cluster Phoenix)** - RECOMMENDED:
+    REM typically runs on Kubernetes alongside Phoenix in the observability namespace.
+    Experiments run directly on the cluster where Phoenix is deployed:
 
-    3. Phoenix will be accessible at http://localhost:6006
+        # 1. Deploy experiment as K8s Job or run from rem-api pod
+        kubectl exec -it deployment/rem-api -- rem experiments run my-experiment
 
-    Local Development:
-    ------------------
-    For local Phoenix instance without K8s:
+        # 2. Phoenix accessible via service DNS
+        export PHOENIX_BASE_URL=http://phoenix-svc.observability.svc.cluster.local:6006
+        export PHOENIX_API_KEY=<your-key>
+
+    **Development (Port-Forward)** - For local testing:
+    Port-forward Phoenix from cluster to local machine:
+
+        # 1. Port-forward Phoenix service
+        kubectl port-forward -n observability svc/phoenix-svc 6006:6006
+
+        # 2. Set API key
+        export PHOENIX_API_KEY=<your-key>
+
+        # 3. Run experiments locally
+        rem experiments run my-experiment
+        # Connects to localhost:6006 → cluster Phoenix
+
+    **Local Development (Local Phoenix)** - For offline work:
+    Run Phoenix locally without cluster connection:
+
+        # 1. Start local Phoenix
         python -m phoenix.server.main serve
-        # Phoenix at http://localhost:6006 (no API key needed)
+
+        # 2. Run experiments (no API key needed)
+        rem experiments run my-experiment
+        # Connects to localhost:6006 → local Phoenix
+
+    Override Defaults:
+    ------------------
+    Commands respect PHOENIX_BASE_URL and PHOENIX_API_KEY environment variables.
+    Default is localhost:6006 for local development compatibility.
     """
 
     def __init__(

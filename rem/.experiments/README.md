@@ -138,19 +138,46 @@ vim .experiments/my-experiment/experiment.yaml
 
 ### 4. Run Experiment
 
+**Phoenix Connection Patterns**:
+
+REM typically runs on Kubernetes alongside Phoenix in the observability namespace. Experiments are executed directly on the cluster where Phoenix is deployed.
+
 ```bash
-# Run experiment
+# Production (on cluster) - RECOMMENDED
+export PHOENIX_BASE_URL=http://phoenix-svc.observability.svc.cluster.local:6006
+export PHOENIX_API_KEY=<your-key>
+kubectl exec -it deployment/rem-api -- rem experiments run my-experiment
+
+# Development (port-forward from cluster)
+kubectl port-forward -n observability svc/phoenix-svc 6006:6006
+export PHOENIX_API_KEY=<your-key>
 rem experiments run my-experiment
 
-# Output:
-# ✓ Loaded configuration from .experiments/my-experiment/experiment.yaml
-# ✓ Loaded agent schema: cv-parser v2.1.0
-# ✓ Loaded evaluator schema: default
-# ✓ Loaded dataset: ground_truth (100 rows)
-# ⏳ Running experiment... (ETA: 5 minutes)
-# ✓ Completed: 95/100 correct (95% accuracy)
-# ✓ Saved results to: s3://rem-experiments/my-experiment/results/run-2025-01-15-120000/
-# ✓ Saved metrics to: .experiments/my-experiment/results/metrics.json
+# Local development (local Phoenix instance)
+python -m phoenix.server.main serve
+rem experiments run my-experiment
+
+# Override Phoenix connection
+rem experiments run my-experiment \
+  --phoenix-url http://phoenix.example.com:6006 \
+  --phoenix-api-key <key>
+```
+
+**Output**:
+```
+✓ Loaded configuration from .experiments/my-experiment/experiment.yaml
+✓ Loaded agent schema: cv-parser v2.1.0
+✓ Loaded evaluator schema: default
+✓ Loaded dataset: ground_truth (100 rows)
+
+Phoenix Connection:
+  URL: http://phoenix-svc.observability.svc.cluster.local:6006
+  API Key: Yes
+
+⏳ Running experiment... (ETA: 5 minutes)
+✓ Completed: 95/100 correct (95% accuracy)
+✓ Saved results to: s3://rem-experiments/my-experiment/results/run-2025-01-15-120000/
+✓ Saved metrics to: .experiments/my-experiment/results/metrics.json
 ```
 
 ### 5. Review Results
@@ -159,7 +186,9 @@ rem experiments run my-experiment
 # View metrics summary (Git-tracked)
 cat .experiments/my-experiment/results/metrics.json
 
-# Open Phoenix UI for full traces
+# Open Phoenix UI
+# Production: Access via ingress or port-forward
+kubectl port-forward -n observability svc/phoenix-svc 6006:6006
 open http://localhost:6006
 
 # View S3 results

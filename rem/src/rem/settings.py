@@ -366,6 +366,7 @@ class PostgresSettings(BaseSettings):
     Connects to PostgreSQL 18 with pgvector extension running on CloudNativePG.
 
     Environment variables:
+        POSTGRES__ENABLED - Enable database connection (default: true)
         POSTGRES__CONNECTION_STRING - PostgreSQL connection string
         POSTGRES__POOL_SIZE - Connection pool size
         POSTGRES__POOL_MIN_SIZE - Minimum pool size
@@ -379,6 +380,11 @@ class PostgresSettings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+    )
+
+    enabled: bool = Field(
+        default=True,
+        description="Enable database connection (set to false for testing without DB)",
     )
 
     connection_string: str = Field(

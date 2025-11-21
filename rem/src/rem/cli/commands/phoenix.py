@@ -391,6 +391,202 @@ def trace_list(
 
 
 # =============================================================================
+# PROMPT COMMANDS
+# =============================================================================
+
+
+@eval.group()
+def prompt():
+    """Prompt management commands."""
+    pass
+
+
+@prompt.command("create")
+@click.argument("name")
+@click.option("--system-prompt", "-s", required=True, help="System prompt text")
+@click.option("--description", "-d", help="Prompt description")
+@click.option("--model-provider", default="OPENAI", help="Model provider (OPENAI, ANTHROPIC)")
+@click.option("--model-name", "-m", help="Model name (e.g., gpt-4o, claude-sonnet-4-5)")
+@click.option("--type", "-t", "prompt_type", default="Agent", help="Prompt type (Agent or Evaluator)")
+def prompt_create(
+    name: str,
+    system_prompt: str,
+    description: Optional[str],
+    model_provider: str,
+    model_name: Optional[str],
+    prompt_type: str,
+):
+    """Create a prompt in Phoenix.
+
+    Examples:
+        # Create agent prompt
+        rem eval prompt create hello-world \\
+            --system-prompt "You are a helpful assistant." \\
+            --model-name gpt-4o
+
+        # Create evaluator prompt
+        rem eval prompt create correctness-evaluator \\
+            --system-prompt "Evaluate the correctness of responses." \\
+            --type Evaluator \\
+            --model-provider ANTHROPIC \\
+            --model-name claude-sonnet-4-5
+    """
+    from rem.services.phoenix import PhoenixClient
+    from rem.services.phoenix.prompt_labels import PhoenixPromptLabels
+    from phoenix.client import Client
+    from phoenix.client.types.prompts import PromptVersion
+    from phoenix.client.__generated__ import v1
+
+    try:
+        # Set default model if not specified
+        if not model_name:
+            model_name = "gpt-4o" if model_provider == "OPENAI" else "claude-sonnet-4-5-20250929"
+
+        # Get Phoenix config
+        phoenix_client = PhoenixClient()
+        config = phoenix_client.config
+
+        # Create Phoenix Client
+        client = Client(
+            base_url=config.base_url,
+            api_key=config.api_key
+        )
+
+        # Create prompt messages
+        messages = [
+            v1.PromptMessage(
+                role="system",
+                content=system_prompt
+            )
+        ]
+
+        # Create PromptVersion
+        version = PromptVersion(
+            messages,
+            model_name=model_name,
+            description="v1.0",
+            model_provider=model_provider
+        )
+
+        # Create the prompt
+        result = client.prompts.create(
+            name=name,
+            version=version,
+            prompt_description=description or f"{prompt_type} prompt: {name}"
+        )
+
+        click.echo(f"✓ Created prompt '{name}' (ID: {result.id})")
+
+        # Try to get the prompt ID for label assignment
+        # Note: result.id is the version ID, we need the prompt ID
+        # Query to get prompt ID
+        try:
+            import httpx
+            query = """
+            query {
+              prompts(first: 1, filterBy: {name: {equals: "%s"}}) {
+                edges {
+                  node {
+                    id
+                    name
+                  }
+                }
+              }
+            }
+            """ % name
+
+            response = httpx.post(
+                f"{config.base_url}/graphql",
+                json={"query": query},
+                headers={"authorization": f"Bearer {config.api_key}"},
+                timeout=10,
+            )
+            graphql_result = response.json()
+            prompts = graphql_result.get("data", {}).get("prompts", {}).get("edges", [])
+
+            if prompts:
+                prompt_id = prompts[0]["node"]["id"]
+
+                # Assign labels
+                labels_helper = PhoenixPromptLabels(
+                    base_url=config.base_url, api_key=config.api_key
+                )
+
+                # Assign REM + type label
+                label_names = ["REM", prompt_type]
+                labels_helper.assign_prompt_labels(prompt_id, label_names)
+                click.echo(f"✓ Assigned labels: {', '.join(label_names)}")
+        except Exception as e:
+            click.echo(f"⚠ Warning: Could not assign labels: {e}")
+
+        click.echo(f"\nView in Phoenix: {config.base_url}:6006")
+
+    except Exception as e:
+        logger.error(f"Failed to create prompt: {e}")
+        click.echo(f"Error: {e}", err=True)
+        raise click.Abort()
+
+
+@prompt.command("list")
+def prompt_list():
+    """List all prompts in Phoenix.
+
+    Example:
+        rem eval prompt list
+    """
+    import httpx
+    from rem.services.phoenix import PhoenixClient
+
+    try:
+        phoenix_client = PhoenixClient()
+        config = phoenix_client.config
+
+        query = """
+        query {
+          prompts(first: 100) {
+            edges {
+              node {
+                id
+                name
+                description
+                createdAt
+              }
+            }
+          }
+        }
+        """
+
+        response = httpx.post(
+            f"{config.base_url}/graphql",
+            json={"query": query},
+            headers={"authorization": f"Bearer {config.api_key}"},
+            timeout=10,
+        )
+
+        result = response.json()
+        prompts = result.get("data", {}).get("prompts", {}).get("edges", [])
+
+        if not prompts:
+            click.echo("No prompts found in Phoenix")
+            return
+
+        click.echo(f"\nPhoenix Prompts ({len(prompts)} total):\n")
+        click.echo(f"{'Name':<40} {'Created':<20}")
+        click.echo("-" * 65)
+
+        for edge in prompts:
+            node = edge["node"]
+            name = node.get("name", "")[:40]
+            created = node.get("createdAt", "")[:19]
+            click.echo(f"{name:<40} {created:<20}")
+
+    except Exception as e:
+        logger.error(f"Failed to list prompts: {e}")
+        click.echo(f"Error: {e}", err=True)
+        raise click.Abort()
+
+
+# =============================================================================
 # REGISTER COMMAND
 # =============================================================================
 

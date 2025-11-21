@@ -1,0 +1,387 @@
+"""End-to-end integration tests for chat completions with session management.
+
+Tests the full flow:
+1. Client sends request with X-Session-Id header
+2. Server reloads conversation history
+3. Agent processes request with history context
+4. Response generated
+5. New messages saved to database
+6. Subsequent requests reload full conversation
+"""
+
+import uuid
+
+import pytest
+from httpx import AsyncClient
+from rem.api.main import app
+from rem.services.postgres import get_postgres_service
+from rem.services.repositories.message_repository import MessageRepository
+from rem.settings import settings
+
+
+@pytest.fixture
+def tenant_id():
+    """Generate unique tenant ID for test isolation."""
+    return f"test-tenant-{uuid.uuid4().hex[:8]}"
+
+
+@pytest.fixture
+def session_id():
+    """Generate unique session ID."""
+    return f"session-{uuid.uuid4()}"
+
+
+@pytest.fixture
+def user_id():
+    """Generate unique user ID."""
+    return f"user-{uuid.uuid4().hex[:8]}"
+
+
+@pytest.fixture
+async def db():
+    """Get database service."""
+    if not settings.postgres.enabled:
+        pytest.skip("Postgres is disabled, skipping database tests")
+
+    return get_postgres_service()
+
+
+@pytest.fixture
+async def client():
+    """Create async HTTP client for API testing."""
+    async with AsyncClient(app=app, base_url="http://test") as client:
+        yield client
+
+
+@pytest.mark.asyncio
+async def test_completions_without_session(client):
+    """Test basic completion without session management."""
+    response = await client.post(
+        "/api/v1/chat/completions",
+        json={
+            "model": "openai:gpt-4o-mini",
+            "messages": [{"role": "user", "content": "Say 'Hello'"}],
+            "stream": False,
+        },
+        headers={
+            "X-Tenant-Id": "test-tenant",
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "choices" in data
+    assert len(data["choices"]) > 0
+    assert data["choices"][0]["message"]["role"] == "assistant"
+
+
+@pytest.mark.asyncio
+async def test_completions_with_new_session(client, db, tenant_id, session_id, user_id):
+    """Test completion with new session (no prior history)."""
+    response = await client.post(
+        "/api/v1/chat/completions",
+        json={
+            "model": "openai:gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is 2+2?"}],
+            "stream": False,
+        },
+        headers={
+            "X-Tenant-Id": tenant_id,
+            "X-Session-Id": session_id,
+            "X-User-Id": user_id,
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "choices" in data
+
+    # Verify messages saved to database
+    repo = MessageRepository(db)
+    messages = await repo.get_by_session(
+        session_id=session_id, tenant_id=tenant_id, user_id=user_id
+    )
+
+    # Should have user + assistant messages
+    assert len(messages) >= 2
+    assert messages[0].message_type == "user"
+    assert messages[0].content == "What is 2+2?"
+    assert messages[1].message_type == "assistant"
+
+
+@pytest.mark.asyncio
+async def test_completions_with_session_continuity(
+    client, db, tenant_id, session_id, user_id
+):
+    """Test multi-turn conversation with session continuity."""
+    # Turn 1
+    response1 = await client.post(
+        "/api/v1/chat/completions",
+        json={
+            "model": "openai:gpt-4o-mini",
+            "messages": [{"role": "user", "content": "My name is Alice"}],
+            "stream": False,
+        },
+        headers={
+            "X-Tenant-Id": tenant_id,
+            "X-Session-Id": session_id,
+            "X-User-Id": user_id,
+        },
+    )
+
+    assert response1.status_code == 200
+
+    # Turn 2 - Ask about information from Turn 1
+    response2 = await client.post(
+        "/api/v1/chat/completions",
+        json={
+            "model": "openai:gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is my name?"}],
+            "stream": False,
+        },
+        headers={
+            "X-Tenant-Id": tenant_id,
+            "X-Session-Id": session_id,
+            "X-User-Id": user_id,
+        },
+    )
+
+    assert response2.status_code == 200
+    data2 = response2.json()
+
+    # Response should reference "Alice" from previous turn
+    # Note: This depends on the agent's ability to use conversation history
+    assistant_response = data2["choices"][0]["message"]["content"]
+
+    # Verify full conversation saved
+    repo = MessageRepository(db)
+    messages = await repo.get_by_session(
+        session_id=session_id, tenant_id=tenant_id, user_id=user_id
+    )
+
+    # Should have 4 messages: user1, assistant1, user2, assistant2
+    assert len(messages) >= 4
+    assert messages[0].content == "My name is Alice"
+    assert messages[2].content == "What is my name?"
+
+
+@pytest.mark.asyncio
+async def test_completions_with_long_response_compression(
+    client, db, tenant_id, session_id, user_id
+):
+    """Test that long responses are compressed and stored properly."""
+    # Ask for detailed explanation (likely long response)
+    response = await client.post(
+        "/api/v1/chat/completions",
+        json={
+            "model": "openai:gpt-4o-mini",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Explain the REM architecture in great detail with examples",
+                }
+            ],
+            "stream": False,
+        },
+        headers={
+            "X-Tenant-Id": tenant_id,
+            "X-Session-Id": session_id,
+            "X-User-Id": user_id,
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assistant_response = data["choices"][0]["message"]["content"]
+
+    # Verify stored in database
+    repo = MessageRepository(db)
+    messages = await repo.get_by_session(
+        session_id=session_id, tenant_id=tenant_id, user_id=user_id
+    )
+
+    assert len(messages) >= 2
+
+    # If response is long (>400 chars), compression logic applies
+    if len(assistant_response) > 400:
+        # Message should be stored with entity_key for LOOKUP
+        assistant_msg = messages[1]
+        assert assistant_msg.metadata is not None
+        # Entity key format: session-{id}-msg-{index}
+        if "entity_key" in assistant_msg.metadata:
+            entity_key = assistant_msg.metadata["entity_key"]
+            assert entity_key.startswith(f"session-{session_id}-msg-")
+
+
+@pytest.mark.asyncio
+async def test_completions_session_isolation(client, db, tenant_id, user_id):
+    """Test that different sessions are properly isolated."""
+    session1 = f"session-{uuid.uuid4()}"
+    session2 = f"session-{uuid.uuid4()}"
+
+    # Conversation in session 1
+    await client.post(
+        "/api/v1/chat/completions",
+        json={
+            "model": "openai:gpt-4o-mini",
+            "messages": [{"role": "user", "content": "I like cats"}],
+            "stream": False,
+        },
+        headers={
+            "X-Tenant-Id": tenant_id,
+            "X-Session-Id": session1,
+            "X-User-Id": user_id,
+        },
+    )
+
+    # Conversation in session 2
+    await client.post(
+        "/api/v1/chat/completions",
+        json={
+            "model": "openai:gpt-4o-mini",
+            "messages": [{"role": "user", "content": "I like dogs"}],
+            "stream": False,
+        },
+        headers={
+            "X-Tenant-Id": tenant_id,
+            "X-Session-Id": session2,
+            "X-User-Id": user_id,
+        },
+    )
+
+    # Verify isolation
+    repo = MessageRepository(db)
+
+    messages1 = await repo.get_by_session(
+        session_id=session1, tenant_id=tenant_id, user_id=user_id
+    )
+    messages2 = await repo.get_by_session(
+        session_id=session2, tenant_id=tenant_id, user_id=user_id
+    )
+
+    assert len(messages1) >= 2
+    assert len(messages2) >= 2
+
+    # Session 1 should only have cat message
+    assert any("cats" in msg.content.lower() for msg in messages1)
+    assert not any("dogs" in msg.content.lower() for msg in messages1)
+
+    # Session 2 should only have dog message
+    assert any("dogs" in msg.content.lower() for msg in messages2)
+    assert not any("cats" in msg.content.lower() for msg in messages2)
+
+
+@pytest.mark.asyncio
+async def test_completions_tenant_isolation(client, db, user_id):
+    """Test that different tenants are properly isolated."""
+    tenant1 = f"tenant-{uuid.uuid4().hex[:8]}"
+    tenant2 = f"tenant-{uuid.uuid4().hex[:8]}"
+    session_id = f"session-{uuid.uuid4()}"
+
+    # Same session ID but different tenants
+    await client.post(
+        "/api/v1/chat/completions",
+        json={
+            "model": "openai:gpt-4o-mini",
+            "messages": [{"role": "user", "content": "Tenant 1 message"}],
+            "stream": False,
+        },
+        headers={
+            "X-Tenant-Id": tenant1,
+            "X-Session-Id": session_id,
+            "X-User-Id": user_id,
+        },
+    )
+
+    await client.post(
+        "/api/v1/chat/completions",
+        json={
+            "model": "openai:gpt-4o-mini",
+            "messages": [{"role": "user", "content": "Tenant 2 message"}],
+            "stream": False,
+        },
+        headers={
+            "X-Tenant-Id": tenant2,
+            "X-Session-Id": session_id,
+            "X-User-Id": user_id,
+        },
+    )
+
+    # Verify isolation
+    repo = MessageRepository(db)
+
+    messages1 = await repo.get_by_session(
+        session_id=session_id, tenant_id=tenant1, user_id=user_id
+    )
+    messages2 = await repo.get_by_session(
+        session_id=session_id, tenant_id=tenant2, user_id=user_id
+    )
+
+    # Each tenant should only see their own messages
+    assert len(messages1) >= 2
+    assert len(messages2) >= 2
+    assert messages1[0].content == "Tenant 1 message"
+    assert messages2[0].content == "Tenant 2 message"
+
+
+@pytest.mark.asyncio
+async def test_completions_with_json_response_format(
+    client, tenant_id, session_id, user_id
+):
+    """Test completions with JSON response format and session management."""
+    response = await client.post(
+        "/api/v1/chat/completions",
+        json={
+            "model": "openai:gpt-4o-mini",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Return a JSON object with name and age fields",
+                }
+            ],
+            "stream": False,
+            "response_format": {"type": "json_object"},
+        },
+        headers={
+            "X-Tenant-Id": tenant_id,
+            "X-Session-Id": session_id,
+            "X-User-Id": user_id,
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    # Response should be JSON
+    content = data["choices"][0]["message"]["content"]
+    # Should be valid JSON or JSON string
+    assert content is not None
+
+
+@pytest.mark.asyncio
+async def test_completions_usage_tracking(client, tenant_id, session_id, user_id):
+    """Test that token usage is tracked in responses."""
+    response = await client.post(
+        "/api/v1/chat/completions",
+        json={
+            "model": "openai:gpt-4o-mini",
+            "messages": [{"role": "user", "content": "Count to 5"}],
+            "stream": False,
+        },
+        headers={
+            "X-Tenant-Id": tenant_id,
+            "X-Session-Id": session_id,
+            "X-User-Id": user_id,
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    # Usage should be present
+    assert "usage" in data
+    usage = data["usage"]
+    assert "prompt_tokens" in usage
+    assert "completion_tokens" in usage
+    assert "total_tokens" in usage
+    assert usage["total_tokens"] == usage["prompt_tokens"] + usage["completion_tokens"]

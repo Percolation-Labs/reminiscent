@@ -337,20 +337,23 @@ class PhoenixClient:
         experiment_name: str | None = None,
         experiment_description: str | None = None,
         experiment_metadata: dict[str, Any] | None = None,
+        experiment_config: Any | None = None,
     ) -> "RanExperiment":
         """Run an evaluation experiment.
 
-        Two modes:
-        1. Agent run: Provide task function to execute agents on dataset
-        2. Evaluator run: Provide evaluators to score existing outputs
+        Three modes:
+        1. ExperimentConfig mode: Provide experiment_config with all settings
+        2. Agent run: Provide task function to execute agents on dataset
+        3. Evaluator run: Provide evaluators to score existing outputs
 
         Args:
-            dataset: Dataset instance or name
+            dataset: Dataset instance or name (required unless experiment_config provided)
             task: Optional task function to run on each example (agent execution)
             evaluators: Optional list of evaluator functions
             experiment_name: Optional experiment name
             experiment_description: Optional description
             experiment_metadata: Optional metadata dict
+            experiment_config: Optional ExperimentConfig instance (overrides other params)
 
         Returns:
             RanExperiment with results
@@ -374,6 +377,36 @@ class PhoenixClient:
             ... )
         """
         try:
+            # Handle ExperimentConfig mode
+            if experiment_config:
+                experiment_name = experiment_name or experiment_config.name
+                experiment_description = experiment_description or experiment_config.description
+
+                # Merge metadata
+                config_metadata = {
+                    "agent_schema": experiment_config.agent_schema_ref.name,
+                    "agent_version": experiment_config.agent_schema_ref.version,
+                    "evaluator_schema": experiment_config.evaluator_schema_ref.name,
+                    "evaluator_version": experiment_config.evaluator_schema_ref.version,
+                    "config_status": experiment_config.status.value,
+                    "config_tags": experiment_config.tags,
+                }
+                config_metadata.update(experiment_config.metadata or {})
+                experiment_metadata = experiment_metadata or config_metadata
+
+                # Use ground_truth dataset if dataset not provided
+                if not dataset and "ground_truth" in experiment_config.datasets:
+                    dataset_ref = experiment_config.datasets["ground_truth"]
+                    # Load from Git or use provided path
+                    if dataset_ref.location.value == "git":
+                        # Assume dataset is already loaded
+                        logger.warning(
+                            f"Dataset location is 'git' but path-based loading not implemented. "
+                            f"Pass dataset explicitly or use Phoenix dataset name."
+                        )
+                    else:
+                        dataset = dataset_ref.path
+
             # Load dataset if name provided
             if isinstance(dataset, str):
                 dataset = self.get_dataset(dataset)
@@ -396,6 +429,11 @@ class PhoenixClient:
             logger.success(f"Experiment complete: {experiment_name or 'unnamed'}")
             if hasattr(experiment, "url"):
                 logger.info(f"View results: {experiment.url}")
+
+            # Update ExperimentConfig if provided
+            if experiment_config:
+                experiment_config.last_run_at = datetime.now()
+                experiment_config.status = "running" if hasattr(experiment, "runs") else "completed"
 
             return experiment
 

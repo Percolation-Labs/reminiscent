@@ -5,7 +5,7 @@ Design Pattern:
 - Headers map to AgentContext (X-User-Id, X-Tenant-Id, X-Session-Id, X-Model-Name, X-Agent-Schema)
 - Body.model is the LLM model for Pydantic AI
 - X-Model-Name header can override body.model
-- X-Agent-Schema header specifies which agent schema to use (defaults to 'rem-agent')
+- X-Agent-Schema header specifies which agent schema to use (defaults to 'rem')
 - Support for streaming (SSE) and non-streaming modes
 - Response format control (text vs json_object)
 
@@ -14,10 +14,10 @@ Headers Mapping
     X-Tenant-Id      → AgentContext.tenant_id
     X-Session-Id     → AgentContext.session_id
     X-Model-Name     → AgentContext.default_model (overrides body.model)
-    X-Agent-Schema   → AgentContext.agent_schema_uri (defaults to 'rem-agent')
+    X-Agent-Schema   → AgentContext.agent_schema_uri (defaults to 'rem')
 
 Default Agent:
-    If X-Agent-Schema header is not provided, the system loads 'rem-agent' schema,
+    If X-Agent-Schema header is not provided, the system loads 'rem' schema,
     which is the REM expert assistant with comprehensive knowledge about:
     - REM architecture and concepts
     - Entity types and graph traversal
@@ -29,7 +29,7 @@ Example Request:
     POST /api/v1/chat/completions
     X-Tenant-Id: acme-corp
     X-User-Id: user123
-    X-Agent-Schema: rem-agent  # Optional, this is the default
+    X-Agent-Schema: rem  # Optional, this is the default
 
     {
       "model": "openai:gpt-4o-mini",
@@ -42,6 +42,7 @@ Example Request:
 
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 import yaml
@@ -51,6 +52,9 @@ from loguru import logger
 
 from ....agentic.context import AgentContext
 from ....agentic.providers.pydantic_ai import create_pydantic_ai_agent
+from ....services.postgres import get_postgres_service
+from ....services.session import SessionMessageStore, reload_session
+from ....settings import settings
 from .json_utils import extract_json_resilient
 from .models import (
     ChatCompletionChoice,
@@ -64,7 +68,7 @@ from .streaming import stream_openai_response
 router = APIRouter(prefix="/v1", tags=["chat"])
 
 # Default agent schema file
-DEFAULT_AGENT_SCHEMA = "rem-agent"
+DEFAULT_AGENT_SCHEMA = "rem"
 # Path: .../rem/src/rem/api/routers/chat/completions.py -> .../rem/schemas
 SCHEMAS_DIR = Path(__file__).parent.parent.parent.parent.parent.parent / "schemas"
 
@@ -73,13 +77,16 @@ def load_agent_schema(schema_name: str) -> dict | None:
     """
     Load agent schema from YAML file.
 
+    Looks for schema in schemas/agents/ directory.
+
     Args:
-        schema_name: Schema name (e.g., 'rem-agent', 'query-agent')
+        schema_name: Schema name (e.g., 'rem', 'query', 'hello-world')
 
     Returns:
         Agent schema dict or None if not found
     """
-    schema_file = SCHEMAS_DIR / f"{schema_name}.yaml"
+    # Look for schema in agents/ subdirectory
+    schema_file = SCHEMAS_DIR / "agents" / f"{schema_name}.yaml"
     if not schema_file.exists():
         logger.warning(f"Agent schema not found: {schema_file}")
         return None
@@ -100,7 +107,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
     OpenAI-compatible chat completions with REM agent support.
 
     The 'model' field in the request body is the LLM model used by Pydantic AI.
-    The X-Agent-Schema header specifies which agent schema to use (defaults to 'rem-agent').
+    The X-Agent-Schema header specifies which agent schema to use (defaults to 'rem').
 
     Supported Headers:
     | Header              | Description                          | Maps To                        | Default       |
@@ -108,7 +115,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
     | X-User-Id           | User identifier                      | AgentContext.user_id           | None          |
     | X-Tenant-Id         | Tenant identifier (multi-tenancy)    | AgentContext.tenant_id         | "default"     |
     | X-Session-Id        | Session/conversation identifier      | AgentContext.session_id        | None          |
-    | X-Agent-Schema      | Agent schema name                    | AgentContext.agent_schema_uri  | "rem-agent"   |
+    | X-Agent-Schema      | Agent schema name                    | AgentContext.agent_schema_uri  | "rem"         |
 
     Example Models:
     - anthropic:claude-sonnet-4-5-20250929 (Claude 4.5 Sonnet)
@@ -122,13 +129,21 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
     - text (default): Plain text response
     - json_object: Best-effort JSON extraction from agent output
 
-    Default Agent (rem-agent):
+    Default Agent (rem):
     - Expert assistant for REM system
     - Comprehensive knowledge of REM architecture, concepts, and implementation
     - Structured output with answer, confidence, and references
+
+    Session Management:
+    - If X-Session-Id is provided, conversation history is reloaded from database
+    - New messages are saved to database for session continuity
+    - When Postgres is disabled, session management is skipped
     """
     # Create context from headers (maps headers to AgentContext fields)
     context = AgentContext.from_headers(dict(request.headers))
+
+    # Check if we should use database for session management
+    use_db = settings.postgres.enabled and context.session_id
 
     # Load agent schema: use header value if provided, otherwise use default
     schema_name = context.agent_schema_uri or DEFAULT_AGENT_SCHEMA
@@ -151,6 +166,20 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
 
     logger.info(f"Using agent schema: {schema_name}, model: {body.model}")
 
+    # Reload session history if session_id provided
+    history = []
+    if use_db:
+        db = get_postgres_service()
+        if db:
+            history = await reload_session(
+                db=db,
+                session_id=context.session_id,
+                tenant_id=context.tenant_id or "default",
+                user_id=context.user_id,
+                decompress_messages=False,  # Use compressed versions for efficiency
+            )
+            logger.info(f"Loaded {len(history)} historical messages for session {context.session_id}")
+
     # Create agent with schema and model override
     agent = await create_pydantic_ai_agent(
         context=context,
@@ -162,6 +191,13 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
     prompt = "\n".join(
         msg.content or "" for msg in body.messages if msg.role in ("system", "user")
     )
+
+    # Create current user message for storage
+    user_message = {
+        "role": "user",
+        "content": prompt,
+        "timestamp": datetime.utcnow().isoformat(),
+    }
 
     # Generate OpenAI-compatible request ID
     request_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
@@ -192,6 +228,31 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
     usage = result.usage() if hasattr(result, "usage") else None
     prompt_tokens = usage.input_tokens if usage else 0
     completion_tokens = usage.output_tokens if usage else 0
+
+    # Save conversation messages to database
+    if use_db:
+        db = get_postgres_service()
+        if db:
+            assistant_message = {
+                "role": "assistant",
+                "content": content,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+
+            # Store messages with compression
+            store = SessionMessageStore(
+                db=db,
+                tenant_id=context.tenant_id or "default",
+            )
+
+            await store.store_session_messages(
+                session_id=context.session_id,
+                messages=[user_message, assistant_message],
+                user_id=context.user_id,
+                compress=True,
+            )
+
+            logger.info(f"Saved conversation to session {context.session_id}")
 
     return ChatCompletionResponse(
         id=request_id,

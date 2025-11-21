@@ -92,32 +92,20 @@ def setup_instrumentation() -> None:
             f"OTLP exporter configured: {settings.otel.collector_endpoint} ({settings.otel.protocol})"
         )
 
-        # Configure Phoenix if enabled
-        if settings.phoenix.enabled:
-            try:
-                from openinference.instrumentation.pydantic_ai import PydanticAIInstrumentor
+        # Add OpenInference span processor for Pydantic AI
+        # This adds rich attributes (openinference.span.kind, input/output, etc.) to ALL traces
+        # Phoenix receives these traces via the OTLP collector - no separate "Phoenix integration" needed
+        try:
+            from openinference.instrumentation.pydantic_ai import OpenInferenceSpanProcessor as PydanticAISpanProcessor
 
-                # Phoenix exporter (OTLP compatible)
-                phoenix_exporter = HTTPExporter(
-                    endpoint=settings.phoenix.collector_endpoint,
-                    timeout=settings.otel.export_timeout,
-                )
+            tracer_provider.add_span_processor(PydanticAISpanProcessor())
+            logger.info("Added OpenInference span processor for Pydantic AI")
 
-                # Add Phoenix span processor
-                tracer_provider.add_span_processor(BatchSpanProcessor(phoenix_exporter))
-
-                # Instrument Pydantic AI with OpenInference conventions
-                PydanticAIInstrumentor().instrument()
-
-                logger.info(
-                    f"Phoenix integration configured: {settings.phoenix.collector_endpoint}"
-                )
-
-            except ImportError:
-                logger.warning(
-                    "Phoenix instrumentation requested but openinference-instrumentation-pydantic-ai not installed. "
-                    "Install with: pip install openinference-instrumentation-pydantic-ai"
-                )
+        except ImportError:
+            logger.warning(
+                "openinference-instrumentation-pydantic-ai not installed - traces will lack OpenInference attributes. "
+                "Install with: pip install openinference-instrumentation-pydantic-ai"
+            )
 
         _instrumentation_initialized = True
         logger.info("OpenTelemetry instrumentation initialized successfully")

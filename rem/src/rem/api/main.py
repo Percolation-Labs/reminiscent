@@ -135,9 +135,26 @@ async def lifespan(app: FastAPI):
     Application lifespan manager.
 
     Handles startup and shutdown tasks.
-    OTEL instrumentation is initialized in agent factory when needed.
+    OTEL instrumentation must be initialized at startup before any agents are created.
     """
     logger.info(f"Starting REM API ({settings.environment})")
+
+    # Initialize OTEL instrumentation if enabled
+    # Must be done at startup to instrument Pydantic AI before any agents are created
+    if settings.otel.enabled:
+        from ..agentic.otel.setup import setup_instrumentation
+
+        setup_instrumentation()
+
+    # Check database configuration
+    if not settings.postgres.enabled:
+        logger.warning(
+            "Running in NO-DATABASE mode - database connection disabled. "
+            "Agent execution works with file-based schemas, but session storage "
+            "and history lookups are unavailable. Enable database with POSTGRES__ENABLED=true"
+        )
+    else:
+        logger.info(f"Database enabled: {settings.postgres.connection_string}")
 
     yield
 
