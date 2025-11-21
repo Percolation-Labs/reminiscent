@@ -1,0 +1,19 @@
+---
+type: object
+description: |
+  Test agent for Git provider versioning.
+
+  This is version 1.0.0 - initial release.
+
+properties:
+  message:
+    type: string
+    description: A simple message field
+
+required:
+  - message
+
+json_schema_extra:
+  fully_qualified_name: rem.agents.TestAgent
+  version: "1.0.0"
+  tags: [test, git-provider]
