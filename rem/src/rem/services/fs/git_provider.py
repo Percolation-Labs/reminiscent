@@ -801,17 +801,18 @@ class GitProvider:
             return []
 
         versions = []
-        semver_pattern = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)")
+        # Pattern supports both flat tags (v2.1.0) and path-based tags (schemas/test/v2.1.0)
+        semver_pattern = re.compile(r"(?:^|/)v?(\d+)\.(\d+)\.(\d+)")
 
         for tag in tags:
             tag_name = tag.name
 
             # Apply user-provided pattern filter
-            if pattern and not re.match(pattern, tag_name):
+            if pattern and not re.search(pattern, tag_name):
                 continue
 
             # Extract semantic version (MAJOR.MINOR.PATCH)
-            match = semver_pattern.match(tag_name)
+            match = semver_pattern.search(tag_name)
             if not match:
                 continue  # Skip non-semver tags
 

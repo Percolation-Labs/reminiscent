@@ -102,12 +102,15 @@ rem git sync
 ```
 """
 
-from typing import Any
+from typing import Any, TYPE_CHECKING
 from pathlib import Path
 
 from loguru import logger
 
 from rem.settings import settings
+
+if TYPE_CHECKING:
+    from rem.services.fs import FS
 
 
 class GitService:
@@ -118,39 +121,39 @@ class GitService:
     migration planning utilities. Wraps GitProvider with business logic.
 
     **Path Conventions**:
-    - Agent schemas: schemas/{agent_name}.yaml
-    - Evaluators: schemas/evaluators/{evaluator_name}.yaml
+    - Agent schemas: schemas/agents/{agent_name}.yaml
+    - Evaluators: schemas/evaluators/{agent_name}/{evaluator_name}.yaml
     - Experiments: experiments/{experiment_name}/
 
     **Version Format**: Semantic versioning (MAJOR.MINOR.PATCH)
-    - v2.1.1 → tag in Git repository
+    - Tags use format: schemas/{agent_name}/vX.Y.Z (e.g., schemas/test/v2.1.0)
     - Can use patterns: v2.* (all v2 versions)
 
     Attributes:
         fs: Filesystem interface with Git provider
-        schemas_dir: Directory for agent schemas (default: schemas/)
+        schemas_dir: Directory for agent schemas (default: schemas/agents)
         experiments_dir: Directory for experiments (default: experiments/)
 
     Examples:
         >>> git_svc = GitService()
         >>> versions = git_svc.list_schema_versions("cv-parser")
-        >>> schema = git_svc.load_schema("cv-parser", version="v2.1.0")
-        >>> diff = git_svc.compare_schemas("cv-parser", "v2.0.0", "v2.1.0")
+        >>> schema = git_svc.load_schema("cv-parser", version="schemas/cv-parser/v2.1.0")
+        >>> diff = git_svc.compare_schemas("cv-parser", "schemas/cv-parser/v2.0.0", "schemas/cv-parser/v2.1.0")
     """
 
     def __init__(
         self,
-        fs: FS | None = None,
-        schemas_dir: str = "schemas",
-        experiments_dir: str = "experiments",
+        fs: "FS | None" = None,
+        schemas_dir: str = "rem/schemas/agents",
+        experiments_dir: str = "rem/experiments",
     ):
         """
         Initialize Git service.
 
         Args:
             fs: Filesystem interface (creates new FS() if None)
-            schemas_dir: Directory for agent schemas
-            experiments_dir: Directory for experiments
+            schemas_dir: Directory for agent schemas (default: rem/schemas/agents)
+            experiments_dir: Directory for experiments (default: rem/experiments)
 
         Raises:
             ValueError: If Git provider is not enabled
@@ -342,16 +345,27 @@ class GitService:
             >>> if has_breaking:
             ...     print("⚠️  Manual migration required")
         """
-        # Check major version bump
-        v1_parts = version1.lstrip("v").split(".")
-        v2_parts = version2.lstrip("v").split(".")
+        import re
 
-        if len(v1_parts) >= 1 and len(v2_parts) >= 1:
-            if int(v2_parts[0]) > int(v1_parts[0]):
-                logger.warning(
-                    f"Major version bump detected: {version1} → {version2}"
-                )
-                return True
+        # Extract version numbers from tags (support both v2.1.0 and schemas/test/v2.1.0)
+        semver_pattern = re.compile(r"v?(\d+)\.(\d+)\.(\d+)")
+
+        v1_match = semver_pattern.search(version1)
+        v2_match = semver_pattern.search(version2)
+
+        if not v1_match or not v2_match:
+            logger.warning(f"Could not parse versions: {version1}, {version2}")
+            return False
+
+        v1_major = int(v1_match.group(1))
+        v2_major = int(v2_match.group(1))
+
+        # Check major version bump
+        if v2_major > v1_major:
+            logger.warning(
+                f"Major version bump detected: {version1} → {version2}"
+            )
+            return True
 
         # Check diff for breaking change patterns
         diff = self.compare_schemas(schema_name, version1, version2)
