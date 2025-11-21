@@ -3,7 +3,7 @@ type: object
 description: |
   Test agent for Git provider versioning.
 
-  This is version 2.0.0 - added confidence scoring.
+  This is version 2.1.0 - added optional metadata field.
 
 properties:
   message:
@@ -16,11 +16,15 @@ properties:
     maximum: 1
     description: Confidence score for the message
 
+  metadata:
+    type: object
+    description: Optional metadata for the message
+
 required:
   - message
   - confidence
 
 json_schema_extra:
   fully_qualified_name: rem.agents.TestAgent
-  version: "2.0.0"
+  version: "2.1.0"
   tags: [test, git-provider]
