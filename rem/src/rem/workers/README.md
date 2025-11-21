@@ -4,11 +4,12 @@ Background worker for building the REM knowledge graph through memory indexing a
 
 ## Overview
 
-The dreaming worker processes user content to construct the REM knowledge graph through three core operations:
+The dreaming worker processes user content to construct the REM knowledge graph through four core operations:
 
-1. **User Model Updates**: Extract and update user profiles from activity
-2. **Moment Construction**: Identify temporal narratives from resources
-3. **Resource Affinity**: Build semantic relationships between resources
+1. **Ontology Extraction**: Run custom extractors on files/resources for domain-specific knowledge
+2. **User Model Updates**: Extract and update user profiles from activity
+3. **Moment Construction**: Identify temporal narratives from resources
+4. **Resource Affinity**: Build semantic relationships between resources
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -61,6 +62,132 @@ The dreaming worker processes user content to construct the REM knowledge graph 
 - Completion tracking
 
 ## Operations
+
+### Ontology Extraction
+
+Runs custom extractors on user's files and resources to extract domain-specific structured knowledge.
+
+**What is an Ontology?**
+
+An ontology is domain-specific knowledge extracted from files using custom agent schemas. Unlike generic chunking and embedding:
+- **Structured**: Extracts specific fields (e.g., candidate skills, contract terms, medical diagnoses)
+- **Validated**: Uses JSON Schema for output structure
+- **Searchable**: Semantic search on extracted fields
+- **Queryable**: Direct queries on structured data
+
+**Examples:**
+- **Recruitment**: Extract candidate skills, experience, education from CVs
+- **Legal**: Extract parties, obligations, financial terms from contracts
+- **Medical**: Extract diagnoses, medications, treatments from health records
+- **Financial**: Extract metrics, risks, forecasts from reports
+
+**How It Works:**
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ 1. Load User's Files/Resources (lookback window)                 │
+│    - Query files WHERE user_id=X AND updated > cutoff            │
+│    - Filter by processing_status='completed'                     │
+└──────────────────┬───────────────────────────────────────────────┘
+                   │
+┌──────────────────▼───────────────────────────────────────────────┐
+│ 2. Load Matching Extractor Schemas                               │
+│    - Find schemas with category='ontology-extractor'             │
+│    - Check user's OntologyConfig rules (MIME type, tags, etc.)   │
+└──────────────────┬───────────────────────────────────────────────┘
+                   │
+┌──────────────────▼───────────────────────────────────────────────┐
+│ 3. Run Extraction (for each file + schema pair)                  │
+│    - Load schema from database                                   │
+│    - Create agent: create_pydantic_ai_agent(schema.spec)         │
+│    - Run agent: result = await agent.run(file.content)           │
+│    - Serialize: serialize_agent_result(result.output)            │
+└──────────────────┬───────────────────────────────────────────────┘
+                   │
+┌──────────────────▼───────────────────────────────────────────────┐
+│ 4. Generate Embeddings                                           │
+│    - Extract fields: extract_fields_for_embedding()              │
+│    - Generate embedding: generate_embeddings()                   │
+└──────────────────┬───────────────────────────────────────────────┘
+                   │
+┌──────────────────▼───────────────────────────────────────────────┐
+│ 5. Store Ontology Entity                                         │
+│    - Ontology(extracted_data=..., embedding_text=...)            │
+│    - Save via ontology_repo.upsert()                             │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**Key Principle: No Separate Service**
+
+Ontology extraction is NOT a separate service. It's just:
+- Load schema (existing repository)
+- Run agent (existing `create_pydantic_ai_agent()`)
+- Serialize result (existing `serialize_agent_result()`)
+- Extract embedding text (util: `extract_fields_for_embedding()`)
+- Generate embedding (existing `generate_embeddings()`)
+- Store ontology (existing repository)
+
+All logic lives in the dreaming worker. Maximum DRY.
+
+**Process:**
+1. Query user's files/resources (lookback window)
+2. For each file, find matching extractor schemas
+3. Run agent extraction on file content
+4. Extract embedding text from configured fields
+5. Generate embeddings for semantic search
+6. Store Ontology entity
+
+**Output:**
+- Ontology entities with:
+  - `extracted_data`: Arbitrary structured JSON (the gold!)
+  - `file_id`: Link to source file
+  - `agent_schema_id`: Which agent extracted this
+  - `provider_name`, `model_name`: LLM used
+  - `confidence_score`: Optional quality metric (0.0-1.0)
+  - `embedding_text`: Text for semantic search
+
+**CLI:**
+```bash
+# Run custom extractor on user's data
+rem dreaming custom --user-id user-123 --extractor cv-parser-v1
+
+# With lookback and limit
+rem dreaming custom --user-id user-123 --extractor contract-analyzer-v1 \\
+  --lookback-hours 168 --limit 50
+
+# Override provider
+rem dreaming custom --user-id user-123 --extractor cv-parser-v1 \\
+  --provider anthropic --model claude-sonnet-4-5
+```
+
+**Frequency:** On-demand or as part of full workflow
+
+**Example Extractors:**
+
+**CV Parser** (`cv-parser-v1.yaml`):
+```yaml
+Extracts: candidate_name, email, skills, experience, education, certifications
+Use case: Recruitment consultants processing resumes
+Embedding fields: candidate_name, professional_summary, skills, experience
+```
+
+**Contract Analyzer** (`contract-analyzer-v1.yaml`):
+```yaml
+Extracts: parties, financial_terms, key_obligations, risk_flags
+Use case: Legal teams analyzing supplier/partnership agreements
+Embedding fields: contract_title, contract_type, parties, key_obligations
+```
+
+**Creating Custom Extractors:**
+
+1. Define JSON Schema with output structure
+2. Add system prompt in `description` field
+3. Specify `embedding_fields` in `json_schema_extra`
+4. Optionally specify `provider_configs` for multi-provider testing
+5. Save to database as Schema entity
+6. Create OntologyConfig rules (MIME type, URI pattern, tags)
+
+See `rem/schemas/ontology_extractors/` for examples.
 
 ### User Model Updates
 

@@ -79,7 +79,7 @@ BEGIN
             NEW.id,
             NEW.tenant_id,
             NEW.user_id,
-            COALESCE(NEW.content, ''),
+            COALESCE(NEW.email || ' ' || COALESCE(NEW.role, ''), ''),
             NEW.metadata,
             CURRENT_TIMESTAMP
         )
@@ -185,7 +185,7 @@ BEGIN
             NEW.id,
             NEW.tenant_id,
             NEW.user_id,
-            COALESCE(NEW.content, ''),
+            COALESCE(NEW.summary, ''),
             NEW.metadata,
             CURRENT_TIMESTAMP
         )
@@ -257,7 +257,7 @@ BEGIN
             NEW.id,
             NEW.tenant_id,
             NEW.user_id,
-            COALESCE(NEW.content, ''),
+            COALESCE(NEW.role, ''),
             NEW.metadata,
             CURRENT_TIMESTAMP
         )

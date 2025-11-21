@@ -1,0 +1,77 @@
+---
+type: object
+description: |
+  Evaluate the hello-world agent responses for correctness and helpfulness.
+
+  You will receive:
+  - input: The user's question
+  - output: The agent's response (with "response" and "confidence" fields)
+  - expected: The reference/ground truth response
+
+  Scoring Rubric:
+  - Correctness (0-1): Does the response answer the question accurately?
+    1.0 = Perfect match with reference
+    0.8 = Semantically equivalent
+    0.5 = Partially correct
+    0.2 = Mostly wrong
+    0.0 = Completely wrong
+
+  - Helpfulness (0-1): Is the response useful to the user?
+    1.0 = Very helpful
+    0.7 = Somewhat helpful
+    0.5 = Neutral
+    0.2 = Not very helpful
+    0.0 = Not helpful at all
+
+  Pass threshold: Average score >= 0.7
+
+properties:
+  correctness_score:
+    type: number
+    minimum: 0.0
+    maximum: 1.0
+    description: Score for factual correctness (0-1)
+
+  correctness_details:
+    type: string
+    description: Explanation of correctness assessment
+
+  helpfulness_score:
+    type: number
+    minimum: 0.0
+    maximum: 1.0
+    description: Score for helpfulness (0-1)
+
+  helpfulness_details:
+    type: string
+    description: Explanation of helpfulness assessment
+
+  overall_score:
+    type: number
+    minimum: 0.0
+    maximum: 1.0
+    description: Average of correctness and helpfulness scores
+
+  pass:
+    type: boolean
+    description: True if overall_score >= 0.7
+
+  explanation:
+    type: string
+    description: Overall explanation combining all assessments
+
+required:
+  - correctness_score
+  - correctness_details
+  - helpfulness_score
+  - helpfulness_details
+  - overall_score
+  - pass
+  - explanation
+
+json_schema_extra:
+  evaluator_type: llm-as-judge
+  provider_configs:
+    - provider_name: openai
+      model_name: gpt-4o-mini
+  labels: [test, hello-world, evaluator]

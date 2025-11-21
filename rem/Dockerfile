@@ -5,10 +5,17 @@
 # ==============================================================================
 #
 # Build and Push (Multi-Platform with buildx):
+#   # Push to registry:
 #   docker buildx build --platform linux/amd64,linux/arm64 \
-#     -t percolationlabs/rem:api-latest \
-#     -t percolationlabs/rem:api-$(git rev-parse --short HEAD) \
+#     -t percolationlabs/rem:latest \
+#     -t percolationlabs/rem:$(git rev-parse --short HEAD) \
 #     --push \
+#     -f Dockerfile .
+#
+#   # Load locally for testing (single platform):
+#   docker buildx build --platform linux/arm64 \
+#     -t percolationlabs/rem:latest \
+#     --load \
 #     -f Dockerfile .
 #
 # ==============================================================================

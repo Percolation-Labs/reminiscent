@@ -2,6 +2,22 @@
 # Test data for development and testing
 # All data uses tenant_id: acme-corp
 
+# Metadata for versioning and tracking
+_metadata:
+  version: "1.0.0"
+  schema_version: "1.0.0"
+  created_at: "2024-12-20"
+  updated_at: "2025-11-20"
+  description: "Sample seed data for acme-corp tenant with users, resources, moments, messages, files, and schemas"
+  tenant_id: "acme-corp"
+  entity_counts:
+    users: 3
+    resources: 3
+    moments: 3
+    messages: 4
+    files: 3
+    schemas: 3
+
 users:
   - id: usr_sarah_chen
     tenant_id: acme-corp

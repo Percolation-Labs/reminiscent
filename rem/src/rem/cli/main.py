@@ -51,16 +51,26 @@ def process():
     pass
 
 
+@cli.group()
+def dreaming():
+    """Memory indexing and knowledge extraction."""
+    pass
+
+
 # Register commands
 from .commands.schema import register_commands as register_schema_commands
 from .commands.db import register_commands as register_db_commands
 from .commands.process import register_commands as register_process_commands
 from .commands.ask import register_command as register_ask_command
+from .commands.phoenix import register_command as register_phoenix_command
+from .commands.dreaming import register_commands as register_dreaming_commands
 
 register_schema_commands(schema)
 register_db_commands(db)
 register_process_commands(process)
+register_dreaming_commands(dreaming)
 register_ask_command(cli)
+register_phoenix_command(cli)
 
 
 def main():

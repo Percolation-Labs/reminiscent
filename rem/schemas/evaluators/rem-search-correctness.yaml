@@ -1,0 +1,225 @@
+description: |
+  You are THE JUDGE evaluating a REM agent's response to a SEARCH query.
+
+  **REM SEARCH Query Pattern:**
+
+  SEARCH queries perform semantic vector search across entity types:
+  - Format: "SEARCH entity_types query_text"
+  - Examples:
+    - "SEARCH person,project AI engineer with database experience"
+    - "SEARCH technology graph database with vector support"
+    - "SEARCH document migration planning guide"
+
+  **Expected Behavior:**
+
+  1. **Semantic Ranking**: Results ranked by relevance to query
+  2. **Type Filtering**: Only return requested entity types
+  3. **Top-K Results**: Typically return 5-10 most relevant entities
+  4. **Relevance Scores**: Include similarity scores when available
+  5. **Entity Labels**: Use natural language labels (not UUIDs)
+
+  **Common Errors to Catch:**
+
+  1. **Wrong Entity Types**:
+     - Returns person when asked for project
+     - Mixes types when specific type requested
+
+  2. **Poor Relevance**:
+     - Returns unrelated entities
+     - Missing obviously relevant entities from reference
+     - Poor ranking (irrelevant results ranked high)
+
+  3. **Incomplete Results**:
+     - Returns fewer results than expected
+     - Missing key entities from reference golden set
+
+  4. **Hallucinations**:
+     - Invented entities not in reference
+     - Made-up properties or metadata
+
+  **YOUR ROLE: STRICT AND CRITICAL JUDGE**
+
+  1. **NO CELEBRATION** - Grade objectively
+  2. **STRICT GRADING** - Missing relevant results = points deducted
+  3. **CATCH HALLUCINATIONS** - Made-up entities = FAIL
+  4. **VERIFY RELEVANCE** - Are results actually related to query?
+  5. **CHECK RANKING** - Are most relevant results ranked first?
+
+  **Scoring Rubric:**
+
+  **Relevance (0.0-1.0):**
+  - 1.0: All results highly relevant to query
+  - 0.8: Most results relevant, 1-2 borderline
+  - 0.6: Several irrelevant results
+  - 0.4: Many irrelevant results
+  - 0.2: Mostly irrelevant
+  - 0.0: Completely irrelevant or wrong types
+
+  **Completeness (0.0-1.0):**
+  - 1.0: All expected entities from reference present
+  - 0.8: Missing 1 expected entity
+  - 0.6: Missing 2-3 expected entities
+  - 0.4: Missing several expected entities
+  - 0.2: Missing most expected entities
+  - 0.0: Missing all expected entities
+
+  **Ranking Quality (0.0-1.0):**
+  - 1.0: Most relevant results ranked first
+  - 0.8: Good ranking with minor issues
+  - 0.6: Mediocre ranking (some relevant buried)
+  - 0.4: Poor ranking
+  - 0.2: Very poor ranking
+  - 0.0: No discernible ranking logic
+
+  **Overall Score:** Average of 3 dimensions
+  **Pass Threshold:** >= 0.70 (slightly lower than LOOKUP - semantic matching is harder)
+
+  Compare agent results to reference golden set. Check relevance, completeness, ranking.
+
+fully_qualified_name: rem.evaluators.search_correctness.REMSearchCorrectnessEvaluator
+title: REMSearchCorrectnessEvaluator
+type: object
+
+labels:
+  - Evaluator
+  - REM
+  - SEARCH
+  - Correctness
+  - Semantic
+
+properties:
+  relevance_score:
+    type: number
+    description: |
+      Score 0-1 for relevance of returned entities to query.
+      Are results semantically related to query text?
+      Are entity types correct?
+    minimum: 0
+    maximum: 1
+
+  completeness_score:
+    type: number
+    description: |
+      Score 0-1 for completeness compared to reference.
+      Are all expected entities from reference present?
+      Are key relevant entities included?
+    minimum: 0
+    maximum: 1
+
+  ranking_quality_score:
+    type: number
+    description: |
+      Score 0-1 for ranking quality.
+      Are most relevant results ranked first?
+      Is there clear relevance ordering?
+    minimum: 0
+    maximum: 1
+
+  overall_score:
+    type: number
+    description: |
+      Average of relevance + completeness + ranking_quality (sum/3).
+    minimum: 0
+    maximum: 1
+
+  pass:
+    type: boolean
+    description: |
+      True if overall_score >= 0.70 AND relevance_score >= 0.5
+      AND no hallucinated entities detected.
+
+  relevance_details:
+    type: string
+    description: |
+      Assessment of result relevance to query.
+      Example: "First 3 results highly relevant, last 2 borderline"
+
+  completeness_details:
+    type: string
+    description: |
+      Comparison to reference golden set.
+      Example: "Missing 'sarah-chen' person entity expected in top results"
+
+  ranking_details:
+    type: string
+    description: |
+      Assessment of ranking quality.
+      Example: "Most relevant entity ranked #3 (should be #1)"
+
+  hallucinations_detected:
+    type: array
+    description: |
+      List of entities in results but not in reference.
+      May not be errors (new data) but flag for review.
+    items:
+      type: string
+
+  missing_expected_entities:
+    type: array
+    description: |
+      List of entities in reference but missing from results.
+    items:
+      type: string
+
+  irrelevant_results:
+    type: array
+    description: |
+      List of results that don't match query intent.
+    items:
+      type: string
+
+  strengths:
+    type: array
+    description: |
+      What the search did well (objective).
+    items:
+      type: string
+
+  critical_gaps:
+    type: array
+    description: |
+      Major issues (missing key results, wrong types, etc.).
+    items:
+      type: string
+
+  improvement_suggestions:
+    type: array
+    description: |
+      Actionable suggestions to improve search quality.
+    items:
+      type: string
+
+  confidence_in_grading:
+    type: string
+    description: |
+      Your confidence: "high", "medium", "low"
+      (Semantic matching is subjective - lower confidence OK)
+    enum:
+      - high
+      - medium
+      - low
+
+  grading_notes:
+    type: string
+    description: |
+      Internal notes about judgment calls or edge cases.
+
+required:
+  - relevance_score
+  - completeness_score
+  - ranking_quality_score
+  - overall_score
+  - pass
+  - relevance_details
+  - completeness_details
+  - ranking_details
+  - hallucinations_detected
+  - missing_expected_entities
+  - irrelevant_results
+  - strengths
+  - critical_gaps
+  - improvement_suggestions
+  - confidence_in_grading
+  - grading_notes
+
+version: "1.0.0"

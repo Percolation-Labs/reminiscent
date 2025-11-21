@@ -1,0 +1,264 @@
+---
+# CV/Resume Parser Agent Schema
+# Extracts structured candidate information from resumes and CVs
+# Designed for recruitment consultants and HR teams
+
+type: object
+description: |
+  You are a CV/Resume Parser specialized in extracting structured candidate information.
+
+  Your task is to analyze the provided CV/resume text and extract:
+  - Candidate name and contact details
+  - Professional summary
+  - Technical and soft skills
+  - Work experience with achievements
+  - Education history
+  - Certifications and awards
+  - Languages spoken
+
+  Guidelines:
+  - Extract information accurately without hallucination
+  - Preserve exact company names, job titles, and dates
+  - Quantify achievements where possible (e.g., "Reduced costs by 40%")
+  - Normalize skill names (e.g., "k8s" -> "Kubernetes")
+  - Assign confidence score based on clarity of information
+  - If information is unclear or missing, use null instead of guessing
+
+  Output Format:
+  - Return structured JSON matching the schema below
+  - Ensure all dates are in ISO 8601 format (YYYY-MM-DD)
+  - Use arrays for lists (skills, experience, education)
+  - Include confidence_score (0.0-1.0) for overall extraction quality
+
+properties:
+  candidate_name:
+    type: string
+    description: Full name of the candidate
+
+  email:
+    type: string
+    description: Email address
+    format: email
+
+  phone:
+    type: string
+    description: Phone number
+
+  location:
+    type: string
+    description: Current location (city, country)
+
+  linkedin_url:
+    type: string
+    description: LinkedIn profile URL
+    format: uri
+
+  github_url:
+    type: string
+    description: GitHub profile URL
+    format: uri
+
+  professional_summary:
+    type: string
+    description: Brief professional summary or career objective (2-3 sentences)
+
+  skills:
+    type: array
+    description: List of technical and professional skills
+    items:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Skill name (normalized)
+        category:
+          type: string
+          description: Skill category (e.g., "programming", "cloud", "soft-skill")
+          enum:
+            - programming
+            - cloud
+            - database
+            - devops
+            - security
+            - design
+            - management
+            - soft-skill
+            - other
+        proficiency:
+          type: string
+          description: Proficiency level if specified
+          enum:
+            - beginner
+            - intermediate
+            - advanced
+            - expert
+      required:
+        - name
+        - category
+
+  experience:
+    type: array
+    description: Work experience history (most recent first)
+    items:
+      type: object
+      properties:
+        company:
+          type: string
+          description: Company name
+        role:
+          type: string
+          description: Job title
+        start_date:
+          type: string
+          description: Start date (YYYY-MM-DD or YYYY-MM)
+        end_date:
+          type: string
+          description: End date (YYYY-MM-DD, YYYY-MM, or "present")
+        location:
+          type: string
+          description: Job location
+        description:
+          type: string
+          description: Role description
+        achievements:
+          type: array
+          description: Key achievements and responsibilities
+          items:
+            type: string
+        technologies:
+          type: array
+          description: Technologies used in this role
+          items:
+            type: string
+      required:
+        - company
+        - role
+        - start_date
+
+  education:
+    type: array
+    description: Education history
+    items:
+      type: object
+      properties:
+        institution:
+          type: string
+          description: University or institution name
+        degree:
+          type: string
+          description: Degree or qualification (e.g., "BS Computer Science")
+        field_of_study:
+          type: string
+          description: Major or field of study
+        graduation_year:
+          type: integer
+          description: Graduation year
+        gpa:
+          type: string
+          description: GPA if mentioned
+      required:
+        - institution
+        - degree
+
+  certifications:
+    type: array
+    description: Professional certifications
+    items:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Certification name
+        issuer:
+          type: string
+          description: Issuing organization
+        date:
+          type: string
+          description: Issue date (YYYY-MM-DD or YYYY-MM)
+        expiry_date:
+          type: string
+          description: Expiry date if applicable
+      required:
+        - name
+        - issuer
+
+  languages:
+    type: array
+    description: Languages spoken
+    items:
+      type: object
+      properties:
+        language:
+          type: string
+          description: Language name
+        proficiency:
+          type: string
+          description: Proficiency level
+          enum:
+            - native
+            - fluent
+            - professional
+            - intermediate
+            - basic
+      required:
+        - language
+        - proficiency
+
+  awards:
+    type: array
+    description: Awards and recognitions
+    items:
+      type: string
+
+  years_of_experience:
+    type: integer
+    description: Total years of professional experience (calculated)
+    minimum: 0
+
+  seniority_level:
+    type: string
+    description: Estimated seniority level based on experience
+    enum:
+      - entry
+      - mid
+      - senior
+      - lead
+      - principal
+      - executive
+
+  confidence_score:
+    type: number
+    description: Confidence score for extraction quality (0.0-1.0)
+    minimum: 0.0
+    maximum: 1.0
+
+required:
+  - candidate_name
+  - professional_summary
+  - skills
+  - experience
+  - education
+  - confidence_score
+
+json_schema_extra:
+  fully_qualified_name: rem.agents.CVParserAgent
+  version: "1.0.0"
+  name: CV Parser
+  short_name: cv-parser
+  tags:
+    - recruitment
+    - hr
+    - ontology-extractor
+  author: REM Team
+  tools: []
+  resources: []
+  provider_configs:
+    - provider_name: anthropic
+      model_name: claude-sonnet-4-5-20250929
+    - provider_name: openai
+      model_name: gpt-4o
+  embedding_fields:
+    - candidate_name
+    - professional_summary
+    - skills
+    - experience

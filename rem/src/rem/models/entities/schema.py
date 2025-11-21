@@ -10,12 +10,15 @@ Schemas are used for:
 - Dynamic agent loading via X-Agent-Schema header
 - Agent registry and discovery
 - Schema validation and documentation
+- Ontology extraction configuration
 
 Key Fields:
 - name: Human-readable schema identifier
 - content: Markdown documentation and instructions
 - spec: JsonSchema specification (Pydantic model definition)
-- category: Schema classification (agent-type, workflow, etc.)
+- category: Schema classification (agent-type, workflow, ontology-extractor, etc.)
+- provider_configs: Optional LLM provider configurations (for multi-provider support)
+- embedding_fields: Fields in extracted_data that should be embedded for semantic search
 """
 
 from typing import Optional
@@ -32,6 +35,10 @@ class Schema(CoreModel):
     Schemas define agents that can be dynamically loaded into Pydantic AI.
     They store JsonSchema specifications with embedded metadata for tools,
     resources, and system prompts.
+
+    For ontology extraction agents:
+    - `provider_configs` enables multi-provider support (test across Anthropic, OpenAI, etc.)
+    - `embedding_fields` specifies which output fields should be embedded for semantic search
 
     Tenant isolation is provided via CoreModel.tenant_id field.
     """
@@ -53,5 +60,24 @@ class Schema(CoreModel):
 
     category: Optional[str] = Field(
         default=None,
-        description="Schema category (agent-type, workflow, evaluator, etc.)",
+        description="Schema category (agent-type, workflow, ontology-extractor, evaluator, etc.)",
+    )
+
+    # Ontology extraction support
+    provider_configs: list[dict] = Field(
+        default_factory=list,
+        description=(
+            "Optional provider configurations for multi-provider testing. "
+            "Each dict has 'provider_name' and 'model_name'. "
+            "Example: [{'provider_name': 'anthropic', 'model_name': 'claude-sonnet-4-5'}]"
+        ),
+    )
+
+    embedding_fields: list[str] = Field(
+        default_factory=list,
+        description=(
+            "JSON paths in extracted_data to embed for semantic search. "
+            "Example: ['summary', 'candidate_name', 'skills'] for CV extraction. "
+            "Values will be concatenated and embedded using configured embedding provider."
+        ),
     )

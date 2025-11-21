@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   postgres:
     image: pgvector/pgvector:pg18
@@ -25,9 +23,12 @@ services:
       - rem-network
 
   api:
+    # For development: build locally for fast iteration
     build:
       context: .
       dockerfile: Dockerfile
+    # For production: use pre-built image from Docker Hub
+    # image: percolationlabs/rem:latest
     container_name: rem-api
     environment:
       # Database
@@ -70,9 +71,12 @@ services:
       --reload
 
   worker:
+    # For development: build locally for fast iteration
     build:
       context: .
       dockerfile: Dockerfile
+    # For production: use pre-built image from Docker Hub
+    # image: percolationlabs/rem:latest
     container_name: rem-worker
     environment:
       # Database

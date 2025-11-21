@@ -1,0 +1,258 @@
+description: |
+  You are THE JUDGE evaluating REM retrieval quality using recall metrics.
+
+  **Context Recall Evaluation (inspired by RAGAS)**
+
+  Your job is to evaluate whether REM query execution retrieves ALL relevant entities
+  that should be found for a given query.
+
+  **Key Concept: Recall**
+
+  Recall measures: "Of all the relevant entities that SHOULD be retrieved, how many were actually retrieved?"
+
+  Formula: Retrieved relevant entities / Total relevant entities (from golden set)
+
+  **The Coverage Problem:**
+
+  - **High Precision, Low Recall**: Retrieved entities are relevant, but many are missing
+  - **Low Precision, High Recall**: Retrieved many entities, but also grabbed irrelevant ones
+  - **Goal**: High precision AND high recall
+
+  **Your Task:**
+
+  1. **Review expected entities** from golden set (what SHOULD be retrieved)
+  2. **Review retrieved entities** from REM query
+  3. **Calculate recall** - what fraction of expected entities were found?
+  4. **Identify gaps** - which expected entities are missing?
+
+  **Example Evaluation:**
+
+  Query: "SEARCH person AI engineer with database experience"
+
+  Expected Entities (from golden set):
+  - sarah-chen (person) - "AI engineer with 5 years PostgreSQL experience"
+  - alice-wang (person) - "Database administrator with ML background"
+  - eve-jones (person) - "Data scientist with PostgreSQL expertise"
+
+  Retrieved Entities:
+  - sarah-chen ✓ (found)
+  - john-doe (not expected - false positive)
+  - alice-wang ✓ (found)
+  - bob-smith (not expected - false positive)
+
+  Recall Calculation:
+  - Found: sarah-chen, alice-wang (2 entities)
+  - Expected: sarah-chen, alice-wang, eve-jones (3 entities)
+  - Recall: 2/3 = 0.67 (67%)
+
+  Missing: eve-jones (why? Bad embedding? Wrong query parsing?)
+
+  **Recall Criteria:**
+
+  For each expected entity from golden set:
+  1. Was it retrieved? (present in results)
+  2. If not, why might it be missing?
+     - Embedding quality issue?
+     - Query parsing problem?
+     - Entity missing from database?
+     - Ranking too low (buried beyond top-K)?
+
+  **Scoring Rules:**
+
+  **Recall Score (0.0-1.0):**
+  - 1.0: All expected entities retrieved
+  - 0.8: Missing 1 expected entity (90%+ recall)
+  - 0.6: Missing 2-3 expected entities (60-80% recall)
+  - 0.4: Missing several expected entities (40-60% recall)
+  - 0.2: Missing most expected entities (20-40% recall)
+  - 0.0: Missing all expected entities (0% recall)
+
+  **Ranking Depth (0.0-1.0):**
+  - How deep in results are expected entities found?
+  - 1.0: All expected entities in top 3 positions
+  - 0.8: All expected entities in top 5 positions
+  - 0.6: All expected entities in top 10 positions
+  - 0.4: Some expected entities beyond position 10
+  - 0.2: Expected entities buried deep in results
+  - 0.0: Expected entities not found at all
+
+  **Coverage Quality (0.0-1.0):**
+  - Balance between recall and precision
+  - 1.0: High recall (>0.9) AND high precision (>0.8)
+  - 0.8: Good recall (>0.7) AND good precision (>0.6)
+  - 0.6: Moderate recall (>0.5) AND moderate precision (>0.5)
+  - 0.4: Poor recall or precision
+  - 0.2: Very poor recall and precision
+  - 0.0: Nearly zero recall or precision
+
+  **YOUR ROLE: STRICT AND DIAGNOSTIC**
+
+  1. **NO CELEBRATION** - Grade objectively
+  2. **STRICT GRADING** - Missing entities = lower recall
+  3. **DIAGNOSE GAPS** - Why are expected entities missing?
+  4. **RANKING DEPTH** - Are expected entities buried deep?
+
+  Compare retrieved entities to expected golden set carefully.
+  Identify ALL missing entities and hypothesize why they're missing.
+
+fully_qualified_name: rem.evaluators.retrieval_recall.REMRetrievalRecallEvaluator
+title: REMRetrievalRecallEvaluator
+type: object
+
+labels:
+  - Evaluator
+  - REM
+  - Retrieval
+  - Recall
+  - RAG
+
+properties:
+  recall_score:
+    type: number
+    description: |
+      Recall: Retrieved expected entities / Total expected entities.
+      Formula: |Found ∩ Expected| / |Expected|
+    minimum: 0
+    maximum: 1
+
+  ranking_depth_score:
+    type: number
+    description: |
+      Score 0-1 for ranking depth of expected entities.
+      Are expected entities ranked high (top-K) or buried deep?
+    minimum: 0
+    maximum: 1
+
+  coverage_quality_score:
+    type: number
+    description: |
+      Balance between recall and precision.
+      Combines recall score with precision context.
+    minimum: 0
+    maximum: 1
+
+  retrieval_completeness_score:
+    type: number
+    description: |
+      Overall completeness: Average of recall + ranking_depth + coverage_quality.
+    minimum: 0
+    maximum: 1
+
+  pass:
+    type: boolean
+    description: |
+      True if recall_score >= 0.70 AND retrieval_completeness_score >= 0.70.
+
+  expected_entities_found:
+    type: array
+    description: |
+      List of expected entities that WERE retrieved.
+      Include position in results.
+    items:
+      type: object
+      properties:
+        entity_label:
+          type: string
+        position:
+          type: integer
+        notes:
+          type: string
+
+  missing_expected_entities:
+    type: array
+    description: |
+      List of expected entities that were NOT retrieved.
+      Include hypothesis for why missing.
+    items:
+      type: object
+      properties:
+        entity_label:
+          type: string
+        entity_type:
+          type: string
+        missing_reason_hypothesis:
+          type: string
+          description: |
+            Why might this entity be missing?
+            Options: "embedding_quality", "query_parsing", "not_in_db",
+                     "ranking_too_low", "type_filtering", "other"
+
+  recall_analysis:
+    type: string
+    description: |
+      Detailed analysis of recall performance.
+      Example: "Found 3 of 4 expected entities (75% recall). Missing 'eve-jones'
+               likely due to poor embedding quality - her profile mentions 'data scientist'
+               not 'AI engineer' explicitly."
+
+  ranking_depth_analysis:
+    type: string
+    description: |
+      Analysis of where expected entities appear in results.
+      Example: "Expected entities ranked at positions 1, 3, 8. Position 8 is too deep
+               for typical user queries (most users check top 5)."
+
+  false_positives:
+    type: array
+    description: |
+      Entities retrieved but NOT in expected set.
+      Note: Not necessarily wrong (golden set may be incomplete).
+    items:
+      type: string
+
+  strengths:
+    type: array
+    description: |
+      What the retrieval did well (objective).
+    items:
+      type: string
+
+  critical_gaps:
+    type: array
+    description: |
+      Major issues (missing key entities, poor coverage, etc.).
+    items:
+      type: string
+
+  improvement_suggestions:
+    type: array
+    description: |
+      Actionable suggestions to improve recall.
+      Example: "Improve embeddings for 'data scientist' → 'AI engineer' semantic similarity"
+    items:
+      type: string
+
+  confidence_in_grading:
+    type: string
+    description: |
+      Your confidence: "high", "medium", "low"
+      Note: Low confidence if golden set may be incomplete
+    enum:
+      - high
+      - medium
+      - low
+
+  grading_notes:
+    type: string
+    description: |
+      Internal notes about judgment calls.
+      Note if golden set seems incomplete (retrieved valid entities not in expected).
+
+required:
+  - recall_score
+  - ranking_depth_score
+  - coverage_quality_score
+  - retrieval_completeness_score
+  - pass
+  - expected_entities_found
+  - missing_expected_entities
+  - recall_analysis
+  - ranking_depth_analysis
+  - false_positives
+  - strengths
+  - critical_gaps
+  - improvement_suggestions
+  - confidence_in_grading
+  - grading_notes
+
+version: "1.0.0"

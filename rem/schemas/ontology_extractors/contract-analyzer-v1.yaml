@@ -1,0 +1,319 @@
+---
+# Contract Analyzer Agent Schema
+# Extracts key terms and obligations from legal contracts
+# Designed for legal teams and procurement consultants
+
+type: object
+description: |
+  You are a Contract Analyzer specialized in extracting key terms from legal agreements.
+
+  Your task is to analyze the provided contract text and extract:
+  - Contract type and parties involved
+  - Effective and termination dates
+  - Financial terms (amounts, payment schedules)
+  - Key obligations and deliverables
+  - Termination clauses and conditions
+  - Liability and indemnity provisions
+  - Confidentiality requirements
+  - Governing law and dispute resolution
+
+  Guidelines:
+  - Extract exact legal terms without paraphrasing
+  - Preserve monetary amounts with currency symbols
+  - Capture all parties with their legal entity names
+  - Identify both explicit and implicit obligations
+  - Flag unusual or risky clauses
+  - Assign confidence score based on contract clarity
+  - If information is ambiguous, note it in notes field
+
+  Output Format:
+  - Return structured JSON matching the schema below
+  - Ensure all dates are in ISO 8601 format (YYYY-MM-DD)
+  - Use arrays for lists (parties, obligations, risks)
+  - Include confidence_score (0.0-1.0) for overall extraction quality
+
+properties:
+  contract_title:
+    type: string
+    description: Official contract title or name
+
+  contract_type:
+    type: string
+    description: Type of contract
+    enum:
+      - supplier_agreement
+      - service_agreement
+      - employment_contract
+      - nda
+      - partnership_agreement
+      - licensing_agreement
+      - lease_agreement
+      - consulting_agreement
+      - purchase_order
+      - master_services_agreement
+      - other
+
+  parties:
+    type: array
+    description: All parties to the contract
+    items:
+      type: object
+      properties:
+        legal_name:
+          type: string
+          description: Full legal entity name
+        role:
+          type: string
+          description: Party role in contract
+          enum:
+            - buyer
+            - seller
+            - supplier
+            - vendor
+            - client
+            - contractor
+            - employer
+            - employee
+            - licensor
+            - licensee
+            - lessor
+            - lessee
+            - partner
+            - other
+        address:
+          type: string
+          description: Registered address
+        representative:
+          type: string
+          description: Authorized representative name
+      required:
+        - legal_name
+        - role
+
+  effective_date:
+    type: string
+    description: Contract effective date (YYYY-MM-DD)
+    format: date
+
+  termination_date:
+    type: string
+    description: Contract end date (YYYY-MM-DD or "none" if perpetual)
+
+  contract_duration:
+    type: string
+    description: Duration in human-readable format (e.g., "2 years", "36 months")
+
+  auto_renewal:
+    type: boolean
+    description: Whether contract auto-renews
+
+  financial_terms:
+    type: object
+    description: Financial obligations and payment terms
+    properties:
+      total_contract_value:
+        type: string
+        description: Total contract value with currency (e.g., "$500,000 USD")
+      payment_schedule:
+        type: string
+        description: Payment frequency (e.g., "quarterly", "net-60")
+      currency:
+        type: string
+        description: Currency code (USD, EUR, GBP, etc.)
+      payment_method:
+        type: string
+        description: Payment method (wire transfer, check, etc.)
+      late_payment_penalty:
+        type: string
+        description: Late payment penalties if specified
+      price_escalation:
+        type: string
+        description: Price escalation clause if any
+
+  key_obligations:
+    type: array
+    description: Major obligations for each party
+    items:
+      type: object
+      properties:
+        party:
+          type: string
+          description: Which party has this obligation
+        obligation:
+          type: string
+          description: Description of the obligation
+        deadline:
+          type: string
+          description: Deadline or timeline if specified
+        consequences:
+          type: string
+          description: Consequences of non-performance
+      required:
+        - party
+        - obligation
+
+  deliverables:
+    type: array
+    description: Specific deliverables or milestones
+    items:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Deliverable name
+        description:
+          type: string
+          description: Detailed description
+        due_date:
+          type: string
+          description: Due date if specified
+        acceptance_criteria:
+          type: string
+          description: Acceptance criteria
+      required:
+        - name
+
+  termination_clauses:
+    type: array
+    description: Conditions allowing contract termination
+    items:
+      type: object
+      properties:
+        condition:
+          type: string
+          description: Termination condition
+        notice_period:
+          type: string
+          description: Required notice period (e.g., "30 days")
+        party:
+          type: string
+          description: Which party can terminate under this condition
+      required:
+        - condition
+
+  liability_provisions:
+    type: object
+    description: Liability and indemnity provisions
+    properties:
+      liability_cap:
+        type: string
+        description: Maximum liability amount if specified
+      indemnification:
+        type: string
+        description: Indemnification obligations
+      limitation_of_liability:
+        type: string
+        description: Liability limitations and exclusions
+      insurance_requirements:
+        type: string
+        description: Required insurance coverage
+
+  confidentiality:
+    type: object
+    description: Confidentiality and non-disclosure terms
+    properties:
+      confidentiality_period:
+        type: string
+        description: Duration of confidentiality obligations
+      definition_of_confidential_info:
+        type: string
+        description: What is considered confidential
+      permitted_disclosures:
+        type: string
+        description: Exceptions to confidentiality
+
+  intellectual_property:
+    type: object
+    description: IP ownership and licensing terms
+    properties:
+      ownership:
+        type: string
+        description: Who owns created IP
+      licensing_terms:
+        type: string
+        description: License grants if any
+      usage_rights:
+        type: string
+        description: Rights to use IP
+
+  governing_law:
+    type: string
+    description: Governing law jurisdiction (e.g., "State of California, USA")
+
+  dispute_resolution:
+    type: string
+    description: Dispute resolution mechanism (arbitration, mediation, courts)
+    enum:
+      - arbitration
+      - mediation
+      - litigation
+      - escalation
+      - other
+
+  risk_flags:
+    type: array
+    description: Unusual or potentially risky clauses identified
+    items:
+      type: object
+      properties:
+        clause:
+          type: string
+          description: Clause description
+        risk_level:
+          type: string
+          description: Risk assessment
+          enum:
+            - low
+            - medium
+            - high
+            - critical
+        reason:
+          type: string
+          description: Why this is flagged
+      required:
+        - clause
+        - risk_level
+        - reason
+
+  notes:
+    type: string
+    description: Additional notes or ambiguities found
+
+  confidence_score:
+    type: number
+    description: Confidence score for extraction quality (0.0-1.0)
+    minimum: 0.0
+    maximum: 1.0
+
+required:
+  - contract_title
+  - contract_type
+  - parties
+  - effective_date
+  - financial_terms
+  - key_obligations
+  - confidence_score
+
+json_schema_extra:
+  fully_qualified_name: rem.agents.ContractAnalyzerAgent
+  version: "1.0.0"
+  name: Contract Analyzer
+  short_name: contract-analyzer
+  tags:
+    - legal
+    - procurement
+    - ontology-extractor
+  author: REM Team
+  tools: []
+  resources: []
+  provider_configs:
+    - provider_name: anthropic
+      model_name: claude-sonnet-4-5-20250929
+    - provider_name: openai
+      model_name: gpt-4o
+  embedding_fields:
+    - contract_title
+    - contract_type
+    - parties
+    - key_obligations
+    - risk_flags

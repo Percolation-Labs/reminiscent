@@ -154,7 +154,16 @@ COMMENT ON COLUMN kv_store.content_summary IS
 -- ============================================================================
 
 -- Function to rebuild KV_STORE from primary tables
--- Call this after database restart or manual cache invalidation
+--
+-- IMPORTANT: You should NOT need to call this during normal operations!
+-- KV store is automatically populated via triggers on INSERT/UPDATE/DELETE.
+--
+-- Only call this function after:
+--   1. Database crash/restart (UNLOGGED table lost)
+--   2. Backup restoration (UNLOGGED tables not backed up)
+--   3. Bulk imports that bypass triggers (COPY, pg_restore --disable-triggers)
+--
+-- Usage: SELECT * FROM rebuild_kv_store();
 CREATE OR REPLACE FUNCTION rebuild_kv_store()
 RETURNS TABLE(table_name TEXT, rows_inserted BIGINT) AS $$
 DECLARE
@@ -165,10 +174,31 @@ BEGIN
     DELETE FROM kv_store;
     RAISE NOTICE 'Cleared KV_STORE cache';
 
-    -- Rebuild from each entity table
-    -- This will be populated by triggers when install_models.sql is loaded
-    -- For now, just return empty result
-    RETURN;
+    -- Rebuild from each entity table that has a KV store trigger
+    -- This query finds all tables with _kv_store triggers
+    FOR table_rec IN
+        SELECT DISTINCT event_object_table as tbl
+        FROM information_schema.triggers
+        WHERE trigger_name LIKE '%_kv_store'
+        AND trigger_schema = 'public'
+        ORDER BY event_object_table
+    LOOP
+        -- Force trigger execution by updating all non-deleted rows
+        -- This is more efficient than re-inserting
+        EXECUTE format('
+            UPDATE %I
+            SET updated_at = updated_at
+            WHERE deleted_at IS NULL
+        ', table_rec.tbl);
+
+        GET DIAGNOSTICS rows_affected = ROW_COUNT;
+
+        table_name := table_rec.tbl;
+        rows_inserted := rows_affected;
+        RETURN NEXT;
+
+        RAISE NOTICE 'Rebuilt % KV entries for %', rows_affected, table_rec.tbl;
+    END LOOP;
 END;
 $$ LANGUAGE plpgsql;
 

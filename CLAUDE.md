@@ -247,7 +247,55 @@ REM is a bio-inspired memory architecture mirroring human memory systems:
 - Prevents trace spam during local testing
 - Clean integration with Pydantic AI's built-in OTEL support
 
-### 11. Pydantic Serialization Pattern (agentic/serialization.py)
+### 11. Agentic Chunking Pattern (utils/agentic_chunking.py)
+**Purpose**: Handle large inputs that exceed model context windows by splitting, processing chunks independently, and merging results.
+
+**When to use**:
+- Input data exceeds model context limit (e.g., 128K tokens for GPT-4o, 200K for Claude)
+- Processing large documents, datasets, or session histories
+- Need to respect rate limits while processing multiple chunks
+
+**Key Components**:
+- `get_model_limits(model)` - Returns ModelLimits for any model (OpenAI, Anthropic, Google)
+- `estimate_tokens(text, model)` - Uses tiktoken for OpenAI (exact), heuristic for others
+- `chunk_text(text, max_tokens, model)` - Smart chunking with line/word boundary preservation
+- `merge_results(results, strategy)` - Merge chunk results using configurable strategies
+
+**Merge Strategies**:
+1. `CONCATENATE_LIST` (default) - Merge lists, update dicts, keep first scalar
+2. `MERGE_JSON` - Deep recursive merge of JSON objects
+3. `LLM_MERGE` - Use LLM to intelligently merge results (TODO)
+
+**Usage**:
+```python
+from rem.utils.agentic_chunking import chunk_text, merge_results, MergeStrategy, get_model_limits
+
+# Get model limits
+limits = get_model_limits("gpt-4o")
+max_input_tokens = limits.max_input  # 111616 tokens
+
+# Chunk large input (with buffer for system prompt overhead)
+chunks = chunk_text(large_text, max_tokens=100000, model="gpt-4o")
+
+# Process each chunk with agent
+results = []
+for chunk in chunks:
+    result = await agent.run(chunk)
+    results.append(result.output.model_dump())  # Serialize Pydantic models!
+
+# Merge results
+merged = merge_results(results, strategy=MergeStrategy.CONCATENATE_LIST)
+```
+
+**Design Principles**:
+- Tiktoken for exact token counting on OpenAI models
+- Character-based heuristic (4 chars/token) fallback for other providers
+- Line boundary preservation to avoid splitting mid-sentence
+- Word boundary fallback for character chunking
+- Conservative buffer ratios (75-80%) for safety
+- Composable: works with any agent execution pattern
+
+### 12. Pydantic Serialization Pattern (agentic/serialization.py)
 **CRITICAL: Always serialize Pydantic models before returning from MCP tools or API endpoints**
 
 When agent results contain Pydantic model instances (e.g., `result.output` or `result.data`), they MUST be explicitly serialized using `.model_dump()` or `.model_dump_json()` before returning. Frameworks like FastMCP and FastAPI may use their own serialization logic that silently drops fields from unserialized Pydantic models.
@@ -335,8 +383,164 @@ yield f"data: {chunk.model_dump_json()}\n\n"  # ✅ Serialized
   - Graph connectivity: `graph_edges` (list of InlineEdge dicts)
   - Flexible metadata: `metadata` (dict), `tags` (list)
   - Database schema: `column` (dict for schema metadata)
-- Entity-specific fields defined in each model (Resource, Message, User, File, Moment)
+- Entity-specific fields defined in each model (Resource, Message, User, File, Moment, Ontology)
 - No duplicate tenant_id or system fields in child models
+
+### Ontology Extraction Pattern (models/entities/ontology.py, services/ontology_extractor.py)
+
+**Purpose**: Extract domain-specific structured knowledge from files using custom agent schemas.
+
+**Architecture**:
+1. **Ontology Entity**: Stores extracted structured data
+   - Links to source File via `file_id`
+   - Tracks agent schema used via `agent_schema_id`
+   - Contains arbitrary structured data in `extracted_data` (dict)
+   - Supports semantic search via `embedding_text` field
+   - Records LLM provider and model used
+   - Includes optional `confidence_score` (0.0-1.0)
+
+2. **OntologyConfig Entity**: User-defined extraction rules
+   - File matching via MIME type patterns, URI patterns, or tags
+   - Multiple configs can match a single file (all will be applied)
+   - Priority field controls execution order
+   - Optional provider/model overrides per config
+   - Enabled/disabled toggle for temporary deactivation
+
+3. **Agent Schema Enhancements**:
+   - `provider_configs`: Multi-provider testing (Anthropic, OpenAI, etc.)
+   - `embedding_fields`: JSON paths to embed for semantic search
+   - `category`: "ontology-extractor" tag for discovery
+
+4. **Extraction Logic (in dreaming worker)**:
+   - No separate service - uses existing agent factory
+   - Loads schemas from database dynamically
+   - Runs agent using `create_pydantic_ai_agent()`
+   - Extracts embedding text using `utils/dict_utils.py`
+   - Generates embeddings using `utils/embeddings.py`
+   - Stores Ontology via repository
+
+5. **Dreaming Worker Integration**:
+   - New `extract_ontologies()` operation
+   - Runs FIRST in `process_full()` workflow (before moments)
+   - Finds files with `processing_status='completed'`
+   - Applies matching OntologyConfig rules
+   - Executes agents and stores results
+
+**Example Use Cases**:
+- **Recruitment**: Parse CVs to extract candidate skills, experience, education
+  - Schema: `cv-parser-v1.yaml`
+  - Extracted fields: candidate_name, skills, experience, education, seniority_level
+  - Embedding fields: candidate_name, professional_summary, skills, experience
+
+- **Legal**: Analyze contracts to extract parties, obligations, financial terms
+  - Schema: `contract-analyzer-v1.yaml`
+  - Extracted fields: contract_type, parties, financial_terms, key_obligations, risk_flags
+  - Embedding fields: contract_title, contract_type, parties, key_obligations, risk_flags
+
+- **Medical**: Extract diagnoses, medications, treatments from health records
+- **Financial**: Parse reports to extract metrics, risks, forecasts
+
+**Schema Structure**:
+```yaml
+---
+type: object
+description: |
+  System prompt with LLM instructions for extraction.
+
+properties:
+  # JSON Schema defining structured output
+  field_name:
+    type: string
+    description: Field description
+
+required:
+  - required_fields
+
+json_schema_extra:
+  fully_qualified_name: rem.agents.MyExtractorAgent
+  version: "1.0.0"
+  tags: [domain, ontology-extractor]
+
+  # Ontology-specific configuration
+  provider_configs:
+    - provider_name: anthropic
+      model_name: claude-sonnet-4-5-20250929
+    - provider_name: openai
+      model_name: gpt-4o
+
+  embedding_fields:
+    - field1
+    - field2
+    - nested.field3
+```
+
+**Workflow**:
+1. User creates agent schema (stored in `schemas` table)
+2. User creates OntologyConfig with file matching rules
+3. Files uploaded to S3, File entities created
+4. File processor extracts content, updates status to `completed`
+5. Dreaming worker finds completed files
+6. For each file, loads matching OntologyConfigs (sorted by priority)
+7. For each config:
+   - Loads agent schema from database
+   - Creates agent using `create_pydantic_ai_agent()`
+   - Runs agent on file content
+   - Serializes extracted data (critical for Pydantic models!)
+   - Generates embedding text from configured fields
+   - Stores Ontology entity
+8. Ontologies queryable via LOOKUP, SEARCH, or direct queries
+
+**CLI Commands**:
+```bash
+# Run custom extractor on user's data (resources, files, sessions)
+rem dreaming custom \
+  --user-id user-123 \
+  --tenant-id acme-corp \
+  --extractor cv-parser-v1
+
+# Run extractor with lookback window
+rem dreaming custom \
+  --user-id user-123 \
+  --tenant-id acme-corp \
+  --extractor contract-analyzer-v1 \
+  --lookback-hours 168 \
+  --limit 50
+
+# Process files through extractor
+rem process files \
+  --tenant-id acme-corp \
+  --extractor cv-parser-v1 \
+  --status completed \
+  --limit 10
+
+# Full dreaming workflow (includes extractors if configs exist)
+rem dreaming full --user-id user-123 --tenant-id acme-corp
+
+# Skip extractors in full workflow
+rem dreaming full --user-id user-123 --tenant-id acme-corp --skip-extractors
+```
+
+**Key Design Principles**:
+- **Schema-driven**: Agent schemas in database, not hardcoded
+- **Provider-agnostic**: Test across multiple LLM providers
+- **Embedding-aware**: Automatically embeds configured fields
+- **Tenant-isolated**: All operations scoped to tenant_id
+- **Serialization-safe**: Always serialize Pydantic models (critical!)
+- **Cost-conscious**: Optional provider configs for A/B testing
+
+**Files**:
+- `models/entities/ontology.py` - Ontology entity model
+- `models/entities/ontology_config.py` - OntologyConfig entity model
+- `models/entities/schema.py` - Enhanced with provider_configs, embedding_fields
+- `services/repositories/ontology_repository.py` - Ontology CRUD operations
+- `services/repositories/ontology_config_repository.py` - Config CRUD and file matching
+- `workers/dreaming.py` - Contains extraction logic in `extract_ontologies()`
+- `utils/dict_utils.py` - Nested dict access and field extraction for embeddings
+- `utils/embeddings.py` - Embedding generation (reused)
+- `agentic/serialization.py` - Pydantic serialization (reused)
+- `cli/commands/dreaming.py` - Dreaming commands including `custom` for extractors
+- `cli/commands/process.py` - Process commands with `--extractor` option
+- `schemas/ontology_extractors/` - Example agent schemas (CV parser, contract analyzer)
 
 ## Technology Decisions
 
@@ -410,6 +614,75 @@ See [manifests/application/README.md](manifests/application/README.md)
 kubectl apply -f manifests/application/rem-api/argocd-application.yaml
 kubectl apply -f manifests/application/rem-mcp/argocd-application.yaml
 ```
+
+## Evaluation Framework
+
+REM includes a **two-phase evaluation system** using Arize Phoenix for systematic agent testing.
+
+### Architecture
+
+**Phase 1: SME Golden Set Creation**
+- Subject Matter Experts create datasets with (input, reference) pairs
+- No agent execution required
+- Stored in Phoenix for reuse
+
+**Phase 2: Automated Evaluation**
+- Run agents on golden sets → produces outputs
+- Run evaluators (LLM-as-a-Judge) → produces scores
+- Track results in Phoenix for analysis over time
+
+### Components
+
+**Services** (`rem/src/rem/services/phoenix/`)
+- `PhoenixClient`: Dataset management, experiment execution, trace retrieval
+- `PhoenixConfig`: Connection configuration
+
+**Providers** (`rem/src/rem/agentic/providers/phoenix.py`)
+- Evaluator factory (mirrors Pydantic AI pattern)
+- Schema-based LLM-as-a-Judge evaluators
+- Support for Anthropic and OpenAI models
+
+**Evaluator Schemas** (`rem/schemas/evaluators/`)
+- `rem-lookup-correctness.yaml`: LOOKUP query evaluation
+- `rem-search-correctness.yaml`: SEARCH query evaluation
+- Multi-dimensional scoring (correctness, completeness, performance)
+
+**CLI Commands**
+```bash
+# Create golden set from CSV
+rem eval dataset create rem-lookup-golden \
+  --from-csv golden.csv \
+  --input-keys query \
+  --output-keys expected_label,expected_type
+
+# Run evaluation
+rem eval experiment run rem-lookup-golden \
+  --experiment rem-v1 \
+  --agent ask_rem \
+  --evaluator rem-lookup-correctness
+
+# View results
+open http://localhost:6006
+```
+
+### Future: RAGAS and RRF
+
+**RAGAS Integration (Q1 2025)**
+- Evaluate RAG retrieval quality independently from agents
+- Metrics: Context Precision, Context Recall, Faithfulness, Answer Relevance
+- Focus on REM query layer as retrieval gateway
+
+**RRF Experiments (Q2 2025)**
+- Reciprocal Rank Fusion for hybrid retrieval
+- Combine SEARCH (semantic) + LOOKUP (exact) results
+- Improve coverage and ranking quality
+
+**Why This Matters:**
+REM is fundamentally a RAG system. The query layer (LOOKUP, SEARCH, TRAVERSE, SQL) is the retrieval gateway. RAGAS and RRF allow us to evaluate and optimize retrieval in isolation from agent behavior - critical because if retrieval fails, agents fail.
+
+See [rem/src/rem/services/phoenix/README.md](rem/src/rem/services/phoenix/README.md) for complete documentation.
+
+---
 
 ## Future Considerations
 

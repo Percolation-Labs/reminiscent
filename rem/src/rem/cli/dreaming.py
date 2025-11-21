@@ -9,6 +9,7 @@ Commands:
 - user-model: Update user profiles from activity
 - moments: Extract temporal narratives from resources
 - affinity: Build semantic relationships between resources
+- custom: Run custom extractors on user's resources/sessions
 - full: Run complete dreaming workflow (all operations)
 
 Usage Examples:
@@ -24,6 +25,10 @@ rem-dreaming affinity --user-id=user-123
 
 # Build resource affinity (LLM mode, intelligent but expensive)
 rem-dreaming affinity --user-id=user-123 --use-llm --limit=100
+
+# Run custom extractor on user's data
+rem-dreaming custom --user-id=user-123 --extractor cv-parser-v1
+rem-dreaming custom --user-id=user-123 --extractor contract-analyzer-v1 --lookback-hours=168
 
 # Run full workflow for user
 rem-dreaming full --user-id=user-123

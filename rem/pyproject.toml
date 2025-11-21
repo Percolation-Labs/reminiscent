@@ -1,12 +1,22 @@
 [project]
-name = "rem"
-version = "0.1.0"
-description = "Reactive Event-driven Model system for agentic AI workloads"
+name = "remdb"
+version = "0.1.9"
+description = "Resources Entities Moments - Bio-inspired memory system for agentic AI workloads"
 readme = "README.md"
 authors = [
     { name = "mr-saoirse", email = "amartey@gmail.com" }
 ]
+license = { text = "MIT" }
+keywords = ["ai", "agents", "memory", "postgresql", "vector-search", "mcp"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 requires-python = ">=3.12"
+
 dependencies = [
     # Core Framework
     "pydantic>=2.10.0",
@@ -49,6 +59,12 @@ dependencies = [
     "kreuzberg>=3.21.0",
     "semchunk>=2.2.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/mr-saoirse/remstack"
+Documentation = "https://github.com/mr-saoirse/remstack/blob/main/README.md"
+Repository = "https://github.com/mr-saoirse/remstack"
+Issues = "https://github.com/mr-saoirse/remstack/issues"
 
 [project.optional-dependencies]
 dev = [
@@ -99,7 +115,7 @@ audio = [
 ]
 
 all = [
-    "rem[dev,schema,fs,audio]",
+    "remdb[dev,schema,fs,audio]",
 ]
 
 [project.scripts]

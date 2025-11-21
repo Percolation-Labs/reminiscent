@@ -132,6 +132,7 @@ class TaskType(str, Enum):
     USER_MODEL = "user_model"
     MOMENTS = "moments"
     AFFINITY = "affinity"
+    ONTOLOGY = "ontology"  # Extract domain-specific knowledge from files
     FULL = "full"
 
 
@@ -344,19 +345,68 @@ class DreamingWorker:
             "status": "stub_not_implemented",
         }
 
+    async def extract_ontologies(
+        self,
+        user_id: str,
+        lookback_hours: Optional[int] = None,
+        limit: Optional[int] = None,
+    ) -> dict[str, Any]:
+        """
+        Extract domain-specific knowledge from files using custom agents.
+
+        Finds files processed within lookback window and applies matching
+        OntologyConfig rules to extract structured knowledge.
+
+        Process:
+        1. Query REM for files processed by this user (lookback window)
+        2. For each file, find matching OntologyConfig rules
+        3. Load agent schemas from database
+        4. Execute agents on file content
+        5. Generate embeddings for extracted data
+        6. Store Ontology entities
+
+        Args:
+            user_id: User to process
+            lookback_hours: Hours to look back (default: self.lookback_hours)
+            limit: Max files to process
+
+        Returns:
+            Statistics about ontology extraction
+        """
+        # TODO: Implement using REM query API + OntologyExtractorService
+        # Query files with timestamp filter and processing_status='completed'
+        # Load matching OntologyConfigs from database
+        # Use OntologyExtractorService to extract ontologies
+        # Generate embeddings for embedding_text field
+
+        # Stub implementation
+        lookback = lookback_hours or self.lookback_hours
+        return {
+            "user_id": user_id,
+            "lookback_hours": lookback,
+            "files_queried": 0,
+            "configs_matched": 0,
+            "ontologies_created": 0,
+            "embeddings_generated": 0,
+            "agent_calls_made": 0,
+            "status": "stub_not_implemented",
+        }
+
     async def process_full(
         self,
         user_id: str,
         use_llm_affinity: bool = False,
         lookback_hours: Optional[int] = None,
+        extract_ontologies: bool = True,
     ) -> dict[str, Any]:
         """
         Run complete dreaming workflow.
 
         Executes all dreaming operations in sequence:
-        1. Update user model
-        2. Construct moments
-        3. Build resource affinity
+        1. Extract ontologies from files (if enabled)
+        2. Update user model
+        3. Construct moments
+        4. Build resource affinity
 
         Recommended for daily cron execution.
 
@@ -364,6 +414,7 @@ class DreamingWorker:
             user_id: User to process
             use_llm_affinity: Use LLM mode for affinity (expensive)
             lookback_hours: Hours to look back
+            extract_ontologies: Whether to run ontology extraction (default: True)
 
         Returns:
             Aggregated statistics from all operations
@@ -372,10 +423,21 @@ class DreamingWorker:
         results = {
             "user_id": user_id,
             "lookback_hours": lookback,
+            "ontologies": {},
             "user_model": {},
             "moments": {},
             "affinity": {},
         }
+
+        # Ontology extraction (runs first to extract knowledge before moments)
+        if extract_ontologies:
+            try:
+                results["ontologies"] = await self.extract_ontologies(
+                    user_id=user_id,
+                    lookback_hours=lookback,
+                )
+            except Exception as e:
+                results["ontologies"] = {"error": str(e)}
 
         # User model update
         try:
