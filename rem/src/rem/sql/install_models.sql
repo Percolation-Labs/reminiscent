@@ -1,7 +1,7 @@
 -- REM Model Schema (install_models.sql)
 -- Generated from Pydantic models
 -- Source directory: src/rem/models/entities
--- Generated at: 2025-11-22T11:14:38.007811
+-- Generated at: 2025-11-22T20:03:37.573943
 --
 -- DO NOT EDIT MANUALLY - Regenerate with: rem db schema generate
 --
@@ -42,7 +42,6 @@ CREATE TABLE IF NOT EXISTS users (
     role VARCHAR(256),
     tier TEXT,
     sec_policy JSONB DEFAULT '{}'::jsonb,
-    ontology_configuration JSONB DEFAULT '{}'::jsonb,
     summary TEXT,
     interests TEXT[] DEFAULT ARRAY[]::TEXT[],
     preferred_topics TEXT[] DEFAULT ARRAY[]::TEXT[],

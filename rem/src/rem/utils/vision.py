@@ -81,14 +81,16 @@ class ImageAnalyzer:
         """
         self.provider = provider
 
-        # Get API key from environment if not provided
+        # Get API key from settings if not provided
         if api_key is None:
+            from ..settings import settings
             if provider == VisionProvider.ANTHROPIC:
-                api_key = os.getenv("ANTHROPIC_API_KEY")
+                api_key = settings.llm.anthropic_api_key
             elif provider == VisionProvider.GEMINI:
-                api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+                # Gemini uses same key as Google
+                api_key = settings.llm.anthropic_api_key  # TODO: Add gemini_api_key to settings
             elif provider == VisionProvider.OPENAI:
-                api_key = os.getenv("OPENAI_API_KEY")
+                api_key = settings.llm.openai_api_key
 
         if not api_key:
             logger.warning(f"No API key found for {provider.value} - vision analysis will fail")

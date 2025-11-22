@@ -318,6 +318,7 @@ class ContentService:
                 - processing_status: "completed" or "failed"
                 - resources_created: Number of Resource chunks created
                 - parsing_metadata: Rich parsing state (content, tables, images)
+                - content: Parsed file content (markdown format) if status is "completed"
 
         Raises:
             PermissionError: If remote server tries to read local file
@@ -420,6 +421,11 @@ class ContentService:
             f"resources: {resources_created})"
         )
 
+        # Extract content if available
+        content = None
+        if processing_status == "completed" and processing_result:
+            content = processing_result.get("content")
+
         return {
             "file_id": file_id,
             "file_name": file_name,
@@ -432,6 +438,7 @@ class ContentService:
             "processing_status": processing_status,
             "resources_created": resources_created,
             "parsing_metadata": parsing_metadata,
+            "content": content,  # Include parsed content when available
             "message": f"File ingested and {processing_status}. Created {resources_created} resources.",
         }
 
@@ -441,6 +448,11 @@ class ContentService:
 
         **INTERNAL METHOD**: This is called by ingest_file() after storage.
         Clients should use ingest_file() instead for the full pipeline.
+
+        **KIND-BASED ROUTING**: For YAML/JSON files, checks for 'kind' field and routes to:
+        - kind=agent or kind=evaluator → Save to schemas table (not resources)
+        - kind=engram → Process via EngramProcessor (creates resources + moments)
+        - No kind → Standard resource processing (default)
 
         Args:
             uri: File URI (s3://bucket/key or local path)
@@ -454,6 +466,32 @@ class ContentService:
         # Extract content
         result = self.process_uri(uri)
         filename = Path(uri).name
+
+        # Check for custom kind-based processing (YAML/JSON only)
+        file_suffix = Path(uri).suffix.lower()
+        if file_suffix in ['.yaml', '.yml', '.json']:
+            # Check if schema provider detected a valid schema
+            if result.get('metadata', {}).get('is_schema'):
+                logger.info(f"🔧 Custom provider flow initiated: kind={result['metadata'].get('kind')} for {filename}")
+                return await self._process_schema(result, uri, user_id)
+
+            # Check for engram kind in raw data
+            import yaml
+            import json
+            try:
+                # Parse the content to check for kind
+                content_text = result.get('content', '')
+                if file_suffix == '.json':
+                    data = json.loads(content_text)
+                else:
+                    data = yaml.safe_load(content_text)
+
+                if isinstance(data, dict) and data.get('kind') == 'engram':
+                    logger.info(f"🔧 Custom provider flow initiated: kind=engram for {filename}")
+                    return await self._process_engram(data, uri, user_id)
+            except Exception as e:
+                logger.debug(f"Could not parse {filename} for kind check: {e}")
+                # Fall through to standard processing
 
         # Convert to markdown
         markdown = to_markdown(result["content"], filename)
@@ -493,11 +531,117 @@ class ContentService:
         ]
 
         if self.resource_repo:
-            await self.resource_repo.batch_upsert(resources)
+            await self.resource_repo.upsert(resources)
             logger.info(f"Saved {len(resources)} Resource chunks")
 
         return {
             "file": file.model_dump(),
             "chunk_count": len(chunks),
+            "content": result["content"],
+            "markdown": markdown,
             "status": "completed",
         }
+
+    async def _process_schema(
+        self, result: dict[str, Any], uri: str, user_id: str | None = None
+    ) -> dict[str, Any]:
+        """
+        Process agent/evaluator schema and save to schemas table.
+
+        Args:
+            result: Extraction result from SchemaProvider with schema_data
+            uri: File URI
+            user_id: Optional user ID for multi-tenancy
+
+        Returns:
+            dict with schema save result
+        """
+        from rem.models.entities import Schema
+        from rem.services.postgres import PostgresService
+
+        metadata = result.get("metadata", {})
+        schema_data = result.get("schema_data", {})
+
+        kind = metadata.get("kind")
+        name = metadata.get("name")
+        version = metadata.get("version", "1.0.0")
+
+        logger.info(f"Saving schema to schemas table: kind={kind}, name={name}, version={version}")
+
+        # Create Schema entity
+        # IMPORTANT: category field distinguishes agents from evaluators
+        # - kind=agent → category="agent" (AI agents with tools/resources)
+        # - kind=evaluator → category="evaluator" (LLM-as-a-Judge evaluators)
+        schema_entity = Schema(
+            tenant_id=user_id or "default",
+            user_id=user_id,
+            name=name,
+            spec=schema_data,
+            category=kind,  # Maps kind → category for database filtering
+            provider_configs=metadata.get("provider_configs", []),
+            embedding_fields=metadata.get("embedding_fields", []),
+            metadata={
+                "uri": uri,
+                "version": version,
+                "tags": metadata.get("tags", []),
+            },
+        )
+
+        # Save to schemas table
+        from rem.services.postgres import get_postgres_service
+        postgres = get_postgres_service()
+        await postgres.connect()
+        try:
+            from rem.models.entities import Schema as SchemaModel
+            await postgres.batch_upsert(
+                records=[schema_entity],
+                model=SchemaModel,
+                table_name="schemas",
+                entity_key_field="name",
+                generate_embeddings=False,
+            )
+            logger.info(f"✅ Schema saved: {name} (kind={kind})")
+        finally:
+            await postgres.disconnect()
+
+        return {
+            "schema_name": name,
+            "kind": kind,
+            "version": version,
+            "status": "completed",
+            "message": f"Schema '{name}' saved to schemas table",
+        }
+
+    async def _process_engram(
+        self, data: dict[str, Any], uri: str, user_id: str | None = None
+    ) -> dict[str, Any]:
+        """
+        Process engram and save to resources + moments tables.
+
+        Args:
+            data: Parsed engram data with kind=engram
+            uri: File URI
+            user_id: Optional user ID for multi-tenancy
+
+        Returns:
+            dict with engram processing result
+        """
+        from rem.workers.engram_processor import EngramProcessor
+        from rem.services.postgres import PostgresService
+
+        logger.info(f"Processing engram: {data.get('name')}")
+
+        from rem.services.postgres import get_postgres_service
+        postgres = get_postgres_service()
+        await postgres.connect()
+        try:
+            processor = EngramProcessor(postgres)
+            result = await processor.process_engram(
+                data=data,
+                tenant_id=user_id or "default",
+                user_id=user_id,
+            )
+            logger.info(f"✅ Engram processed: {result.get('resource_id')} with {len(result.get('moment_ids', []))} moments")
+            return result
+        finally:
+            await postgres.disconnect()

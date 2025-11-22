@@ -338,8 +338,106 @@ def rebuild_cache(connection: str | None):
         raise click.Abort()
 
 
+@click.command()
+@click.argument("file_path", type=click.Path(exists=True, path_type=Path))
+@click.option("--tenant-id", default="test-tenant", help="Tenant ID for loaded data")
+@click.option("--dry-run", is_flag=True, help="Show what would be loaded without loading")
+def load(file_path: Path, tenant_id: str, dry_run: bool):
+    """
+    Load data from YAML file into database.
+
+    File format:
+        - table: resources
+          key_field: name
+          rows:
+            - name: Example
+              content: Test data...
+
+    Examples:
+        rem db load rem/tests/data/graph_seed.yaml
+        rem db load data.yaml --tenant-id my-tenant
+        rem db load data.yaml --dry-run
+    """
+    asyncio.run(_load_async(file_path, tenant_id, dry_run))
+
+
+async def _load_async(file_path: Path, tenant_id: str, dry_run: bool):
+    """Async implementation of load command."""
+    import yaml
+    from ...models.core.inline_edge import InlineEdge
+    from ...models.entities import Resource, Moment, User
+    from ...services.postgres import PostgresService
+
+    logger.info(f"Loading data from: {file_path}")
+    logger.info(f"Tenant ID: {tenant_id}")
+
+    # Load YAML file
+    with open(file_path) as f:
+        data = yaml.safe_load(f)
+
+    if not isinstance(data, list):
+        logger.error("YAML must be a list of table definitions")
+        raise click.Abort()
+
+    if dry_run:
+        logger.info("DRY RUN - Would load:")
+        logger.info(yaml.dump(data, default_flow_style=False))
+        return
+
+    # Map table names to model classes
+    MODEL_MAP = {
+        "users": User,
+        "moments": Moment,
+        "resources": Resource,
+    }
+
+    # Connect to database
+    pg = PostgresService()
+    await pg.connect()
+
+    try:
+        total_loaded = 0
+
+        for table_def in data:
+            table_name = table_def["table"]
+            key_field = table_def.get("key_field", "id")
+            rows = table_def.get("rows", [])
+
+            if table_name not in MODEL_MAP:
+                logger.warning(f"Unknown table: {table_name}, skipping")
+                continue
+
+            model_class = MODEL_MAP[table_name]
+
+            for row_data in rows:
+                # Add tenant_id
+                row_data["tenant_id"] = tenant_id
+
+                # Convert graph_edges to InlineEdge format if present
+                if "graph_edges" in row_data:
+                    row_data["graph_edges"] = [
+                        InlineEdge(**edge).model_dump(mode='json')
+                        for edge in row_data["graph_edges"]
+                    ]
+
+                # Create model instance and upsert
+                instance = model_class(**row_data)
+                await pg.upsert(instance, model_class, table_name, entity_key_field=key_field)
+                total_loaded += 1
+
+                # Log based on model type
+                name = getattr(instance, 'name', getattr(instance, 'id', '?'))
+                logger.success(f"Loaded {table_name[:-1]}: {name}")
+
+        logger.success(f"Data loaded successfully! Total rows: {total_loaded}")
+
+    finally:
+        await pg.disconnect()
+
+
 def register_commands(db_group):
     """Register all db commands."""
     db_group.add_command(migrate)
     db_group.add_command(status)
     db_group.add_command(rebuild_cache, name="rebuild-cache")
+    db_group.add_command(load)

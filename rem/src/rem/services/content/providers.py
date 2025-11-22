@@ -394,13 +394,13 @@ class SchemaProvider(ContentProvider):
     Schema content provider for agent/evaluator schemas.
 
     Detects and processes YAML/JSON files containing:
-    - Agent schemas (type: object with json_schema_extra.fully_qualified_name: rem.agents.*)
-    - Evaluator schemas (type: object with json_schema_extra.fully_qualified_name: rem.evaluators.*)
+    - Agent schemas (type: object with json_schema_extra.kind: agent and json_schema_extra.name: <name>)
+    - Evaluator schemas (type: object with json_schema_extra.kind: evaluator and json_schema_extra.name: <name>)
 
     Stores schemas in the schemas table with deterministic IDs for upsert by name.
 
-    Pattern from p8fs:
-    - Checks for schema markers (type: object + fully_qualified_name)
+    Pattern:
+    - Checks for schema markers (type: object + kind + name)
     - Generates deterministic ID for upsert (tenant+schema_name)
     - Stores full schema JSON in schemas table
     - Extracts metadata (version, tags, provider_configs, embedding_fields)
@@ -445,7 +445,7 @@ class SchemaProvider(ContentProvider):
             # Try YAML first (supports both YAML and JSON)
             schema_data = yaml.safe_load(text)  # Raises yaml.YAMLError on invalid YAML
 
-        # Check if it's a schema (type: object + json_schema_extra.fully_qualified_name)
+        # Check if it's a schema (type: object + json_schema_extra.kind + json_schema_extra.name)
         if not isinstance(schema_data, dict):
             return {
                 "text": text,
@@ -456,11 +456,12 @@ class SchemaProvider(ContentProvider):
         # Check for schema markers
         is_object_type = schema_data.get("type") == "object"
         json_schema_extra = schema_data.get("json_schema_extra", {})
-        fully_qualified_name = json_schema_extra.get("fully_qualified_name", "")
+        kind = json_schema_extra.get("kind", "")
+        schema_name = json_schema_extra.get("name", "")
 
-        # Must have type: object and fully_qualified_name starting with rem.agents or rem.evaluators
-        is_agent_schema = is_object_type and fully_qualified_name.startswith("rem.agents.")
-        is_evaluator_schema = is_object_type and fully_qualified_name.startswith("rem.evaluators.")
+        # Must have type: object, kind (agent or evaluator), and name
+        is_agent_schema = is_object_type and kind == "agent" and schema_name
+        is_evaluator_schema = is_object_type and kind == "evaluator" and schema_name
 
         if not (is_agent_schema or is_evaluator_schema):
             return {
@@ -470,21 +471,12 @@ class SchemaProvider(ContentProvider):
             }
 
         # Extract schema metadata
-        schema_type = "agent" if is_agent_schema else "evaluator"
+        schema_type = kind  # "agent" or "evaluator"
         version = json_schema_extra.get("version", "1.0.0")
         tags = json_schema_extra.get("tags", [])
 
-        # Infer short_name from fully_qualified_name (rem.agents.MyAgent -> my-agent)
-        name_parts = fully_qualified_name.split(".")
-        camel_name = name_parts[-1]  # e.g., "MyAgent"
-        # Convert CamelCase to kebab-case
-        # Handle sequences of capitals (CV -> cv, not c-v)
-        import re
-        # Insert hyphens before capital letters that are followed by lowercase
-        short_name = re.sub(r'(?<!^)(?=[A-Z][a-z])', '-', camel_name)
-        # Also handle transitions from lowercase to uppercase
-        short_name = re.sub(r'(?<=[a-z])(?=[A-Z])', '-', short_name)
-        short_name = short_name.lower()
+        # Use name directly (already in kebab-case format)
+        short_name = schema_name
 
         # Build human-readable summary
         description = schema_data.get("description", "No description provided")
@@ -496,7 +488,8 @@ class SchemaProvider(ContentProvider):
         summary_parts = [
             f"# {schema_type.title()} Schema: {short_name}",
             f"**Version:** {version}",
-            f"**Fully Qualified Name:** {fully_qualified_name}",
+            f"**Name:** {schema_name}",
+            f"**Kind:** {kind}",
             "",
             "## Description",
             description_preview,
@@ -521,7 +514,8 @@ class SchemaProvider(ContentProvider):
             "schema_type": schema_type,
             "short_name": short_name,
             "version": version,
-            "fully_qualified_name": fully_qualified_name,
+            "kind": kind,
+            "name": schema_name,
             "tags": tags,
             "field_count": len(properties),
             "required_field_count": len(required_fields),

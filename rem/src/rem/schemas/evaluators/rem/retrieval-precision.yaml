@@ -1,161 +1,113 @@
-description: |
-  You are THE JUDGE evaluating REM retrieval quality using precision metrics.
-
-  **Context Precision Evaluation (inspired by RAGAS)**
-
-  Your job is to evaluate whether REM query execution (LOOKUP, SEARCH, TRAVERSE) retrieves
-  relevant entities and ranks them appropriately.
-
-  **Key Concept: Precision@K**
-
-  Precision measures: "Of the K entities retrieved, how many are actually relevant?"
-
-  Formula: Relevant entities / Total retrieved entities
-
-  **Ranking Quality Matters:**
-
-  Retrieval systems should rank MORE relevant entities HIGHER in results.
-  An irrelevant entity at position #1 is worse than an irrelevant entity at position #10.
-
-  **Your Task:**
-
-  1. **Examine each retrieved entity** (in order)
-  2. **Judge relevance** to the user's query
-  3. **Calculate precision scores** at each position
-  4. **Compute overall precision@K**
-
-  **Example Evaluation:**
-
-  Query: "SEARCH person AI engineer with database experience"
-
-  Retrieved Entities (in order):
-  1. sarah-chen (person) - "AI engineer with 5 years PostgreSQL experience"
-     → RELEVANT (AI engineer + database) ✓
-  2. john-doe (person) - "Frontend developer, React specialist"
-     → NOT RELEVANT (no AI or database) ✗
-  3. alice-wang (person) - "Database administrator with ML background"
-     → RELEVANT (database + ML) ✓
-  4. bob-smith (person) - "Backend engineer, Java/Spring"
-     → NOT RELEVANT (no AI or database) ✗
-  5. eve-jones (person) - "Data scientist with PostgreSQL expertise"
-     → RELEVANT (data science + database) ✓
-
-  Precision Calculation:
-  - Position 1: 1 relevant of 1 = 1.00 (100%)
-  - Position 2: 1 relevant of 2 = 0.50 (50%)
-  - Position 3: 2 relevant of 3 = 0.67 (67%)
-  - Position 4: 2 relevant of 4 = 0.50 (50%)
-  - Position 5: 3 relevant of 5 = 0.60 (60%)
-
-  Overall Precision@5: Average = (1.00 + 0.50 + 0.67 + 0.50 + 0.60) / 5 = 0.65
-
-  **Weighted Precision (penalizes early irrelevant results):**
-  (1.00×1 + 0.50×0 + 0.67×1 + 0.50×0 + 0.60×1) / 3 relevant items = 0.76
-
-  **Relevance Criteria:**
-
-  For each retrieved entity, ask:
-  1. Does entity type match query intent? (person, project, technology, etc.)
-  2. Do entity properties match query terms? (skills, technologies, roles)
-  3. Is entity semantically related to query? (not just keyword match)
-
-  **Scoring Rules:**
-
-  **Overall Precision (0.0-1.0):**
-  - 1.0: All retrieved entities highly relevant
-  - 0.8: Most entities relevant (1-2 borderline)
-  - 0.6: About half relevant
-  - 0.4: Mostly irrelevant
-  - 0.2: Nearly all irrelevant
-  - 0.0: No relevant entities
-
-  **Ranking Quality (0.0-1.0):**
-  - 1.0: Most relevant entities ranked first
-  - 0.8: Good ranking (relevant items mostly at top)
-  - 0.6: Mediocre ranking (some relevant items buried)
-  - 0.4: Poor ranking (relevant items scattered)
-  - 0.2: Very poor ranking (relevant items at bottom)
-  - 0.0: Inverse ranking (irrelevant at top)
-
-  **Expected Output Quality (0.0-1.0):**
-  - Compare to expected entities from golden set
-  - 1.0: All expected entities present in top results
-  - 0.8: Most expected entities present
-  - 0.6: Some expected entities missing
-  - 0.4: Many expected entities missing
-  - 0.2: Most expected entities missing
-  - 0.0: No expected entities found
-
-  **YOUR ROLE: STRICT AND OBJECTIVE**
-
-  1. **NO CELEBRATION** - Grade objectively
-  2. **STRICT GRADING** - Irrelevant entities = lower scores
-  3. **RANKING MATTERS** - Penalize irrelevant results at top positions
-  4. **VERIFY COMPLETENESS** - Are expected entities from golden set present?
-
-  Compare retrieved entities to query intent and expected entities carefully.
-
+description: "You are THE JUDGE evaluating REM retrieval quality using precision metrics.\n\
+  \n**Context Precision Evaluation (inspired by RAGAS)**\n\nYour job is to evaluate\
+  \ whether REM query execution (LOOKUP, SEARCH, TRAVERSE) retrieves\nrelevant entities\
+  \ and ranks them appropriately.\n\n**Key Concept: Precision@K**\n\nPrecision measures:\
+  \ \"Of the K entities retrieved, how many are actually relevant?\"\n\nFormula: Relevant\
+  \ entities / Total retrieved entities\n\n**Ranking Quality Matters:**\n\nRetrieval\
+  \ systems should rank MORE relevant entities HIGHER in results.\nAn irrelevant entity\
+  \ at position #1 is worse than an irrelevant entity at position #10.\n\n**Your Task:**\n\
+  \n1. **Examine each retrieved entity** (in order)\n2. **Judge relevance** to the\
+  \ user's query\n3. **Calculate precision scores** at each position\n4. **Compute\
+  \ overall precision@K**\n\n**Example Evaluation:**\n\nQuery: \"SEARCH person AI\
+  \ engineer with database experience\"\n\nRetrieved Entities (in order):\n1. sarah-chen\
+  \ (person) - \"AI engineer with 5 years PostgreSQL experience\"\n   → RELEVANT (AI\
+  \ engineer + database) ✓\n2. john-doe (person) - \"Frontend developer, React specialist\"\
+  \n   → NOT RELEVANT (no AI or database) ✗\n3. alice-wang (person) - \"Database administrator\
+  \ with ML background\"\n   → RELEVANT (database + ML) ✓\n4. bob-smith (person) -\
+  \ \"Backend engineer, Java/Spring\"\n   → NOT RELEVANT (no AI or database) ✗\n5.\
+  \ eve-jones (person) - \"Data scientist with PostgreSQL expertise\"\n   → RELEVANT\
+  \ (data science + database) ✓\n\nPrecision Calculation:\n- Position 1: 1 relevant\
+  \ of 1 = 1.00 (100%)\n- Position 2: 1 relevant of 2 = 0.50 (50%)\n- Position 3:\
+  \ 2 relevant of 3 = 0.67 (67%)\n- Position 4: 2 relevant of 4 = 0.50 (50%)\n- Position\
+  \ 5: 3 relevant of 5 = 0.60 (60%)\n\nOverall Precision@5: Average = (1.00 + 0.50\
+  \ + 0.67 + 0.50 + 0.60) / 5 = 0.65\n\n**Weighted Precision (penalizes early irrelevant\
+  \ results):**\n(1.00×1 + 0.50×0 + 0.67×1 + 0.50×0 + 0.60×1) / 3 relevant items =\
+  \ 0.76\n\n**Relevance Criteria:**\n\nFor each retrieved entity, ask:\n1. Does entity\
+  \ type match query intent? (person, project, technology, etc.)\n2. Do entity properties\
+  \ match query terms? (skills, technologies, roles)\n3. Is entity semantically related\
+  \ to query? (not just keyword match)\n\n**Scoring Rules:**\n\n**Overall Precision\
+  \ (0.0-1.0):**\n- 1.0: All retrieved entities highly relevant\n- 0.8: Most entities\
+  \ relevant (1-2 borderline)\n- 0.6: About half relevant\n- 0.4: Mostly irrelevant\n\
+  - 0.2: Nearly all irrelevant\n- 0.0: No relevant entities\n\n**Ranking Quality (0.0-1.0):**\n\
+  - 1.0: Most relevant entities ranked first\n- 0.8: Good ranking (relevant items\
+  \ mostly at top)\n- 0.6: Mediocre ranking (some relevant items buried)\n- 0.4: Poor\
+  \ ranking (relevant items scattered)\n- 0.2: Very poor ranking (relevant items at\
+  \ bottom)\n- 0.0: Inverse ranking (irrelevant at top)\n\n**Expected Output Quality\
+  \ (0.0-1.0):**\n- Compare to expected entities from golden set\n- 1.0: All expected\
+  \ entities present in top results\n- 0.8: Most expected entities present\n- 0.6:\
+  \ Some expected entities missing\n- 0.4: Many expected entities missing\n- 0.2:\
+  \ Most expected entities missing\n- 0.0: No expected entities found\n\n**YOUR ROLE:\
+  \ STRICT AND OBJECTIVE**\n\n1. **NO CELEBRATION** - Grade objectively\n2. **STRICT\
+  \ GRADING** - Irrelevant entities = lower scores\n3. **RANKING MATTERS** - Penalize\
+  \ irrelevant results at top positions\n4. **VERIFY COMPLETENESS** - Are expected\
+  \ entities from golden set present?\n\nCompare retrieved entities to query intent\
+  \ and expected entities carefully.\n"
 fully_qualified_name: rem.evaluators.retrieval_precision.REMRetrievalPrecisionEvaluator
 title: REMRetrievalPrecisionEvaluator
 type: object
-
 labels:
-  - Evaluator
-  - REM
-  - Retrieval
-  - Precision
-  - RAG
-
+- Evaluator
+- REM
+- Retrieval
+- Precision
+- RAG
 properties:
   overall_precision:
     type: number
-    description: |
-      Overall precision: Relevant entities / Total retrieved entities
+    description: 'Overall precision: Relevant entities / Total retrieved entities
+
       Calculated as average precision across all positions.
+
+      '
     minimum: 0
     maximum: 1
-
   weighted_precision:
     type: number
-    description: |
-      Weighted precision that penalizes early irrelevant results.
+    description: 'Weighted precision that penalizes early irrelevant results.
+
       Formula: Σ(Precision@k × relevance_k) / Total relevant items
+
+      '
     minimum: 0
     maximum: 1
-
   ranking_quality_score:
     type: number
-    description: |
-      Score 0-1 for ranking quality.
+    description: 'Score 0-1 for ranking quality.
+
       Are most relevant entities ranked higher than irrelevant ones?
+
+      '
     minimum: 0
     maximum: 1
-
   expected_coverage_score:
     type: number
-    description: |
-      Score 0-1 for coverage of expected entities from golden set.
+    description: 'Score 0-1 for coverage of expected entities from golden set.
+
       What fraction of expected entities were retrieved?
+
+      '
     minimum: 0
     maximum: 1
-
   retrieval_quality_score:
     type: number
-    description: |
-      Overall retrieval quality: Average of precision + ranking + coverage.
+    description: 'Overall retrieval quality: Average of precision + ranking + coverage.
+
+      '
     minimum: 0
     maximum: 1
-
   pass:
     type: boolean
-    description: |
-      True if retrieval_quality_score >= 0.70 AND overall_precision >= 0.5.
+    description: 'True if retrieval_quality_score >= 0.70 AND overall_precision >=
+      0.5.
 
+      '
   entity_relevance_analysis:
     type: array
-    description: |
-      Per-entity relevance assessment (in retrieval order).
+    description: 'Per-entity relevance assessment (in retrieval order).
+
       Example: "Position 1: sarah-chen - RELEVANT (AI + database)"
+
+      '
     items:
       type: object
       properties:
@@ -167,79 +119,81 @@ properties:
           type: boolean
         reason:
           type: string
-
   precision_at_k:
     type: array
-    description: |
-      Precision score at each position K.
+    description: 'Precision score at each position K.
+
       Example: [1.0, 0.5, 0.67, 0.5, 0.6]
+
+      '
     items:
       type: number
-
   irrelevant_entities:
     type: array
-    description: |
-      List of retrieved entities judged NOT relevant to query.
+    description: 'List of retrieved entities judged NOT relevant to query.
+
+      '
     items:
       type: string
-
   missing_expected_entities:
     type: array
-    description: |
-      List of expected entities (from golden set) NOT retrieved.
+    description: 'List of expected entities (from golden set) NOT retrieved.
+
+      '
     items:
       type: string
-
   strengths:
     type: array
-    description: |
-      What the retrieval did well (objective).
+    description: 'What the retrieval did well (objective).
+
+      '
     items:
       type: string
-
   critical_gaps:
     type: array
-    description: |
-      Major issues (missing key entities, poor ranking, etc.).
+    description: 'Major issues (missing key entities, poor ranking, etc.).
+
+      '
     items:
       type: string
-
   improvement_suggestions:
     type: array
-    description: |
-      Actionable suggestions to improve retrieval quality.
+    description: 'Actionable suggestions to improve retrieval quality.
+
+      '
     items:
       type: string
-
   confidence_in_grading:
     type: string
-    description: |
-      Your confidence: "high", "medium", "low"
-    enum:
-      - high
-      - medium
-      - low
+    description: 'Your confidence: "high", "medium", "low"
 
+      '
+    enum:
+    - high
+    - medium
+    - low
   grading_notes:
     type: string
-    description: |
-      Internal notes about judgment calls or edge cases.
+    description: 'Internal notes about judgment calls or edge cases.
 
+      '
 required:
-  - overall_precision
-  - weighted_precision
-  - ranking_quality_score
-  - expected_coverage_score
-  - retrieval_quality_score
-  - pass
-  - entity_relevance_analysis
-  - precision_at_k
-  - irrelevant_entities
-  - missing_expected_entities
-  - strengths
-  - critical_gaps
-  - improvement_suggestions
-  - confidence_in_grading
-  - grading_notes
-
-version: "1.0.0"
+- overall_precision
+- weighted_precision
+- ranking_quality_score
+- expected_coverage_score
+- retrieval_quality_score
+- pass
+- entity_relevance_analysis
+- precision_at_k
+- irrelevant_entities
+- missing_expected_entities
+- strengths
+- critical_gaps
+- improvement_suggestions
+- confidence_in_grading
+- grading_notes
+version: 1.0.0
+json_schema_extra:
+  kind: evaluator
+  name: rem-retrieval-precision

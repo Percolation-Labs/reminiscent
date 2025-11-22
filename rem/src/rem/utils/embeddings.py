@@ -137,21 +137,20 @@ def _get_api_key(provider: str) -> str:
     Raises:
         ValueError: If API key not found in environment
     """
+    from ..settings import settings
+
     if provider == "openai":
-        # Try both REM settings format and standard OpenAI env var
-        api_key = os.getenv("LLM__OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY")
+        api_key = settings.llm.openai_api_key
         if not api_key:
             raise ValueError(
-                "OpenAI API key not found. Set LLM__OPENAI_API_KEY or OPENAI_API_KEY "
-                "environment variable."
+                "OpenAI API key not found. Set LLM__OPENAI_API_KEY environment variable."
             )
         return api_key
     elif provider == "anthropic":
-        api_key = os.getenv("LLM__ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
+        api_key = settings.llm.anthropic_api_key
         if not api_key:
             raise ValueError(
-                "Anthropic API key not found. Set LLM__ANTHROPIC_API_KEY or "
-                "ANTHROPIC_API_KEY environment variable."
+                "Anthropic API key not found. Set LLM__ANTHROPIC_API_KEY environment variable."
             )
         return api_key
     else:

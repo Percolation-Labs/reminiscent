@@ -45,7 +45,8 @@ Example Agent Schema:
   },
   "required": ["answer", "confidence"],
   "json_schema_extra": {
-    "fully_qualified_name": "rem.agents.QueryAgent",
+    "kind": "agent",
+    "name": "query-agent",
     "tools": [
       {"name": "search_knowledge_base", "mcp_server": "rem"}
     ],
@@ -116,10 +117,12 @@ def _create_model_from_schema(agent_schema: dict[str, Any]) -> type[BaseModel]:
     builder = PydanticModelBuilder()
     model = builder.create_pydantic_model(agent_schema, root_schema=agent_schema)
 
-    # Override model name with FQN if available
-    fqn = agent_schema.get("json_schema_extra", {}).get("fully_qualified_name")
-    if fqn:
-        class_name = fqn.rsplit(".", 1)[-1]
+    # Override model name with schema name if available
+    json_extra = agent_schema.get("json_schema_extra", {})
+    schema_name = json_extra.get("name")
+    if schema_name:
+        # Convert kebab-case to PascalCase for class name
+        class_name = "".join(word.capitalize() for word in schema_name.split("-"))
         model.__name__ = class_name
         model.__qualname__ = class_name
 
@@ -251,7 +254,87 @@ def _create_schema_wrapper(
     return SchemaWrapper
 
 
-async def create_pydantic_ai_agent(
+async def create_agent_from_schema_file(
+    schema_name_or_path: str,
+    context: AgentContext | None = None,
+    model_override: KnownModelName | Model | None = None,
+) -> Agent:
+    """
+    Create agent from schema file (YAML/JSON).
+
+    Handles path resolution automatically:
+    - "contract-analyzer" → searches schemas/agents/contract-analyzer.yaml
+    - "agents/cv-parser" → searches schemas/agents/cv-parser.yaml
+    - "/absolute/path.yaml" → loads directly
+    - "relative/path.yaml" → loads relative to cwd
+
+    Args:
+        schema_name_or_path: Schema name or file path
+        context: Optional agent context
+        model_override: Optional model override
+
+    Returns:
+        Configured Agent instance
+
+    Example:
+        # Load by name (searches package schemas)
+        agent = await create_agent_from_schema_file("contract-analyzer")
+
+        # Load from custom path
+        agent = await create_agent_from_schema_file("./my-agent.yaml")
+    """
+    import yaml
+    import importlib.resources
+    from pathlib import Path
+
+    # Try to load schema file
+    path = Path(schema_name_or_path)
+
+    # 1. Try exact path (absolute or relative)
+    if path.exists():
+        with open(path, "r") as f:
+            agent_schema = yaml.safe_load(f)
+    else:
+        # 2. Try package resources with normalized name
+        base_name = str(schema_name_or_path).replace('.yaml', '').replace('.yml', '')
+        base_name = base_name.replace('agents/', '').replace('schemas/', '')
+
+        # Search paths in priority order
+        search_paths = [
+            f"schemas/agents/{base_name}.yaml",
+            f"schemas/evaluators/{base_name}.yaml",
+            f"schemas/{base_name}.yaml",
+        ]
+
+        schema_found = False
+        for search_path in search_paths:
+            try:
+                schema_ref = importlib.resources.files("rem") / search_path
+                schema_path = Path(str(schema_ref))
+                if schema_path.exists():
+                    with open(schema_path, "r") as f:
+                        agent_schema = yaml.safe_load(f)
+                    schema_found = True
+                    logger.debug(f"Loaded schema from package: {search_path}")
+                    break
+            except Exception:
+                continue
+
+        if not schema_found:
+            raise FileNotFoundError(
+                f"Schema not found: {schema_name_or_path}\n"
+                f"Searched: {', '.join(search_paths)}"
+            )
+
+    # Create agent using existing factory
+    return await create_agent(
+        context=context,
+        agent_schema_override=agent_schema,
+        model_override=model_override,
+    )
+
+
+async def create_agent(
     context: AgentContext | None = None,
     agent_schema_override: dict[str, Any] | None = None,
     model_override: KnownModelName | Model | None = None,
@@ -259,7 +342,9 @@ async def create_pydantic_ai_agent(
     strip_model_description: bool = True,
 ) -> Agent:
     """
-    Create Pydantic AI agent from context with dynamic schema loading.
+    Create agent from context with dynamic schema loading.
+
+    Provider-agnostic interface - currently implemented with Pydantic AI.
 
     Design Pattern:
     1. Load agent schema from context.agent_schema_uri or use override
@@ -289,7 +374,7 @@ async def create_pydantic_ai_agent(
             tenant_id="acme-corp",
             agent_schema_uri="rem-agents-query-agent"
         )
-        agent = await create_pydantic_ai_agent(context)
+        agent = await create_agent(context)
 
         # With explicit schema and result type
         schema = {...}  # JSON Schema
@@ -297,7 +382,7 @@ async def create_pydantic_ai_agent(
             answer: str
             confidence: float
 
-        agent = await create_pydantic_ai_agent(
+        agent = await create_agent(
             agent_schema_override=schema,
             result_type=Output
         )

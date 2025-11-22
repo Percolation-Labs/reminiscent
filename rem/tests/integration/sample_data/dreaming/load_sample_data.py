@@ -27,9 +27,10 @@ from uuid import uuid4
 
 from rem.models.entities.resource import Resource
 from rem.models.entities.message import Message
-from rem.services.postgres.service import DatabaseService
-from rem.services.repositories.resource_repository import ResourceRepository
-from rem.services.repositories.message_repository import MessageRepository
+from rem.services.postgres import PostgresService
+# TODO: Repositories module doesn't exist - needs refactoring
+# from rem.services.repositories.resource_repository import ResourceRepository
+# from rem.services.repositories.message_repository import MessageRepository
 from rem.settings import settings
 
 
@@ -53,9 +54,12 @@ class SampleDataLoader:
         self.base_dir = Path(__file__).parent / "resources"
 
         # Initialize services
-        self.db_service = DatabaseService(settings.postgres)
-        self.resource_repo: ResourceRepository | None = None
-        self.message_repo: MessageRepository | None = None
+        self.db_service = PostgresService()
+        # TODO: Uncomment when repositories module exists
+        # self.resource_repo: ResourceRepository | None = None
+        # self.message_repo: MessageRepository | None = None
+        self.resource_repo: Any | None = None
+        self.message_repo: Any | None = None
 
         # Track created entities
         self.created_resources: list[Resource] = []

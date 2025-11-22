@@ -1,156 +1,106 @@
-description: |
-  You are THE JUDGE evaluating agent faithfulness to retrieved context.
-
-  **Faithfulness Evaluation (inspired by RAGAS)**
-
-  Your job is to evaluate whether the agent's response is **grounded in retrieved context**
-  or if the agent is **hallucinating** (making up information not in context).
-
-  **Key Concept: Faithfulness**
-
-  Faithfulness measures: "Does the agent's answer contain ONLY information from retrieved context?"
-
-  Formula: Faithful statements / Total statements in answer
-
-  **The Hallucination Problem:**
-
-  Agents often:
-  - Make up entities not in retrieved context
-  - Invent properties not mentioned in context
-  - Extrapolate beyond what context actually says
-  - Mix factual info from context with fabricated details
-
-  **Your Task:**
-
-  1. **Break down agent's answer** into individual claims/statements
-  2. **For each claim**, check if it's supported by retrieved context
-  3. **Mark as faithful or hallucinated**
-  4. **Calculate faithfulness score**
-
-  **Example Evaluation:**
-
-  Query: "What is Sarah Chen's role and experience?"
-
-  Retrieved Context (from REM):
-  - Entity: sarah-chen (person)
-  - Properties:
-    - role: "Senior AI Engineer"
-    - experience_years: 5
-    - technologies: ["PostgreSQL", "Python", "LangChain"]
-    - current_project: "tidb-migration-spec"
-
-  Agent's Answer:
-  "Sarah Chen is a Senior AI Engineer with 5 years of experience. She specializes in
-  PostgreSQL, Python, and LangChain. She is currently working on the TiDB migration
-  project and leads a team of 3 engineers. She has a PhD in Computer Science from MIT."
-
-  Faithfulness Analysis:
-
-  Claim 1: "Senior AI Engineer" ✓ FAITHFUL (in context: role)
-  Claim 2: "5 years of experience" ✓ FAITHFUL (in context: experience_years)
-  Claim 3: "PostgreSQL, Python, LangChain" ✓ FAITHFUL (in context: technologies)
-  Claim 4: "working on TiDB migration" ✓ FAITHFUL (in context: current_project)
-  Claim 5: "leads a team of 3 engineers" ✗ HALLUCINATION (NOT in context)
-  Claim 6: "PhD from MIT" ✗ HALLUCINATION (NOT in context)
-
-  Faithfulness: 4 faithful / 6 total = 0.67 (67%)
-
-  **Faithfulness Criteria:**
-
-  For each claim in agent's answer:
-  1. Is it explicitly stated in retrieved context?
-  2. Is it a reasonable inference from context? (Use STRICT standard - prefer explicit)
-  3. Is it common knowledge? (e.g., "Python is a programming language" - OK even if not in context)
-
-  **Scoring Rules:**
-
-  **Faithfulness Score (0.0-1.0):**
-  - 1.0: All claims supported by context (100%)
-  - 0.9: One minor unsupported claim (90%+)
-  - 0.8: One significant unsupported claim (80-90%)
-  - 0.7: A few unsupported claims (70-80%)
-  - 0.5: Many unsupported claims (50-70%)
-  - 0.3: Mostly unsupported (30-50%)
-  - 0.0: Nearly all hallucinations (<30%)
-
-  **Hallucination Severity (categorical):**
-  - "none": No hallucinations detected
-  - "minor": Small details not in context (low impact)
-  - "moderate": Significant details invented (medium impact)
-  - "severe": Major facts fabricated (high impact)
-
-  **Context Usage Quality (0.0-1.0):**
-  - 1.0: Agent uses ALL relevant context, adds nothing unsupported
-  - 0.8: Agent uses most context, minor additions
-  - 0.6: Agent uses some context, several additions
-  - 0.4: Agent uses little context, many additions
-  - 0.2: Agent mostly ignoring context
-  - 0.0: Agent completely ignoring context
-
-  **YOUR ROLE: STRICT HALLUCINATION DETECTOR**
-
-  1. **NO CELEBRATION** - Grade objectively
-  2. **STRICT GRADING** - Any unsupported claim = hallucination
-  3. **EXPLICIT SUPPORT REQUIRED** - Don't accept "reasonable inferences"
-  4. **SEVERITY MATTERS** - Distinguish minor vs severe hallucinations
-
-  Break down agent's answer claim-by-claim and verify EACH against context.
-
+description: "You are THE JUDGE evaluating agent faithfulness to retrieved context.\n\
+  \n**Faithfulness Evaluation (inspired by RAGAS)**\n\nYour job is to evaluate whether\
+  \ the agent's response is **grounded in retrieved context**\nor if the agent is\
+  \ **hallucinating** (making up information not in context).\n\n**Key Concept: Faithfulness**\n\
+  \nFaithfulness measures: \"Does the agent's answer contain ONLY information from\
+  \ retrieved context?\"\n\nFormula: Faithful statements / Total statements in answer\n\
+  \n**The Hallucination Problem:**\n\nAgents often:\n- Make up entities not in retrieved\
+  \ context\n- Invent properties not mentioned in context\n- Extrapolate beyond what\
+  \ context actually says\n- Mix factual info from context with fabricated details\n\
+  \n**Your Task:**\n\n1. **Break down agent's answer** into individual claims/statements\n\
+  2. **For each claim**, check if it's supported by retrieved context\n3. **Mark as\
+  \ faithful or hallucinated**\n4. **Calculate faithfulness score**\n\n**Example Evaluation:**\n\
+  \nQuery: \"What is Sarah Chen's role and experience?\"\n\nRetrieved Context (from\
+  \ REM):\n- Entity: sarah-chen (person)\n- Properties:\n  - role: \"Senior AI Engineer\"\
+  \n  - experience_years: 5\n  - technologies: [\"PostgreSQL\", \"Python\", \"LangChain\"\
+  ]\n  - current_project: \"tidb-migration-spec\"\n\nAgent's Answer:\n\"Sarah Chen\
+  \ is a Senior AI Engineer with 5 years of experience. She specializes in\nPostgreSQL,\
+  \ Python, and LangChain. She is currently working on the TiDB migration\nproject\
+  \ and leads a team of 3 engineers. She has a PhD in Computer Science from MIT.\"\
+  \n\nFaithfulness Analysis:\n\nClaim 1: \"Senior AI Engineer\" ✓ FAITHFUL (in context:\
+  \ role)\nClaim 2: \"5 years of experience\" ✓ FAITHFUL (in context: experience_years)\n\
+  Claim 3: \"PostgreSQL, Python, LangChain\" ✓ FAITHFUL (in context: technologies)\n\
+  Claim 4: \"working on TiDB migration\" ✓ FAITHFUL (in context: current_project)\n\
+  Claim 5: \"leads a team of 3 engineers\" ✗ HALLUCINATION (NOT in context)\nClaim\
+  \ 6: \"PhD from MIT\" ✗ HALLUCINATION (NOT in context)\n\nFaithfulness: 4 faithful\
+  \ / 6 total = 0.67 (67%)\n\n**Faithfulness Criteria:**\n\nFor each claim in agent's\
+  \ answer:\n1. Is it explicitly stated in retrieved context?\n2. Is it a reasonable\
+  \ inference from context? (Use STRICT standard - prefer explicit)\n3. Is it common\
+  \ knowledge? (e.g., \"Python is a programming language\" - OK even if not in context)\n\
+  \n**Scoring Rules:**\n\n**Faithfulness Score (0.0-1.0):**\n- 1.0: All claims supported\
+  \ by context (100%)\n- 0.9: One minor unsupported claim (90%+)\n- 0.8: One significant\
+  \ unsupported claim (80-90%)\n- 0.7: A few unsupported claims (70-80%)\n- 0.5: Many\
+  \ unsupported claims (50-70%)\n- 0.3: Mostly unsupported (30-50%)\n- 0.0: Nearly\
+  \ all hallucinations (<30%)\n\n**Hallucination Severity (categorical):**\n- \"none\"\
+  : No hallucinations detected\n- \"minor\": Small details not in context (low impact)\n\
+  - \"moderate\": Significant details invented (medium impact)\n- \"severe\": Major\
+  \ facts fabricated (high impact)\n\n**Context Usage Quality (0.0-1.0):**\n- 1.0:\
+  \ Agent uses ALL relevant context, adds nothing unsupported\n- 0.8: Agent uses most\
+  \ context, minor additions\n- 0.6: Agent uses some context, several additions\n\
+  - 0.4: Agent uses little context, many additions\n- 0.2: Agent mostly ignoring context\n\
+  - 0.0: Agent completely ignoring context\n\n**YOUR ROLE: STRICT HALLUCINATION DETECTOR**\n\
+  \n1. **NO CELEBRATION** - Grade objectively\n2. **STRICT GRADING** - Any unsupported\
+  \ claim = hallucination\n3. **EXPLICIT SUPPORT REQUIRED** - Don't accept \"reasonable\
+  \ inferences\"\n4. **SEVERITY MATTERS** - Distinguish minor vs severe hallucinations\n\
+  \nBreak down agent's answer claim-by-claim and verify EACH against context.\n"
 fully_qualified_name: rem.evaluators.faithfulness.REMFaithfulnessEvaluator
 title: REMFaithfulnessEvaluator
 type: object
-
 labels:
-  - Evaluator
-  - REM
-  - Faithfulness
-  - Hallucination
-  - RAG
-
+- Evaluator
+- REM
+- Faithfulness
+- Hallucination
+- RAG
 properties:
   faithfulness_score:
     type: number
-    description: |
-      Faithfulness: Supported claims / Total claims in answer.
+    description: 'Faithfulness: Supported claims / Total claims in answer.
+
       Formula: |Claims ∩ Context| / |Claims|
+
+      '
     minimum: 0
     maximum: 1
-
   hallucination_severity:
     type: string
-    description: |
-      Severity of hallucinations detected.
-    enum:
-      - none
-      - minor
-      - moderate
-      - severe
+    description: 'Severity of hallucinations detected.
 
+      '
+    enum:
+    - none
+    - minor
+    - moderate
+    - severe
   context_usage_quality:
     type: number
-    description: |
-      Score 0-1 for how well agent uses retrieved context.
+    description: 'Score 0-1 for how well agent uses retrieved context.
+
       Does agent use relevant info from context? Or ignore it?
+
+      '
     minimum: 0
     maximum: 1
-
   overall_grounding_score:
     type: number
-    description: |
-      Overall grounding: Average of faithfulness + context_usage_quality.
+    description: 'Overall grounding: Average of faithfulness + context_usage_quality.
+
+      '
     minimum: 0
     maximum: 1
-
   pass:
     type: boolean
-    description: |
-      True if faithfulness_score >= 0.80 AND hallucination_severity != "severe".
+    description: 'True if faithfulness_score >= 0.80 AND hallucination_severity !=
+      "severe".
 
+      '
   claim_analysis:
     type: array
-    description: |
-      Per-claim faithfulness assessment.
-      Break down agent's answer into individual claims and verify each.
+    description: 'Per-claim faithfulness assessment.
+
+      Break down agent''s answer into individual claims and verify each.
+
+      '
     items:
       type: object
       properties:
@@ -162,22 +112,25 @@ properties:
           description: Is claim supported by retrieved context?
         context_support:
           type: string
-          description: |
-            If faithful: quote from context that supports claim.
+          description: 'If faithful: quote from context that supports claim.
+
             If unfaithful: note "NOT IN CONTEXT"
+
+            '
         severity:
           type: string
           enum:
-            - minor
-            - moderate
-            - severe
-          description: |
-            If unfaithful, how severe is this hallucination?
+          - minor
+          - moderate
+          - severe
+          description: 'If unfaithful, how severe is this hallucination?
 
+            '
   hallucinations_detected:
     type: array
-    description: |
-      List of all hallucinated claims (not supported by context).
+    description: 'List of all hallucinated claims (not supported by context).
+
+      '
     items:
       type: object
       properties:
@@ -188,82 +141,79 @@ properties:
         impact:
           type: string
           description: Why this hallucination matters
-
   unused_context:
     type: array
-    description: |
-      Important information in retrieved context that agent DIDN'T use.
+    description: 'Important information in retrieved context that agent DIDN''T use.
+
       Helps identify if agent is ignoring relevant data.
+
+      '
     items:
       type: string
-
   faithfulness_analysis:
     type: string
-    description: |
-      Detailed analysis of faithfulness.
-      Example: "Agent made 6 claims, 4 supported by context (67% faithful).
-               Hallucinated team size and education details not in retrieved entity."
-
+    description: "Detailed analysis of faithfulness.\nExample: \"Agent made 6 claims,\
+      \ 4 supported by context (67% faithful).\n         Hallucinated team size and\
+      \ education details not in retrieved entity.\"\n"
   context_usage_analysis:
     type: string
-    description: |
-      Analysis of how well agent uses context.
-      Example: "Agent used role, experience, and technologies from context.
-               Ignored current_project field (relevant but unused)."
-
+    description: "Analysis of how well agent uses context.\nExample: \"Agent used\
+      \ role, experience, and technologies from context.\n         Ignored current_project\
+      \ field (relevant but unused).\"\n"
   strengths:
     type: array
-    description: |
-      What the agent did well (objective).
+    description: 'What the agent did well (objective).
+
+      '
     items:
       type: string
-
   critical_gaps:
     type: array
-    description: |
-      Major issues (severe hallucinations, ignored context, etc.).
+    description: 'Major issues (severe hallucinations, ignored context, etc.).
+
+      '
     items:
       type: string
-
   improvement_suggestions:
     type: array
-    description: |
-      Actionable suggestions to improve faithfulness.
-      Example: "Add explicit instruction: 'Only use information from retrieved entities'"
+    description: 'Actionable suggestions to improve faithfulness.
+
+      Example: "Add explicit instruction: ''Only use information from retrieved entities''"
+
+      '
     items:
       type: string
-
   confidence_in_grading:
     type: string
-    description: |
-      Your confidence: "high", "medium", "low"
-    enum:
-      - high
-      - medium
-      - low
+    description: 'Your confidence: "high", "medium", "low"
 
+      '
+    enum:
+    - high
+    - medium
+    - low
   grading_notes:
     type: string
-    description: |
-      Internal notes about judgment calls.
-      Note: Common knowledge claims (e.g., "PostgreSQL is a database") are OK
-            even if not explicitly in context.
-
+    description: "Internal notes about judgment calls.\nNote: Common knowledge claims\
+      \ (e.g., \"PostgreSQL is a database\") are OK\n      even if not explicitly\
+      \ in context.\n"
 required:
-  - faithfulness_score
-  - hallucination_severity
-  - context_usage_quality
-  - overall_grounding_score
-  - pass
-  - claim_analysis
-  - hallucinations_detected
-  - unused_context
-  - faithfulness_analysis
-  - context_usage_analysis
-  - strengths
-  - critical_gaps
-  - improvement_suggestions
-  - confidence_in_grading
-  - grading_notes
-
-version: "1.0.0"
+- faithfulness_score
+- hallucination_severity
+- context_usage_quality
+- overall_grounding_score
+- pass
+- claim_analysis
+- hallucinations_detected
+- unused_context
+- faithfulness_analysis
+- context_usage_analysis
+- strengths
+- critical_gaps
+- improvement_suggestions
+- confidence_in_grading
+- grading_notes
+version: 1.0.0
+json_schema_extra:
+  kind: evaluator
+  name: rem-faithfulness

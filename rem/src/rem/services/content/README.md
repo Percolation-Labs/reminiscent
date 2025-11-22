@@ -657,6 +657,266 @@ export CONTENT__SUPPORTED_AUDIO_TYPES=""
 4. **Testable** - Settings can be mocked/overridden in tests
 5. **DRY** - Single source of truth for supported file types
 
+## Kind-Based Document Routing
+
+**Special Processing for YAML/JSON Files**
+
+REM implements a **kind-based routing system** that intercepts YAML/JSON files during ingestion and routes them to specialized processors based on their `kind` field. This allows different document types to be stored in appropriate database tables instead of the default `resources` table.
+
+### Architecture
+
+```
+YAML/JSON file ingestion
+    ↓
+ContentService.process_and_save()
+    ↓
+Check for 'kind' field in document
+    ├─ kind=agent or kind=evaluator
+    │   ↓
+    │   SchemaProvider validates schema structure
+    │   ↓
+    │   Save to 'schemas' table (NOT resources)
+    │   ↓
+    │   Log: "🔧 Custom provider flow initiated: kind=agent"
+    │
+    ├─ kind=engram
+    │   ↓
+    │   EngramProcessor creates structured memory
+    │   ↓
+    │   Save to 'resources' table (parent engram)
+    │   + 'moments' table (temporal events)
+    │   ↓
+    │   Log: "🔧 Custom provider flow initiated: kind=engram"
+    │
+    └─ No kind field
+        ↓
+        Standard text processing
+        ↓
+        Save to 'resources' table (default)
+```
+
+### Supported Kinds
+
+#### 1. **kind=agent** (Agent Schemas)
+
+Agent schemas define AI agents with structured outputs and tool access.
+
+**Required fields:**
+- `kind: agent`
+- `name: <kebab-case-name>` (e.g., "cv-parser", "query-agent")
+- `type: object`
+- `properties: {...}` (output schema)
+- `json_schema_extra.version: "1.0.0"`
+
+**Storage:** `schemas` table with `category='agent'`
+
+**Example:**
+```yaml
+---
+type: object
+description: |
+  You are a CV parser that extracts structured candidate information.
+
+properties:
+  candidate_name:
+    type: string
+    description: Full name
+  skills:
+    type: array
+    items:
+      type: string
+
+required:
+  - candidate_name
+
+json_schema_extra:
+  kind: agent
+  name: cv-parser
+  version: "1.0.0"
+  tags: [recruitment, hr]
+```
+
+#### 2. **kind=evaluator** (Evaluator Schemas)
+
+Evaluator schemas define LLM-as-a-Judge evaluators for agent output assessment.
+
+**Required fields:**
+- `kind: evaluator`
+- `name: <kebab-case-name>` (e.g., "rem-lookup-correctness")
+- `type: object`
+- `properties: {...}` (evaluation criteria)
+- `json_schema_extra.version: "1.0.0"`
+
+**Storage:** `schemas` table with `category='evaluator'`
+
+**Example:**
+```yaml
+---
+type: object
+description: |
+  Evaluate REM LOOKUP query correctness.
+
+properties:
+  correctness:
+    type: number
+    minimum: 0.0
+    maximum: 1.0
+  reasoning:
+    type: string
+
+required:
+  - correctness
+
+json_schema_extra:
+  kind: evaluator
+  name: rem-lookup-correctness
+  version: "1.0.0"
+```
+
+#### 3. **kind=engram** (Memory Documents)
+
+Engrams are bio-inspired memory documents that combine resources and temporal moments.
+
+**Required fields:**
+- `kind: engram`
+- `name: <unique-identifier>`
+- `content: <text content>`
+- `moments: [...]` (optional temporal events)
+
+**Storage:**
+- Parent engram → `resources` table with `category='engram'`
+- Child moments → `moments` table with graph edges to parent
+
+**Example:**
+```yaml
+---
+kind: engram
+name: team-standup-2025-01-15
+category: meeting
+summary: Daily standup discussion
+content: |
+  Team discussed sprint progress and blockers.
+
+moments:
+  - start_time: 2025-01-15T09:00:00Z
+    end_time: 2025-01-15T09:15:00Z
+    summary: Sprint update
+    speakers: [sarah, mike]
+    topics: [sprint-planning, blockers]
+
+graph_edges:
+  - dst: sarah-chen
+    rel_type: participated_in
+    weight: 1.0
+```
+
+### Implementation Details
+
+#### ContentService._process_schema()
+
+Handles `kind=agent` and `kind=evaluator`:
+
+```python
+async def _process_schema(result: dict, uri: str, user_id: str) -> dict:
+    """
+    Save agent/evaluator schema to schemas table.
+
+    Args:
+        result: Extraction result from SchemaProvider with:
+            - metadata.kind: "agent" or "evaluator"
+            - metadata.name: Schema name
+            - schema_data: Full JSON Schema dict
+        uri: File URI
+        user_id: Tenant ID
+
+    Returns:
+        dict with schema_name, kind, version, status
+    """
+    # Create Schema entity
+    schema_entity = Schema(
+        tenant_id=user_id,
+        name=metadata['name'],
+        spec=schema_data,
+        category=metadata['kind'],  # "agent" or "evaluator"
+        provider_configs=metadata.get('provider_configs', []),
+        embedding_fields=metadata.get('embedding_fields', []),
+    )
+
+    # Save to schemas table (NOT resources)
+    await postgres.batch_upsert(
+        records=[schema_entity],
+        model=Schema,
+        table_name="schemas",
+        entity_key_field="name",
+    )
+
+    logger.info(f"✅ Schema saved: {name} (kind={kind})")
+```
+
+#### ContentService._process_engram()
+
+Handles `kind=engram`:
+
+```python
+async def _process_engram(data: dict, uri: str, user_id: str) -> dict:
+    """
+    Process engram into resources + moments.
+
+    Args:
+        data: Parsed engram with kind=engram
+        uri: File URI
+        user_id: Tenant ID
+
+    Returns:
+        dict with resource_id, moment_ids, chunks_created
+    """
+    # Delegate to EngramProcessor
+    processor = EngramProcessor(postgres)
+    result = await processor.process_engram(
+        data=data,
+        tenant_id=user_id,
+        user_id=user_id,
+    )
+
+    logger.info(f"✅ Engram processed: {result['resource_id']} "
+                f"with {len(result['moment_ids'])} moments")
+
+    return result
+```
+
+### Why Kind-Based Routing?
+
+**Separation of Concerns:**
+- Agents/evaluators belong in `schemas` table (metadata, no embeddings)
+- Engrams belong in `resources` + `moments` tables (dual indexing)
+- Regular files belong in `resources` table (standard chunking)
+
+**Intercepting Default Flow:**
+- Without routing, YAML/JSON files would be chunked and embedded as generic resources
+- `kind` field allows processors to intercept before default processing
+- Enables specialized handling while maintaining simple ingestion API
+
+**Extensibility:**
+- Easy to add new kinds (e.g., `kind=workflow`, `kind=config`)
+- Each kind maps to a specialized processor
+- Processors can save to any tables, not just resources
+
+### Logging
+
+Custom provider flows are logged with emoji markers for visibility:
+
+```
+🔧 Custom provider flow initiated: kind=agent for cv-parser.yaml
+Saving schema to schemas table: kind=agent, name=cv-parser, version=1.0.0
+✅ Schema saved: cv-parser (kind=agent)
+```
+
+```
+🔧 Custom provider flow initiated: kind=engram for team-standup.yaml
+Processing engram: team-standup-2025-01-15
+✅ Engram processed: res_abc123 with 3 moments
+```
+
 ## Provider Plugin System
 
 You can register custom providers to either:

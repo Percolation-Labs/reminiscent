@@ -1,0 +1,42 @@
+# Graph seed data for testing TRAVERSE queries
+# Creates a connected graph: Resource A -> Resource B -> Moment C -> User D
+#
+# Usage: rem db load rem/tests/data/graph_seed.yaml --tenant-id test-tenant
+
+- table: users
+  key_field: name
+  rows:
+    - name: Sarah Chen
+      role: VP Engineering
+      email: sarah@example.com
+      metadata:
+        department: Engineering
+
+- table: moments
+  key_field: name
+  rows:
+    - name: Engineering Sync
+      moment_type: meeting
+      graph_edges:
+        - dst: Sarah Chen
+          rel_type: attendee
+          weight: 1.0
+
+- table: resources
+  key_field: name
+  rows:
+    - name: Meeting Notes
+      content: Notes from the sync...
+      category: document
+      graph_edges:
+        - dst: Engineering Sync
+          rel_type: documented_in
+          weight: 0.8
+
+    - name: Project Plan
+      content: High level plan...
+      category: document
+      graph_edges:
+        - dst: Meeting Notes
+          rel_type: referenced_by
+          weight: 0.5

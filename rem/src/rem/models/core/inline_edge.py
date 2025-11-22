@@ -16,9 +16,46 @@ Edge Weight Guidelines:
 - 0.5-0.7: Secondary relationships (references, related_to, inspired_by)
 - 0.3-0.4: Weak relationships (mentions, cites)
 
-Entity Type Convention (in properties.dst_entity_type):
-- Format: <schema>[/<category>]
-- Examples: person/employee, document/rfc, system/api, project/internal
+Destination Entity Type Convention (CRITICAL - properties.dst_entity_type):
+
+Format: <table_schema>:<category>/<key>
+
+Where:
+- table_schema: Database table (resources, moments, users, etc.)
+- category: Optional entity category within that table
+- key: The actual entity key (must match dst field)
+
+Examples:
+- "resources:managers/bob" → Look up bob in resources table with category="managers"
+- "users:engineers/sarah-chen" → Look up sarah-chen in users table with category="engineers"
+- "moments:meetings/standup-2024-01" → Look up in moments table with category="meetings"
+- "resources/api-design-v2" → Look up api-design-v2 in resources table (no category)
+- "bob" → Defaults to resources table, no category (use sparingly)
+
+IMPORTANT - Upsert Rules:
+1. When upserting referenced entities, parse dst_entity_type to determine:
+   - table_schema → which table to upsert into
+   - category → set the 'category' field in that table
+   - key → match against entity_key_field (usually 'name' or 'id')
+
+2. If dst_entity_type is missing or just a type like "managers":
+   - Default table_schema to "resources"
+   - Set category to the type (e.g., "managers")
+   - Use dst as the key
+
+3. Agents should NEVER guess entity types
+   - If type is unknown, omit dst_entity_type or set to null
+   - Better to have no category than wrong category
+   - System will handle entities without categories
+
+4. Category is optional and can be null - this is perfectly fine
+   - Categories enable filtering but are not required for graph traversal
+   - Use categories when they add semantic value (roles, types, domains)
+
+Edge Type Format Guidelines (rel_type):
+- Use snake_case: "authored_by", "depends_on", "references"
+- Be specific but consistent: "reviewed_by" not "reviewed"
+- Use passive voice for bidirectional clarity: "authored_by" (reverse: "authors")
 """
 
 from datetime import datetime, timezone
@@ -37,21 +74,25 @@ class InlineEdge(BaseModel):
 
     dst: str = Field(
         ...,
-        description="Human-readable destination key (e.g., 'tidb-migration-spec', 'sarah-chen')",
+        description="Human-readable destination key matching the entity's name/id field (e.g., 'tidb-migration-spec', 'sarah-chen', 'bob')",
     )
     rel_type: str = Field(
         ...,
-        description="Relationship type (e.g., 'builds-on', 'authored_by', 'references')",
+        description="Relationship type in snake_case (e.g., 'authored_by', 'depends_on', 'references')",
     )
     weight: float = Field(
         default=0.5,
         ge=0.0,
         le=1.0,
-        description="Relationship strength (0.0-1.0)",
+        description="Relationship strength: 1.0=primary, 0.8-0.9=important, 0.5-0.7=secondary, 0.3-0.4=weak",
     )
     properties: dict = Field(
         default_factory=dict,
-        description="Rich metadata (dst_name, dst_entity_type, confidence, context, etc.)",
+        description=(
+            "Rich metadata. CRITICAL field: dst_entity_type with format 'table_schema:category/key' "
+            "(e.g., 'resources:managers/bob', 'users:engineers/sarah-chen'). "
+            "Used to determine upsert target table and category. Can be null/omitted if unknown."
+        ),
     )
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None), description="Edge creation timestamp"

@@ -143,40 +143,47 @@ def create_mcp_server(is_local: bool = False) -> FastMCP:
             "\n"
             "**Quick Start:**\n"
             "1. User: \"Who is Sarah?\"\n"
-            "   → Call: rem_query(query_type=\"lookup\", key=\"Sarah\")\n"
+            "   → Call: search_rem(query_type=\"lookup\", entity_key=\"Sarah\", tenant_id=\"...\")\n"
             "\n"
             "2. User: \"Find documents about database migration\"\n"
-            "   → Call: rem_query(query_type=\"search\", query_text=\"database migration\", table=\"resources\")\n"
+            "   → Call: search_rem(query_type=\"search\", query_text=\"database migration\", table=\"resources\", tenant_id=\"...\")\n"
             "\n"
             "3. User: \"Who reports to Sally?\"\n"
-            "   → Call: rem_query(query_type=\"traverse\", initial_query=\"Sally\", edge_types=[\"reports-to\"], depth=2)\n"
+            "   → Call: search_rem(query_type=\"traverse\", initial_query=\"Sally\", edge_types=[\"reports-to\"], depth=2, tenant_id=\"...\")\n"
             "\n"
             "4. User: \"Show me Sarah's org chart\" (Multi-turn example)\n"
-            "   → Turn 1: rem_query(query_type=\"lookup\", key=\"Sarah\")\n"
-            "   → Turn 2: rem_query(query_type=\"traverse\", initial_query=\"Sarah\", depth=0)  # PLAN mode\n"
-            "   → Turn 3: rem_query(query_type=\"traverse\", initial_query=\"Sarah\", edge_types=[\"manages\", \"reports-to\"], depth=2)\n"
+            "   → Turn 1: search_rem(query_type=\"lookup\", entity_key=\"Sarah\", tenant_id=\"...\")\n"
+            "   → Turn 2: search_rem(query_type=\"traverse\", initial_query=\"Sarah\", depth=0, tenant_id=\"...\")  # PLAN mode\n"
+            "   → Turn 3: search_rem(query_type=\"traverse\", initial_query=\"Sarah\", edge_types=[\"manages\", \"reports-to\"], depth=2, tenant_id=\"...\")\n"
+            "\n"
+            "5. User: \"What did we discuss last week about the TiDB migration?\"\n"
+            "   → Call: ask_rem_agent(query=\"What did we discuss last week about the TiDB migration?\", tenant_id=\"...\")\n"
+            "\n"
+            "6. User: \"Ingest this PDF file\"\n"
+            "   → Call: ingest_into_rem(file_uri=\"s3://bucket/file.pdf\", tenant_id=\"...\")\n"
         ),
     )
 
-    # Register REM query tools
-    from .tools import ask_rem, parse_and_ingest_file, rem_query
+    # Register REM tools
+    from .tools import ask_rem_agent, ingest_into_rem, read_resource, search_rem
 
-    mcp.tool()(rem_query)
-    mcp.tool()(ask_rem)
+    mcp.tool()(search_rem)
+    mcp.tool()(ask_rem_agent)
+    mcp.tool()(read_resource)
 
     # File ingestion tool (with local path support for local servers)
     # Wrap to inject is_local parameter
     from functools import wraps
 
-    @wraps(parse_and_ingest_file)
-    async def parse_and_ingest_file_wrapper(
+    @wraps(ingest_into_rem)
+    async def ingest_into_rem_wrapper(
         file_uri: str,
         tenant_id: str,
         user_id: str | None = None,
         category: str | None = None,
         tags: list[str] | None = None,
     ):
-        return await parse_and_ingest_file(
+        return await ingest_into_rem(
             file_uri=file_uri,
             tenant_id=tenant_id,
             user_id=user_id,
@@ -185,7 +192,7 @@ def create_mcp_server(is_local: bool = False) -> FastMCP:
             is_local_server=is_local,
         )
 
-    mcp.tool()(parse_and_ingest_file_wrapper)
+    mcp.tool()(ingest_into_rem_wrapper)
 
     # Register prompts
     from .prompts import register_prompts

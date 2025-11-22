@@ -8,7 +8,7 @@ import yaml
 
 from rem.agentic.context import AgentContext
 from rem.agentic.providers.pydantic_ai import create_pydantic_ai_agent
-from rem.api.mcp_router.tools import parse_and_ingest_file, init_services
+from rem.api.mcp_router.tools import ingest_into_rem, init_services
 from rem.settings import settings
 from rem.models.entities import Resource
 from rem.services.postgres import PostgresService
@@ -79,7 +79,7 @@ async def test_ingest_contract_pdf(postgres_service: PostgresService, monkeypatc
     assert contract_path.exists(), "Contract PDF not found"
 
     # Ingest the file
-    result = await parse_and_ingest_file(
+    result = await ingest_into_rem(
         file_uri=str(contract_path.absolute()),
         user_id=user_id,
         tenant_id=tenant_id,

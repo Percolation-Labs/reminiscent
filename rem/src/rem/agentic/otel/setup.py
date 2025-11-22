@@ -122,7 +122,7 @@ def set_agent_resource_attributes(agent_schema: dict[str, Any] | None = None) ->
     Called before creating agent to set span attributes with agent metadata.
 
     Args:
-        agent_schema: Agent schema with metadata (FQN, version, etc.)
+        agent_schema: Agent schema with metadata (kind, name, version, etc.)
     """
     if not settings.otel.enabled or not agent_schema:
         return
@@ -133,15 +133,19 @@ def set_agent_resource_attributes(agent_schema: dict[str, Any] | None = None) ->
         # Get current span and set attributes
         span = trace.get_current_span()
         if span.is_recording():
-            fqn = agent_schema.get("json_schema_extra", {}).get("fully_qualified_name")
-            version = agent_schema.get("json_schema_extra", {}).get("version", "unknown")
+            json_extra = agent_schema.get("json_schema_extra", {})
+            kind = json_extra.get("kind")
+            name = json_extra.get("name")
+            version = json_extra.get("version", "unknown")
 
-            if fqn:
-                span.set_attribute("agent.fqn", fqn)
+            if kind:
+                span.set_attribute("agent.kind", kind)
+            if name:
+                span.set_attribute("agent.name", name)
             if version:
                 span.set_attribute("agent.version", version)
 
-            logger.debug(f"Set agent resource attributes: fqn={fqn}, version={version}")
+            logger.debug(f"Set agent resource attributes: kind={kind}, name={name}, version={version}")
 
     except Exception as e:
         logger.warning(f"Failed to set agent resource attributes: {e}")

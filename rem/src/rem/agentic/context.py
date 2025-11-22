@@ -33,11 +33,11 @@ class AgentContext(BaseModel):
     Example:
         # From HTTP request
         context = AgentContext.from_headers(request.headers)
-        agent = await create_pydantic_ai_agent(context)
+        agent = await create_agent(context)
 
         # Direct construction for testing
         context = AgentContext(user_id="test-user", tenant_id="test-tenant")
-        agent = await create_pydantic_ai_agent(context)
+        agent = await create_agent(context)
     """
 
     user_id: str | None = Field(

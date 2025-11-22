@@ -2,7 +2,7 @@
 Integration tests for agent schema protocol with real agent schemas.
 """
 
-import json
+import yaml
 import pytest
 from pathlib import Path
 
@@ -12,19 +12,19 @@ from rem.agentic.schema import validate_agent_schema
 @pytest.fixture
 def query_agent_schema_path():
     """Path to query agent schema."""
-    return Path(__file__).parent.parent.parent / "data" / "agents" / "query_agent.json"
+    return Path(__file__).parent.parent.parent / "data" / "schemas" / "agents" / "query_agent.yaml"
 
 
 @pytest.fixture
 def summarization_agent_schema_path():
     """Path to summarization agent schema."""
-    return Path(__file__).parent.parent.parent / "data" / "agents" / "summarization_agent.json"
+    return Path(__file__).parent.parent.parent / "data" / "schemas" / "agents" / "summarization_agent.yaml"
 
 
 def test_validate_query_agent_schema(query_agent_schema_path):
     """Test validating real query agent schema."""
     with open(query_agent_schema_path) as f:
-        schema_dict = json.load(f)
+        schema_dict = yaml.safe_load(f)
 
     # Validate schema structure
     validated = validate_agent_schema(schema_dict)
@@ -67,7 +67,7 @@ def test_validate_query_agent_schema(query_agent_schema_path):
 def test_validate_summarization_agent_schema(summarization_agent_schema_path):
     """Test validating real summarization agent schema."""
     with open(summarization_agent_schema_path) as f:
-        schema_dict = json.load(f)
+        schema_dict = yaml.safe_load(f)
 
     # Validate schema structure
     validated = validate_agent_schema(schema_dict)
@@ -103,7 +103,7 @@ def test_schema_roundtrip(query_agent_schema_path):
     """Test loading, validating, and serializing schema."""
     # Load original
     with open(query_agent_schema_path) as f:
-        original = json.load(f)
+        original = yaml.safe_load(f)
 
     # Validate
     validated = validate_agent_schema(original)
@@ -133,7 +133,7 @@ def test_schema_roundtrip(query_agent_schema_path):
 def test_schema_metadata_access(query_agent_schema_path):
     """Test accessing schema metadata through Pydantic models."""
     with open(query_agent_schema_path) as f:
-        schema_dict = json.load(f)
+        schema_dict = yaml.safe_load(f)
 
     validated = validate_agent_schema(schema_dict)
 
@@ -155,7 +155,7 @@ def test_schema_metadata_access(query_agent_schema_path):
 def test_schema_type_validation(query_agent_schema_path):
     """Test that schema validation catches type errors."""
     with open(query_agent_schema_path) as f:
-        schema_dict = json.load(f)
+        schema_dict = yaml.safe_load(f)
 
     # Validate valid schema
     validated = validate_agent_schema(schema_dict)

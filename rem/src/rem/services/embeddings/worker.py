@@ -82,7 +82,8 @@ class EmbeddingWorker:
         self.running = False
 
         # Store API key for direct HTTP requests
-        self.openai_api_key = openai_api_key or os.getenv("OPENAI_API_KEY")
+        from ...settings import settings
+        self.openai_api_key = openai_api_key or settings.llm.openai_api_key
         if not self.openai_api_key:
             logger.warning(
                 "No OpenAI API key provided - embeddings will use zero vectors"

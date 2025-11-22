@@ -18,37 +18,87 @@ rem --help
 ## Basic Usage
 
 ```bash
-# Simple question (streaming by default)
-rem ask schemas/simple-agent.yaml "What is 2+2?"
+# Simple question (non-streaming by default)
+rem ask simple-agent "What is 2+2?"
 
-# Non-streaming mode
-rem ask schemas/simple-agent.yaml "What is 2+2?" --no-stream
+# Streaming mode for real-time output
+rem ask simple-agent "What is 2+2?" --stream
 
 # With specific model
-rem ask schemas/simple-agent.yaml "What is 2+2?" --model openai:gpt-4o-mini
+rem ask simple-agent "What is 2+2?" --model openai:gpt-4o-mini
 
-# Complex schema with structured output
-rem ask schemas/query-agent.yaml "Find all documents by Sarah" --model openai:gpt-4o-mini
+# Structured output
+rem ask query-agent "Find all documents by Sarah" --model openai:gpt-4o-mini
+
+# Process file and save output
+rem ask contract-analyzer -i rem/tests/data/content-examples/service_agreement.txt -o output.yaml
+```
+
+## File Processing
+
+The `--input-file` option allows you to process files directly instead of providing a text query:
+
+```bash
+# Extract data from contract (text file)
+rem ask contract-analyzer \
+  -i rem/tests/data/content-examples/service_agreement.txt \
+  -o output.yaml
+
+# Extract from PDF contract
+rem ask contract-analyzer \
+  -i rem/tests/data/content-examples/pdf/service_contract.pdf \
+  -o output.yaml
+
+# With specific model
+rem ask contract-analyzer \
+  -i rem/tests/data/content-examples/service_agreement.txt \
+  -o output.yaml \
+  -m anthropic:claude-sonnet-4-5-20250929
+
+# Output to console (default)
+rem ask contract-analyzer -i rem/tests/data/content-examples/service_agreement.txt
+
+# Stream output in real-time
+rem ask contract-analyzer -i rem/tests/data/content-examples/service_agreement.txt --stream
+```
+
+**Schema name resolution:**
+- Short names: `contract-analyzer` → `schemas/agents/contract-analyzer.yaml`
+- With prefix: `agents/contract-analyzer` → `schemas/agents/contract-analyzer.yaml`
+- With extension: `contract-analyzer.yaml` → `schemas/agents/contract-analyzer.yaml`
+- Full paths: `schemas/agents/contract-analyzer.yaml` (as-is)
+```
+
+**Supported file types:**
+- Documents: PDF, DOCX, PPTX, XLSX (via Kreuzberg)
+- Text: TXT, MD, Markdown, code files
+- Schemas: YAML, JSON
+- Audio: MP3, WAV, M4A (via Whisper API)
+
+See [examples/README.md](../../../examples/README.md) for complete contract extraction examples.
 ```
 
 ## Command Options
 
 ```
-rem ask NAME QUERY [OPTIONS]
+rem ask NAME [QUERY] [OPTIONS]
 
 Arguments:
-  NAME   Schema name or file path
-         - File path: schemas/simple-agent.yaml
-         - Registry name: query-agent (requires registry implementation)
+  NAME   Agent schema name (YAML files in schemas/agents/)
+         - Short name: contract-analyzer
+         - With extension: contract-analyzer.yaml
+         - Full path: schemas/agents/contract-analyzer.yaml
 
-  QUERY  User query to send to the agent
+  QUERY  User query to send to the agent (optional if --input-file is used)
 
 Options:
   --model, -m TEXT            LLM model (default: from settings)
   --temperature, -t FLOAT     Temperature 0.0-1.0 (not yet implemented)
   --max-turns INTEGER         Maximum turns for execution (default: 10)
   --version, -v TEXT          Schema version for registry lookup
-  --stream / --no-stream      Enable/disable streaming (default: enabled)
+  --stream / --no-stream      Enable/disable streaming (default: disabled)
+  --input-file, -i PATH       Read input from file (PDF, TXT, Markdown, etc.)
+  --output-file, -o PATH      Write output to file (YAML format)
   --user-id TEXT              User ID for context (default: cli-user)
   --tenant-id TEXT            Tenant ID for context (default: default)
   --session-id TEXT           Session ID for context (default: auto-generated)
@@ -161,7 +211,28 @@ json_schema_extra:
 
 ## Streaming vs Non-Streaming
 
-### Streaming Mode (default)
+### Non-Streaming Mode (default)
+
+Uses `agent.run()` to return complete structured result at once:
+
+```bash
+rem ask schemas/simple-agent.yaml "Explain quantum computing"
+```
+
+Output:
+```json
+{
+  "answer": "Quantum computing uses quantum mechanical phenomena..."
+}
+```
+
+**Best for:**
+- Saving output to files
+- Structured data extraction
+- Processing files with complex schemas
+- Programmatic usage
+
+### Streaming Mode
 
 Uses `agent.iter()` to stream events in real-time:
 - Tool call markers: `[Calling: tool_name]`
@@ -182,20 +253,10 @@ Quantum computing uses quantum mechanical phenomena like superposition...
 }
 ```
 
-### Non-Streaming Mode
-
-Uses `agent.run()` to return complete result at once:
-
-```bash
-rem ask schemas/simple-agent.yaml "Explain quantum computing" --no-stream
-```
-
-Output:
-```json
-{
-  "answer": "Quantum computing uses quantum mechanical phenomena..."
-}
-```
+**Best for:**
+- Interactive conversations
+- Long-running queries where you want to see progress
+- Debugging agent behavior
 
 ## Implementation Details
 
@@ -327,14 +388,17 @@ rem ask query-agent "Find documents" --version 1.2.0
 ## Testing
 
 ```bash
-# Test simple agent (non-streaming)
-rem ask schemas/simple-agent.yaml "What is 2+2?" --no-stream --model openai:gpt-4o-mini
+# Test simple agent (default non-streaming)
+rem ask schemas/simple-agent.yaml "What is 2+2?" --model openai:gpt-4o-mini
 
 # Test simple agent (streaming)
 rem ask schemas/simple-agent.yaml "What is 2+2?" --stream --model openai:gpt-4o-mini
 
 # Test structured output
 rem ask schemas/query-agent.yaml "Find all documents by Sarah" --model openai:gpt-4o-mini
+
+# Test file processing
+rem ask contract-analyzer -i examples/contract.pdf -o output.yaml
 
 # Test with different models
 rem ask schemas/simple-agent.yaml "Hello" --model openai:gpt-4o

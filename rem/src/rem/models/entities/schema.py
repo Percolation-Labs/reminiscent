@@ -60,7 +60,11 @@ class Schema(CoreModel):
 
     category: Optional[str] = Field(
         default=None,
-        description="Schema category (agent-type, workflow, ontology-extractor, evaluator, etc.)",
+        description=(
+            "Schema category distinguishing schema types. "
+            "Values: 'agent' (AI agents), 'evaluator' (LLM-as-a-Judge evaluators). "
+            "Maps directly from json_schema_extra.kind field during ingestion."
+        ),
     )
 
     # Ontology extraction support

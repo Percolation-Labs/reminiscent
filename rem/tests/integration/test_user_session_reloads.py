@@ -76,7 +76,7 @@ async def test_user_profile_persists_across_sessions():
             created_at=datetime.now(timezone.utc) - timedelta(hours=2),
             updated_at=datetime.now(timezone.utc) - timedelta(hours=2),
         )
-        await resource_repo.create(resource1)
+        await resource_repo.upsert(resource1)
 
         resource2 = Resource(
             id="resource-2",
@@ -89,7 +89,7 @@ async def test_user_profile_persists_across_sessions():
             created_at=datetime.now(timezone.utc) - timedelta(hours=1),
             updated_at=datetime.now(timezone.utc) - timedelta(hours=1),
         )
-        await resource_repo.create(resource2)
+        await resource_repo.upsert(resource2)
 
         # Create Session A with conversation
         session_a = Session(
@@ -102,7 +102,7 @@ async def test_user_profile_persists_across_sessions():
             created_at=datetime.now(timezone.utc) - timedelta(minutes=30),
             updated_at=datetime.now(timezone.utc) - timedelta(minutes=30),
         )
-        await session_repo.create(session_a)
+        await session_repo.upsert(session_a)
 
         print(f"✓ Created Session A: {session_a.id}")
         print(f"✓ Created 2 resources")
@@ -186,7 +186,7 @@ async def test_user_profile_persists_across_sessions():
             created_at=datetime.now(timezone.utc),
             updated_at=datetime.now(timezone.utc),
         )
-        await session_repo.create(session_b)
+        await session_repo.upsert(session_b)
 
         print(f"✓ Created Session B: {session_b.id}")
         print(f"✓ User profile available in session context")
@@ -207,7 +207,7 @@ async def test_user_profile_persists_across_sessions():
             created_at=datetime.now(timezone.utc),
             updated_at=datetime.now(timezone.utc),
         )
-        await resource_repo.create(resource3)
+        await resource_repo.upsert(resource3)
 
         # Run profile update again
         worker2 = DreamingWorker()
@@ -284,7 +284,7 @@ async def test_user_profile_queryable_by_name():
             created_at=datetime.now(timezone.utc),
             updated_at=datetime.now(timezone.utc),
         )
-        await user_repo.create(user)
+        await user_repo.upsert(user)
 
         # Query by ID
         user_by_id = await user_repo.get_by_id(USER_ID, TENANT_ID)

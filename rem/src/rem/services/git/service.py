@@ -72,7 +72,7 @@ GitPython (git CLI wrapper)
 **Integration with Agent Factory**:
 ```python
 from rem.services.git_service import GitService
-from rem.agentic.factory import create_pydantic_ai_agent
+from rem.agentic.factory import create_agent
 
 git_svc = GitService()
 
@@ -80,7 +80,7 @@ git_svc = GitService()
 schema_content = git_svc.load_schema("cv-parser", version="v2.1.0")
 
 # Create agent
-agent = create_pydantic_ai_agent(schema_content)
+agent = create_agent(schema_content)
 
 # Run agent
 result = await agent.run("Extract from resume...")
@@ -250,8 +250,8 @@ class GitService:
             >>> schema = git_svc.load_schema("cv-parser", version="v2.1.0")
 
             >>> # Use in agent factory
-            >>> from rem.agentic.factory import create_pydantic_ai_agent
-            >>> agent = create_pydantic_ai_agent(schema)
+            >>> from rem.agentic.factory import create_agent
+            >>> agent = create_agent(schema)
         """
         schema_path = f"{self.schemas_dir}/{schema_name}.yaml"
 

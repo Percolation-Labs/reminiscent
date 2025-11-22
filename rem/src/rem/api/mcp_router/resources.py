@@ -483,13 +483,53 @@ def register_status_resources(mcp: FastMCP):
 - TRAVERSE: Multi-hop graph traversal
 
 ## MCP Tools
-- rem_query: Execute REM queries
-- ask_rem: Natural language to REM query
-- create_resource: Create new resource
-- create_moment: Create temporal narrative
-- update_graph_edges: Update entity graph edges
+- search_rem: Execute REM queries (LOOKUP, FUZZY, SEARCH, SQL, TRAVERSE)
+- ask_rem_agent: Natural language to REM query conversion
+- ingest_into_rem: File ingestion pipeline
+- read_resource: Access MCP resources
 
 ## Status
 ✓ System operational
 ✓ Ready to process queries
 """
+
+
+# Resource dispatcher for read_resource tool
+async def load_resource(uri: str) -> dict | str:
+    """
+    Load an MCP resource by URI.
+
+    This function is called by the read_resource tool to dispatch to
+    registered resource handlers.
+
+    Args:
+        uri: Resource URI (e.g., "rem://schemas", "rem://status")
+
+    Returns:
+        Resource data (dict or string)
+
+    Raises:
+        ValueError: If URI is invalid or resource not found
+    """
+    # Create temporary MCP instance with resources
+    from fastmcp import FastMCP
+
+    mcp = FastMCP(name="temp")
+
+    # Register all resources
+    register_schema_resources(mcp)
+    register_agent_resources(mcp)
+    register_file_resources(mcp)
+    register_status_resources(mcp)
+
+    # Get resource handlers from MCP internal registry
+    # FastMCP stores resources in a dict by URI
+    if hasattr(mcp, "_resources"):
+        if uri in mcp._resources:
+            handler = mcp._resources[uri]
+            if callable(handler):
+                result = handler()
+                return result if result else {"error": "Resource returned None"}
+
+    # If not found, raise error
+    raise ValueError(f"Resource not found: {uri}. Available resources: {list(mcp._resources.keys()) if hasattr(mcp, '_resources') else 'unknown'}")

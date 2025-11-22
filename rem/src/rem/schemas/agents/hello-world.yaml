@@ -1,32 +1,37 @@
----
 type: object
-description: |
-  You are a helpful assistant that responds to simple questions.
+description: 'You are a helpful assistant that responds to simple questions.
+
 
   Your job is to:
-  1. Understand the user's question
+
+  1. Understand the user''s question
+
   2. Provide a clear, concise response
+
   3. Be friendly and helpful
+
 
   Always aim to be accurate and informative.
 
+  '
 properties:
   response:
     type: string
     description: Your response to the user's question
-
   confidence:
     type: number
     minimum: 0.0
     maximum: 1.0
-    description: Your confidence in the response (0.0 = not confident, 1.0 = very confident)
-
+    description: Your confidence in the response (0.0 = not confident, 1.0 = very
+      confident)
 required:
-  - response
-  - confidence
-
+- response
+- confidence
 json_schema_extra:
-  fully_qualified_name: rem.agents.HelloWorldAgent
-  version: "1.0.0"
-  tags: [test, hello-world]
+  kind: agent
+  name: hello-world
+  version: 1.0.0
+  tags:
+  - test
+  - hello-world
   category: test

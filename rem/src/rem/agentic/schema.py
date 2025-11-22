@@ -100,32 +100,22 @@ class AgentSchemaMetadata(BaseModel):
     All fields are optional but recommended for production agents.
     """
 
-    fully_qualified_name: str = Field(
+    kind: str = Field(
         description=(
-            "Fully qualified Python module path for the agent. "
-            "Format: 'package.module.ClassName'. "
-            "Examples: 'rem.agents.QueryAgent', 'rem.agents.SummarizationAgent'. "
-            "Used for dynamic model naming and introspection."
+            "Schema kind/type. Determines how the schema is processed. "
+            "Values: 'agent', 'evaluator', 'engram'. "
+            "Examples: 'agent' for agents, 'evaluator' for LLM-as-a-Judge evaluators, "
+            "'engram' for memory documents. "
+            "Used by processors to route schemas to the correct handler."
         )
     )
 
-    name: str | None = Field(
-        default=None,
+    name: str = Field(
         description=(
-            "Human-readable agent name. "
-            "Examples: 'Query Agent', 'Summarization Agent'. "
-            "Used in UI displays and logs. If not provided, derived from "
-            "fully_qualified_name."
-        ),
-    )
-
-    short_name: str | None = Field(
-        default=None,
-        description=(
-            "Short identifier for the agent (lowercase, hyphenated). "
-            "Examples: 'query-agent', 'summarize'. "
-            "Used in URLs, file paths, and references. "
-            "If not provided, derived from name or fully_qualified_name."
+            "Unique schema identifier (kebab-case). "
+            "Examples: 'query-agent', 'cv-parser', 'rem-lookup-correctness'. "
+            "Used in URLs, file paths, database keys, and references. "
+            "Must be unique within the kind namespace."
         ),
     )
 
@@ -209,7 +199,8 @@ class AgentSchema(BaseModel):
           },
           "required": ["answer", "confidence"],
           "json_schema_extra": {
-            "fully_qualified_name": "rem.agents.QueryAgent",
+            "kind": "agent",
+            "name": "query-agent",
             "version": "1.0.0",
             "tools": [{"name": "lookup_entity", "mcp_server": "rem"}]
           }
@@ -258,8 +249,8 @@ class AgentSchema(BaseModel):
         ),
     )
 
-    json_schema_extra: AgentSchemaMetadata = Field(
-        default_factory=AgentSchemaMetadata,
+    json_schema_extra: AgentSchemaMetadata | dict[str, Any] = Field(
+        default_factory=dict,
         description=(
             "REM-specific metadata extending JSON Schema. "
             "Contains agent identification, versioning, and MCP configuration. "
@@ -271,7 +262,7 @@ class AgentSchema(BaseModel):
     # Additional JSON Schema fields (optional)
     title: str | None = Field(
         default=None,
-        description="Schema title. If not provided, derived from fully_qualified_name.",
+        description="Schema title. If not provided, derived from name.",
     )
 
     definitions: dict[str, Any] | None = Field(
@@ -315,8 +306,8 @@ def validate_agent_schema(schema: dict[str, Any]) -> AgentSchema:
     Example:
         >>> schema = load_schema("agents/query_agent.json")
         >>> validated = validate_agent_schema(schema)
-        >>> print(validated.json_schema_extra.fully_qualified_name)
-        "rem.agents.QueryAgent"
+        >>> print(validated.json_schema_extra["name"])
+        "query-agent"
     """
     return AgentSchema.model_validate(schema)
 
@@ -325,7 +316,8 @@ def create_agent_schema(
     description: str,
     properties: dict[str, Any],
     required: list[str],
-    fully_qualified_name: str,
+    kind: str,
+    name: str,
     tools: list[dict[str, Any]] | None = None,
     resources: list[dict[str, Any]] | None = None,
     version: str = "1.0.0",
@@ -338,7 +330,8 @@ def create_agent_schema(
         description: System prompt
         properties: Output schema properties
         required: Required field names
-        fully_qualified_name: Python module path
+        kind: Schema kind ('agent' or 'evaluator')
+        name: Schema name in kebab-case (e.g., 'query-agent')
         tools: MCP tool references
         resources: MCP resource patterns
         version: Schema version
@@ -355,15 +348,17 @@ def create_agent_schema(
         ...         "confidence": {"type": "number", "minimum": 0, "maximum": 1}
         ...     },
         ...     required=["answer"],
-        ...     fully_qualified_name="rem.agents.Assistant",
+        ...     kind="agent",
+        ...     name="assistant",
         ...     tools=[{"name": "search", "mcp_server": "rem"}],
         ...     version="1.0.0"
         ... )
-        >>> schema.json_schema_extra.tools[0].name
+        >>> schema.json_schema_extra["tools"][0]["name"]
         "search"
     """
     metadata = AgentSchemaMetadata(
-        fully_qualified_name=fully_qualified_name,
+        kind=kind,
+        name=name,
         tools=[MCPToolReference.model_validate(t) for t in (tools or [])],
         resources=[MCPResourceReference.model_validate(r) for r in (resources or [])],
         version=version,
@@ -373,6 +368,6 @@ def create_agent_schema(
         description=description,
         properties=properties,
         required=required,
-        json_schema_extra=metadata,
+        json_schema_extra=metadata.model_dump(),
         **kwargs,
     )

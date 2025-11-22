@@ -33,6 +33,113 @@ This is a cloud-native REM (Resources Entities Moments) system for agentic AI wo
 - Pydantic 2.0 models for all data structures
 - OCI-based deployments for reproducibility
 
+## Coding Conventions
+
+**CRITICAL: Follow these conventions to prevent code duplication and maintenance issues**
+
+### 1. Configuration Management
+- **ALWAYS** use `settings.llm.*_api_key` for API key lookups
+- **NEVER** use `os.getenv()` for API keys or configuration
+- Settings module provides centralized, type-safe configuration with defaults
+- Examples:
+  ```python
+  # ✅ CORRECT
+  from rem.settings import settings
+  api_key = settings.llm.openai_api_key
+
+  # ❌ WRONG
+  import os
+  api_key = os.getenv("OPENAI_API_KEY")
+  ```
+
+### 2. Database Service Instantiation
+- **ALWAYS** use `get_postgres_service()` factory function
+- **NEVER** instantiate `PostgresService()` directly
+- Factory handles connection pooling, lifecycle management, and configuration
+- Examples:
+  ```python
+  # ✅ CORRECT
+  from rem.services.postgres import get_postgres_service
+  db = get_postgres_service()
+  await db.connect()
+
+  # ❌ WRONG
+  from rem.services.postgres.service import PostgresService
+  db = PostgresService()
+  ```
+
+### 3. Pydantic Model Serialization
+- **ALWAYS** use `serialize_agent_result()` or `serialize_agent_result_json()` utilities
+- **NEVER** manually check `hasattr(obj, "model_dump")` for serialization
+- Utilities handle Pydantic models, primitives, and nested structures correctly
+- Critical for MCP tools, API responses, and SSE streaming
+- Examples:
+  ```python
+  # ✅ CORRECT
+  from rem.agentic.serialization import serialize_agent_result, serialize_agent_result_json
+
+  # For dict output
+  output_dict = serialize_agent_result(result.output)
+
+  # For JSON string output (SSE, API responses)
+  output_json = serialize_agent_result_json(result.output)
+
+  # ❌ WRONG
+  if hasattr(result.output, "model_dump"):
+      output = result.output.model_dump()
+  else:
+      output = str(result.output)
+  ```
+
+### 4. Provider-Agnostic Naming
+- **ALWAYS** use provider-agnostic names in public interfaces
+- **NEVER** include provider names (e.g., "pydantic", "openai") in function/class names exposed to users
+- Providers are implementation details, not part of the API contract
+- Examples:
+  ```python
+  # ✅ CORRECT
+  from rem.agentic import create_agent
+  agent = await create_agent(context=context)
+
+  # ❌ WRONG
+  from rem.agentic import create_pydantic_ai_agent
+  agent = await create_pydantic_ai_agent(context=context)
+  ```
+
+### 5. Schema Loading
+- **ALWAYS** load schemas through agent factory (`create_agent_from_schema_file()`)
+- **NEVER** create separate schema loader utilities
+- Schema loading belongs with agent creation, not as standalone functionality
+- Examples:
+  ```python
+  # ✅ CORRECT
+  from rem.agentic import create_agent_from_schema_file
+  agent = await create_agent_from_schema_file("cv-parser", context=context)
+
+  # ❌ WRONG
+  from rem.services.schema_loader import SchemaLoader
+  loader = SchemaLoader()
+  schema = await loader.load("cv-parser")
+  agent = await create_agent(schema=schema)
+  ```
+
+### 6. Use Existing Services and Factories
+- **ALWAYS** check for existing services, factories, and utilities before creating new ones
+- **NEVER** duplicate functionality that already exists in the codebase
+- Common existing patterns:
+  - `get_postgres_service()` - Database connections
+  - `settings.*` - Configuration management
+  - `create_agent()` / `create_agent_from_schema_file()` - Agent creation
+  - `serialize_agent_result()` - Pydantic serialization
+  - `Repository(Model, table_name, db)` - Database operations
+
+**Why These Conventions Matter:**
+- **DRY Principle**: Reduces code duplication and maintenance burden
+- **Type Safety**: Centralized settings and factories provide better type checking
+- **Consistency**: Uniform patterns make codebase easier to understand and navigate
+- **Error Prevention**: Utilities handle edge cases (missing API keys, serialization errors) correctly
+- **Future-Proofing**: Centralized code is easier to update when requirements change
+
 ## Infrastructure Layer (manifests/infra/pulumi/eks-yaml)
 
 ### Pulumi YAML Stack
@@ -372,10 +479,32 @@ yield f"data: {chunk.model_dump_json()}\n\n"  # ✅ Serialized
 
 ### Graph Edge Pattern (models/core/inline_edge.py)
 - Human-readable destination labels (not UUIDs)
-- `dst` field contains entity labels (e.g., "sarah-chen", "api-design-v2")
+- `dst` field contains entity labels (e.g., "sarah-chen", "api-design-v2", "bob")
 - Edge weights (1.0 = primary, 0.8-0.9 = important, 0.5-0.7 = secondary)
 - Rich metadata in properties dict
 - Enables conversational queries without internal ID knowledge
+
+**Destination Entity Type Convention** (`properties.dst_entity_type`):
+
+Format: `<table_schema>:<category>/<key>`
+
+Examples:
+- `"resources:managers/bob"` → Look up bob in resources table with category="managers"
+- `"users:engineers/sarah-chen"` → Look up sarah-chen in users table with category="engineers"
+- `"moments:meetings/standup-2024-01"` → Look up in moments table with category="meetings"
+- `"resources/api-design-v2"` → Look up api-design-v2 in resources table (no category)
+- `"bob"` → Defaults to resources table, no category
+
+**Upsert Rules**:
+1. Parse `dst_entity_type` to determine target table and category
+2. If missing or just a type (e.g., "managers"), default to resources table with that category
+3. Agents should NEVER guess entity types - if unknown, omit `dst_entity_type`
+4. Category can be null - this is perfectly fine for entities without semantic categories
+
+**Edge Type Format** (`rel_type`):
+- Use snake_case: `"authored_by"`, `"depends_on"`, `"references"`
+- Be specific but consistent
+- Use passive voice for bidirectional clarity
 
 ### Entity Model Pattern (models/entities/)
 - All entities inherit from CoreModel
@@ -560,12 +689,19 @@ rem dreaming full --user-id user-123 --tenant-id acme-corp --skip-extractors
 - Simplified architecture
 
 ### Database Strategy
+
 - CloudNativePG as operator
 - No external RDS dependency
 - pgvector for semantic search
 - PostgreSQL 18 for latest features
+- **Schema evolution via Pydantic models** (not Alembic)
+  - Models are source of truth: `rem/src/rem/models/entities/`
+  - Generate SQL: `rem db schema generate --models src/rem/models/entities`
+  - Apply migrations: `rem db migrate`
+  - See postgres service README for database connection and migration details
 
 ### Observability
+
 - OpenTelemetry as instrumentation standard
 - Arize Phoenix for LLM-specific observability
 - Structured logging (JSON)

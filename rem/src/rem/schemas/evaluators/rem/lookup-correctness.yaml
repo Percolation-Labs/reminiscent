@@ -1,209 +1,182 @@
-description: |
-  You are THE JUDGE evaluating a REM agent's response to a LOOKUP query.
-
-  **REM LOOKUP Query Pattern:**
-
-  LOOKUP queries retrieve entities by their natural language labels (NOT UUIDs):
-  - Format: "LOOKUP entity_type:entity_label"
-  - Examples:
-    - "LOOKUP person:sarah-chen" → person entity with label "sarah-chen"
-    - "LOOKUP project:tidb-migration-spec" → project entity with label "tidb-migration-spec"
-    - "LOOKUP technology:postgresql" → technology entity with label "postgresql"
-
-  **Expected Behavior:**
-
-  1. **O(1) Performance Contract**: LOOKUP must be fast (hash/index lookup)
-  2. **Complete Entity Data**: Return full entity with properties, graph_edges, metadata
-  3. **Natural Language Labels**: Use human-readable labels (not UUIDs)
-  4. **Type Validation**: Verify entity_type matches actual entity
-
-  **Common Errors to Catch:**
-
-  1. **Hallucinations**:
-     - Made-up properties not in reference
-     - Invented graph_edges to non-existent entities
-     - Fake metadata fields
-
-  2. **Incomplete Data**:
-     - Missing properties from reference
-     - Missing graph_edges (relationships)
-     - Missing metadata
-
-  3. **Wrong Data**:
-     - Properties with incorrect values
-     - Graph edges with wrong weights or destinations
-     - Metadata with incorrect types
-
-  **YOUR ROLE: STRICT AND CRITICAL JUDGE**
-
-  1. **NO CELEBRATION** - Grade objectively, no praise
-  2. **STRICT GRADING** - Missing data = points deducted
-  3. **CATCH HALLUCINATIONS** - Made-up data = FAIL
-  4. **VERIFY COMPLETENESS** - Compare carefully to reference
-  5. **CHECK TYPES** - Ensure entity_type matches
-
-  **Scoring Rubric:**
-
-  **Correctness (0.0-1.0):**
-  - 1.0: All properties, edges, metadata match reference exactly
-  - 0.8: Minor differences (e.g., property value formatting)
-  - 0.6: Missing 1-2 properties or edges
-  - 0.4: Several missing or incorrect fields
-  - 0.2: Major data errors
-  - 0.0: Wrong entity returned or hallucinated data
-
-  **Completeness (0.0-1.0):**
-  - 1.0: All fields from reference present
-  - 0.8: Missing 1 optional field
-  - 0.6: Missing 2-3 fields
-  - 0.4: Missing several fields
-  - 0.2: Major gaps in data
-  - 0.0: Nearly empty response
-
-  **Performance Contract (0.0-1.0):**
-  - 1.0: Response indicates O(1) lookup (fast, indexed)
-  - 0.5: Response suggests iteration or search (slow)
-  - 0.0: Response clearly violates O(1) contract
-
-  **Overall Score:** Average of 3 dimensions
-  **Pass Threshold:** >= 0.75 (strict - agents must be accurate)
-
-  Compare agent output to reference carefully. Identify ALL gaps and errors.
-
+description: "You are THE JUDGE evaluating a REM agent's response to a LOOKUP query.\n\
+  \n**REM LOOKUP Query Pattern:**\n\nLOOKUP queries retrieve entities by their natural\
+  \ language labels (NOT UUIDs):\n- Format: \"LOOKUP entity_type:entity_label\"\n\
+  - Examples:\n  - \"LOOKUP person:sarah-chen\" → person entity with label \"sarah-chen\"\
+  \n  - \"LOOKUP project:tidb-migration-spec\" → project entity with label \"tidb-migration-spec\"\
+  \n  - \"LOOKUP technology:postgresql\" → technology entity with label \"postgresql\"\
+  \n\n**Expected Behavior:**\n\n1. **O(1) Performance Contract**: LOOKUP must be fast\
+  \ (hash/index lookup)\n2. **Complete Entity Data**: Return full entity with properties,\
+  \ graph_edges, metadata\n3. **Natural Language Labels**: Use human-readable labels\
+  \ (not UUIDs)\n4. **Type Validation**: Verify entity_type matches actual entity\n\
+  \n**Common Errors to Catch:**\n\n1. **Hallucinations**:\n   - Made-up properties\
+  \ not in reference\n   - Invented graph_edges to non-existent entities\n   - Fake\
+  \ metadata fields\n\n2. **Incomplete Data**:\n   - Missing properties from reference\n\
+  \   - Missing graph_edges (relationships)\n   - Missing metadata\n\n3. **Wrong Data**:\n\
+  \   - Properties with incorrect values\n   - Graph edges with wrong weights or destinations\n\
+  \   - Metadata with incorrect types\n\n**YOUR ROLE: STRICT AND CRITICAL JUDGE**\n\
+  \n1. **NO CELEBRATION** - Grade objectively, no praise\n2. **STRICT GRADING** -\
+  \ Missing data = points deducted\n3. **CATCH HALLUCINATIONS** - Made-up data = FAIL\n\
+  4. **VERIFY COMPLETENESS** - Compare carefully to reference\n5. **CHECK TYPES**\
+  \ - Ensure entity_type matches\n\n**Scoring Rubric:**\n\n**Correctness (0.0-1.0):**\n\
+  - 1.0: All properties, edges, metadata match reference exactly\n- 0.8: Minor differences\
+  \ (e.g., property value formatting)\n- 0.6: Missing 1-2 properties or edges\n- 0.4:\
+  \ Several missing or incorrect fields\n- 0.2: Major data errors\n- 0.0: Wrong entity\
+  \ returned or hallucinated data\n\n**Completeness (0.0-1.0):**\n- 1.0: All fields\
+  \ from reference present\n- 0.8: Missing 1 optional field\n- 0.6: Missing 2-3 fields\n\
+  - 0.4: Missing several fields\n- 0.2: Major gaps in data\n- 0.0: Nearly empty response\n\
+  \n**Performance Contract (0.0-1.0):**\n- 1.0: Response indicates O(1) lookup (fast,\
+  \ indexed)\n- 0.5: Response suggests iteration or search (slow)\n- 0.0: Response\
+  \ clearly violates O(1) contract\n\n**Overall Score:** Average of 3 dimensions\n\
+  **Pass Threshold:** >= 0.75 (strict - agents must be accurate)\n\nCompare agent\
+  \ output to reference carefully. Identify ALL gaps and errors.\n"
 fully_qualified_name: rem.evaluators.lookup_correctness.REMLookupCorrectnessEvaluator
 title: REMLookupCorrectnessEvaluator
 type: object
-
 labels:
-  - Evaluator
-  - REM
-  - LOOKUP
-  - Correctness
-
+- Evaluator
+- REM
+- LOOKUP
+- Correctness
 properties:
   correctness_score:
     type: number
-    description: |
-      Score 0-1 for accuracy of returned entity data.
+    description: 'Score 0-1 for accuracy of returned entity data.
+
       Compare properties, graph_edges, metadata to reference.
+
       Deduct for ANY hallucinations (instant 0.0).
+
+      '
     minimum: 0
     maximum: 1
-
   completeness_score:
     type: number
-    description: |
-      Score 0-1 for completeness of returned entity data.
+    description: 'Score 0-1 for completeness of returned entity data.
+
       Are all properties from reference present?
+
       Are all graph_edges included?
+
       Is metadata complete?
+
+      '
     minimum: 0
     maximum: 1
-
   performance_contract_score:
     type: number
-    description: |
-      Score 0-1 for adherence to O(1) performance contract.
+    description: 'Score 0-1 for adherence to O(1) performance contract.
+
       LOOKUP must use index/hash lookup, not iteration.
+
+      '
     minimum: 0
     maximum: 1
-
   overall_score:
     type: number
-    description: |
-      Average of correctness + completeness + performance_contract (sum/3).
+    description: 'Average of correctness + completeness + performance_contract (sum/3).
+
+      '
     minimum: 0
     maximum: 1
-
   pass:
     type: boolean
-    description: |
-      True if overall_score >= 0.75 AND correctness_score >= 0.6
+    description: 'True if overall_score >= 0.75 AND correctness_score >= 0.6
+
       AND no hallucinations detected.
 
+      '
   correctness_details:
     type: string
-    description: |
-      Specific accuracy issues found.
-      Example: "graph_edges weight for 'tidb-migration' is 0.9 (expected 1.0)"
+    description: 'Specific accuracy issues found.
 
+      Example: "graph_edges weight for ''tidb-migration'' is 0.9 (expected 1.0)"
+
+      '
   completeness_details:
     type: string
-    description: |
-      Specific missing fields or data.
-      Example: "Missing graph_edge to 'postgresql' technology, missing 'role' property"
+    description: 'Specific missing fields or data.
 
+      Example: "Missing graph_edge to ''postgresql'' technology, missing ''role''
+      property"
+
+      '
   performance_details:
     type: string
-    description: |
-      Assessment of performance contract adherence.
-      Example: "Response indicates direct lookup (good)" or "Response suggests iteration (bad)"
+    description: 'Assessment of performance contract adherence.
 
+      Example: "Response indicates direct lookup (good)" or "Response suggests iteration
+      (bad)"
+
+      '
   hallucinations_detected:
     type: array
-    description: |
-      List of any made-up data not in reference.
-      Example: "Property 'team' not in reference", "Edge to 'fake-project' not in reference"
+    description: 'List of any made-up data not in reference.
+
+      Example: "Property ''team'' not in reference", "Edge to ''fake-project'' not
+      in reference"
+
+      '
     items:
       type: string
-
   missing_fields:
     type: array
-    description: |
-      List of fields in reference but missing from agent output.
+    description: 'List of fields in reference but missing from agent output.
+
+      '
     items:
       type: string
-
   strengths:
     type: array
-    description: |
-      What the agent did well (objective, not celebratory).
+    description: 'What the agent did well (objective, not celebratory).
+
+      '
     items:
       type: string
-
   critical_gaps:
     type: array
-    description: |
-      Major issues that must be fixed (blockers).
+    description: 'Major issues that must be fixed (blockers).
+
+      '
     items:
       type: string
-
   improvement_suggestions:
     type: array
-    description: |
-      Actionable suggestions to improve accuracy and completeness.
+    description: 'Actionable suggestions to improve accuracy and completeness.
+
+      '
     items:
       type: string
-
   confidence_in_grading:
     type: string
-    description: |
-      Your confidence in this grade: "high", "medium", "low"
-    enum:
-      - high
-      - medium
-      - low
+    description: 'Your confidence in this grade: "high", "medium", "low"
 
+      '
+    enum:
+    - high
+    - medium
+    - low
   grading_notes:
     type: string
-    description: |
-      Internal notes about edge cases or judgment calls.
+    description: 'Internal notes about edge cases or judgment calls.
 
+      '
 required:
-  - correctness_score
-  - completeness_score
-  - performance_contract_score
-  - overall_score
-  - pass
-  - correctness_details
-  - completeness_details
-  - performance_details
-  - hallucinations_detected
-  - missing_fields
-  - strengths
-  - critical_gaps
-  - improvement_suggestions
-  - confidence_in_grading
-  - grading_notes
-
-version: "1.0.0"
+- correctness_score
+- completeness_score
+- performance_contract_score
+- overall_score
+- pass
+- correctness_details
+- completeness_details
+- performance_details
+- hallucinations_detected
+- missing_fields
+- strengths
+- critical_gaps
+- improvement_suggestions
+- confidence_in_grading
+- grading_notes
+version: 1.0.0
+json_schema_extra:
+  kind: evaluator
+  name: rem-lookup-correctness

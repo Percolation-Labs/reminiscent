@@ -263,7 +263,7 @@ POST /api/v1/chat/completions
 ```
 data: {"id": "chatcmpl-123", "choices": [{"delta": {"role": "assistant", "content": ""}}]}
 
-data: {"id": "chatcmpl-123", "choices": [{"delta": {"content": "[Calling: rem_query]"}}]}
+data: {"id": "chatcmpl-123", "choices": [{"delta": {"content": "[Calling: search_rem]"}}]}
 
 data: {"id": "chatcmpl-123", "choices": [{"delta": {"content": "Found 3 documents..."}}]}
 
@@ -816,7 +816,7 @@ See [`manifests/`](../../manifests/) for Pulumi infrastructure and Kubernetes ma
 - [x] **PostgresService** - Fully implemented with batch_upsert, connection pooling, tenant isolation
 - [x] **RemService** - All query types implemented (LOOKUP, FUZZY, SEARCH, SQL, TRAVERSE)
 - [x] **SEARCH Query** - Embedding generation via OpenAI API integrated
-- [x] **MCP Tools** - rem_query, ask_rem, create_resource, create_moment, update_graph_edges
+- [x] **MCP Tools** - search_rem, ask_rem_agent, ingest_into_rem, read_resource
 - [x] **MCP Resources** - Schema docs and status resources registered
 - [x] **Models** - All entity models (Resource, Entity, Moment, Message, File, User) complete
 - [x] **Settings** - Nested Pydantic settings with environment variable support

@@ -1,0 +1,61 @@
+type: object
+description: "You are an Accuracy Evaluator that assesses the quality of agent responses.\n\
+  \nEvaluation Criteria:\n\n1. **Accuracy** (0-1): How well does the answer align\
+  \ with the provided evidence?\n   - 1.0: Perfect alignment, all claims supported\
+  \ by evidence\n   - 0.7-0.9: Mostly accurate with minor unsupported claims\n   -\
+  \ 0.4-0.6: Partially accurate, some contradictions or gaps\n   - 0.0-0.3: Significant\
+  \ inaccuracies or fabricated information\n\n2. **Completeness** (0-1): Does the\
+  \ answer address all aspects of the query?\n   - 1.0: Fully addresses all parts\
+  \ of the question\n   - 0.7-0.9: Addresses main points, minor aspects missing\n\
+  \   - 0.4-0.6: Partial answer, significant gaps\n   - 0.0-0.3: Misses most aspects\
+  \ of the query\n\n3. **Source Usage** (0-1): How well does the agent use cited sources?\n\
+  \   - 1.0: All sources relevant and properly used\n   - 0.7-0.9: Most sources used\
+  \ effectively\n   - 0.4-0.6: Some sources unused or misused\n   - 0.0-0.3: Poor\
+  \ source utilization\n\nYour workflow:\n1. Review the user query\n2. Examine the\
+  \ agent's answer and sources\n3. Check the knowledge context to verify claims\n\
+  4. Score accuracy, completeness, and source usage\n5. Provide clear reasoning for\
+  \ each score\n6. Suggest improvements if scores are low\n"
+properties:
+  accuracy_score:
+    type: number
+    minimum: 0
+    maximum: 1
+    description: How accurate is the answer based on provided evidence (0-1)
+  completeness_score:
+    type: number
+    minimum: 0
+    maximum: 1
+    description: Does the answer address all aspects of the query (0-1)
+  source_usage_score:
+    type: number
+    minimum: 0
+    maximum: 1
+    description: How well were cited sources used (0-1)
+  overall_score:
+    type: number
+    minimum: 0
+    maximum: 1
+    description: Weighted average of accuracy (50%), completeness (30%), source usage
+      (20%)
+  reasoning:
+    type: string
+    description: Detailed explanation of scores with specific examples from the response
+  improvements:
+    type: array
+    items:
+      type: string
+    description: Suggested improvements for low-scoring areas
+required:
+- accuracy_score
+- completeness_score
+- source_usage_score
+- overall_score
+- reasoning
+json_schema_extra:
+  kind: evaluator
+  name: accuracy
+  evaluation_type: accuracy
+  evaluation_weights:
+    accuracy: 0.5
+    completeness: 0.3
+    source_usage: 0.2

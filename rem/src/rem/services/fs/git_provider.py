@@ -119,7 +119,7 @@ if fs.exists("git://experiments/hello-world/ground_truth.csv"):
 **Integration with Agent Factory**:
 
 ```python
-from rem.agentic.factory import create_pydantic_ai_agent
+from rem.agentic.factory import create_agent
 from rem.services.fs import FS
 
 fs = FS()
@@ -128,7 +128,7 @@ fs = FS()
 schema_content = fs.read("git://schemas/cv-parser-v1.yaml?ref=v1.2.0")
 
 # Create agent from versioned schema
-agent = create_pydantic_ai_agent(schema_content)
+agent = create_agent(schema_content)
 
 # Run agent
 result = await agent.run("Extract candidate from resume...")

@@ -67,7 +67,7 @@ from loguru import logger
 
 from ....agentic.context import AgentContext
 from ....agentic.context_builder import ContextBuilder
-from ....agentic.providers.pydantic_ai import create_pydantic_ai_agent
+from ....agentic.providers.pydantic_ai import create_agent
 from ....services.audio.transcriber import AudioTranscriber
 from ....services.session import SessionMessageStore, reload_session
 from ....settings import settings
@@ -225,7 +225,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
     logger.info(f"Built context with {len(messages)} total messages (includes history + user context)")
 
     # Create agent with schema and model override
-    agent = await create_pydantic_ai_agent(
+    agent = await create_agent(
         context=context,
         agent_schema_override=agent_schema,
         model_override=body.model,
@@ -255,10 +255,8 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
         content = extract_json_resilient(result.output)
     else:
         # Text mode: Return as string (handle structured output)
-        if hasattr(result.output, "model_dump_json"):
-            content = result.output.model_dump_json()
-        else:
-            content = str(result.output)
+        from rem.agentic.serialization import serialize_agent_result_json
+        content = serialize_agent_result_json(result.output)
 
     # Get usage from result if available
     usage = result.usage() if hasattr(result, "usage") else None

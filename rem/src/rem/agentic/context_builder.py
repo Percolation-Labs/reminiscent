@@ -45,7 +45,7 @@ Usage (on-demand, default):
     # ]
 
     # Agent receives hints and can decide to load context if needed
-    agent = await create_pydantic_ai_agent(context=context, ...)
+    agent = await create_agent(context=context, ...)
     prompt = "\n".join(msg.content for msg in messages)
     result = await agent.run(prompt)
 
@@ -150,9 +150,11 @@ class ContextBuilder:
         # Initialize DB if not provided and needed (for user context or session history)
         close_db = False
         if db is None and (settings.chat.auto_inject_user_context or context.session_id):
-            db = PostgresService()
-            await db.connect()
-            close_db = True
+            from ..services.postgres import get_postgres_service
+            db = get_postgres_service()
+            if db:
+                await db.connect()
+                close_db = True
 
         try:
             # Build messages list

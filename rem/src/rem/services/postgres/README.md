@@ -380,11 +380,11 @@ message = Message(
     session_id="session-123",
     tenant_id="acme-corp"
 )
-created = await message_repo.create(message)
+created = await message_repo.upsert(message)
 
-# Batch create
+# Upsert also accepts lists (no need for separate batch method)
 messages = [message1, message2, message3]
-created_messages = await message_repo.batch_create(messages)
+created_messages = await message_repo.upsert(messages)
 
 # Find records
 messages = await message_repo.find({

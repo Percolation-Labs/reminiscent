@@ -8,7 +8,7 @@ Usage:
     from rem.services.repositories import Repository
 
     repo = Repository(db, Message, table_name="messages")
-    message = await repo.create(message_instance)
+    message = await repo.upsert(message_instance)
     messages = await repo.find({"session_id": "abc", "tenant_id": "xyz"})
 """
 
@@ -70,61 +70,40 @@ class Repository(Generic[T]):
         self.model_class = model_class
         self.table_name = table_name or f"{model_class.__name__.lower()}s"
 
-    async def create(self, record: T) -> T:
+    async def upsert(self, records: T | list[T]) -> T | list[T]:
         """
-        Create or update a single record (upsert on ID).
+        Upsert single record or list of records (create or update on ID conflict).
+
+        Accepts both single items and lists - no need to distinguish batch vs non-batch.
+        Single items are coerced to lists internally for processing.
 
         Args:
-            record: Model instance to create/update
+            records: Single model instance or list of model instances
 
         Returns:
-            Created/updated record with generated ID
+            Single record or list of records with generated IDs (matches input type)
         """
+        # Coerce single item to list for uniform processing
+        is_single = not isinstance(records, list)
+        records_list = [records] if is_single else records
+
         if not settings.postgres.enabled or not self.db:
-            logger.debug(f"Postgres disabled, skipping {self.model_class.__name__} creation")
-            return record
-
-        # Ensure connection
-        if not self.db.pool:
-            await self.db.connect()
-
-        # Use upsert to handle both create and update
-        sql, params = build_upsert(record, self.table_name, conflict_field="id", return_id=True)
-
-        async with self.db.pool.acquire() as conn:
-            row = await conn.fetchrow(sql, *params)
-            if row and "id" in row:
-                # Update record with generated ID
-                record.id = row["id"]
-
-        return record
-
-    async def batch_create(self, records: list[T]) -> list[T]:
-        """
-        Batch create or update records (upsert on ID).
-
-        Args:
-            records: List of model instances to create/update
-
-        Returns:
-            Created/updated records with generated IDs
-        """
-        if not settings.postgres.enabled or not self.db:
-            logger.debug(f"Postgres disabled, skipping {self.model_class.__name__} batch creation")
+            logger.debug(f"Postgres disabled, skipping {self.model_class.__name__} upsert")
             return records
 
         # Ensure connection
         if not self.db.pool:
             await self.db.connect()
 
-        for record in records:
+        for record in records_list:
             sql, params = build_upsert(record, self.table_name, conflict_field="id", return_id=True)
             async with self.db.pool.acquire() as conn:
                 row = await conn.fetchrow(sql, *params)
                 if row and "id" in row:
                     record.id = row["id"]
 
-        return records
+        # Return single item or list to match input type
+        return records_list[0] if is_single else records_list
 
     async def get_by_id(self, record_id: str, tenant_id: str) -> T | None:
         """

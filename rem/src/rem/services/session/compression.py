@@ -168,7 +168,7 @@ class SessionMessageStore:
         )
 
         # Store in database
-        await self.repo.create(msg)
+        await self.repo.upsert(msg)
 
         logger.debug(f"Stored assistant response: {entity_key} (id={msg.id})")
         return entity_key
@@ -274,7 +274,7 @@ class SessionMessageStore:
                         "timestamp": message.get("timestamp"),
                     },
                 )
-                await self.repo.create(msg)
+                await self.repo.upsert(msg)
                 compressed_messages.append(message.copy())
 
         return compressed_messages

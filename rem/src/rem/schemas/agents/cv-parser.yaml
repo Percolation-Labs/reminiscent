@@ -241,10 +241,9 @@ required:
   - confidence_score
 
 json_schema_extra:
-  fully_qualified_name: rem.agents.CVParserAgent
+  kind: agent
+  name: cv-parser
   version: "1.0.0"
-  name: CV Parser
-  short_name: cv-parser
   tags:
     - recruitment
     - hr

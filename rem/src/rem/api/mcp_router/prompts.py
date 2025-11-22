@@ -40,7 +40,8 @@ required:
   - required_field
 
 json_schema_extra:
-  fully_qualified_name: rem.agents.YourAgent
+  kind: agent
+  name: your-agent
   version: "1.0.0"
   tags: [domain, category]
 
@@ -97,8 +98,10 @@ required:
   - skills
 
 json_schema_extra:
-  fully_qualified_name: rem.agents.CVParser
+  kind: agent
+  name: cv-parser
   version: "1.0.0"
+
   tags: [recruitment, ontology-extractor]
 
   embedding_fields:
@@ -112,13 +115,12 @@ json_schema_extra:
 
 After creating your schema:
 
-1. **Save to local file system**: `~/.rem/fs/my-agent.yaml`
+1. **Save to local file system**: `~/.rem/fs/my-agent.yaml` or request an upload path for remote servers.
 
 2. **Upload via ingest_file**:
    ```python
    ingest_file(
-       file_uri="~/.rem/fs/my-agent.yaml",
-       tenant_id="your-tenant-id",
+       file_uri="LOCAL PATH for local servers or remote S3 path for remote servers",
        category="agent"
    )
    ```

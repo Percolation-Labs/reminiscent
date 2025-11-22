@@ -457,7 +457,7 @@ def run(
                 raise click.Abort()
 
         # Create agent function from schema
-        from rem.agentic.providers.pydantic_ai import create_pydantic_ai_agent
+        from rem.agentic.providers.pydantic_ai import create_agent
         from rem.agentic.context import AgentContext
 
         # Create agent context
@@ -467,7 +467,7 @@ def run(
             session_id=f"experiment-{config.name}",
         )
 
-        agent = asyncio.run(create_pydantic_ai_agent(
+        agent = asyncio.run(create_agent(
             context=context,
             agent_schema_override=agent_schema
         ))

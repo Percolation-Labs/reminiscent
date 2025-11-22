@@ -139,7 +139,7 @@ async def create_rem_query_agent(
     Returns:
         Configured Pydantic AI Agent
     """
-    from ...agentic.providers.pydantic_ai import create_pydantic_ai_agent
+    from ...agentic.providers.pydantic_ai import create_agent
     from ...agentic.context import AgentContext
     from ...settings import settings
 
@@ -159,7 +159,7 @@ async def create_rem_query_agent(
     )
 
     # Create agent with schema
-    agent = await create_pydantic_ai_agent(
+    agent = await create_agent(
         context=context,
         agent_schema_override=REM_QUERY_AGENT_SCHEMA,
         result_type=REMQueryOutput,

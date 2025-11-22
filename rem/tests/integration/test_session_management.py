@@ -94,7 +94,7 @@ async def test_message_creation(message_repo, tenant_id, session_id, user_id):
         user_id=user_id,
     )
 
-    created = await message_repo.create(msg)
+    created = await message_repo.upsert(msg)
 
     assert created.id is not None
     assert created.content == "Hello, world!"
@@ -116,7 +116,7 @@ async def test_batch_message_creation(message_repo, tenant_id, session_id, user_
         for msg in SAMPLE_CONVERSATION[:2]  # First Q&A
     ]
 
-    created = await message_repo.batch_create(messages)
+    created = await message_repo.upsert(messages)
 
     assert len(created) == 2
     assert all(msg.id is not None for msg in created)
@@ -139,7 +139,7 @@ async def test_get_messages_by_session(
         for msg in SAMPLE_CONVERSATION
     ]
 
-    await message_repo.batch_create(messages)
+    await message_repo.upsert(messages)
 
     # Retrieve messages
     retrieved = await message_repo.get_by_session(

@@ -1,21 +1,79 @@
 import pytest
 import asyncio
 import logging
+import yaml
+from pathlib import Path
 from rem.services.postgres import PostgresService
-from tests.data.graph_seed import seed_graph_data
+from rem.models.entities import Resource, Moment, User
+from rem.models.core.inline_edge import InlineEdge
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+async def seed_graph_data(tenant_id: str) -> dict[str, str]:
+    """Load graph seed data from YAML file."""
+    # Load YAML
+    yaml_path = Path(__file__).parent.parent / "data" / "graph_seed.yaml"
+    with open(yaml_path) as f:
+        data = yaml.safe_load(f)
+
+    # Map table names to model classes
+    MODEL_MAP = {
+        "users": User,
+        "moments": Moment,
+        "resources": Resource,
+    }
+
+    # Connect to database
+    pg = PostgresService()
+    await pg.connect()
+
+    try:
+        # Load data
+        for table_def in data:
+            table_name = table_def["table"]
+            key_field = table_def.get("key_field", "id")
+            rows = table_def.get("rows", [])
+
+            if table_name not in MODEL_MAP:
+                continue
+
+            model_class = MODEL_MAP[table_name]
+
+            for row_data in rows:
+                # Add tenant_id
+                row_data["tenant_id"] = tenant_id
+
+                # Convert graph_edges to InlineEdge format if present
+                if "graph_edges" in row_data:
+                    row_data["graph_edges"] = [
+                        InlineEdge(**edge).model_dump(mode='json')
+                        for edge in row_data["graph_edges"]
+                    ]
+
+                # Create model instance and upsert
+                instance = model_class(**row_data)
+                await pg.upsert(instance, model_class, table_name, entity_key_field=key_field)
+
+        # Return root key (last resource loaded - "Project Plan")
+        return {
+            "root": "Project Plan",
+            "tenant_id": tenant_id
+        }
+    finally:
+        await pg.disconnect()
+
+
 @pytest.mark.asyncio
 async def test_recursive_graph_traversal():
     """
     Test the rem_traverse recursive CTE function.
-    
+
     Scenario:
     A (Resource) -> referenced_by -> B (Resource) -> documented_in -> C (Moment) -> attendee -> D (User)
-    
+
     We start traversal at A and expect to find B, C, and D.
     """
     # 1. Seed Data

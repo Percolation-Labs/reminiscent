@@ -48,11 +48,10 @@ def test_mcp_tools_registered(mcp):
     # Get registered tools (FastMCP stores them internally)
     # We'll check by trying to get the tool functions
     expected_tools = [
-        "rem_query",
-        "ask_rem",
-        "create_resource",
-        "create_moment",
-        "update_graph_edges",
+        "search_rem",
+        "ask_rem_agent",
+        "ingest_into_rem",
+        "read_resource",
     ]
 
     # FastMCP tools are registered via decorators, check if functions exist
@@ -125,39 +124,39 @@ def test_tool_parameters():
     """Test that tool functions have proper parameter definitions."""
     print("Testing tool parameter definitions...")
 
-    from rem.api.mcp_router.tools import rem_query, ask_rem, create_resource
+    from rem.api.mcp_router.tools import search_rem, ask_rem_agent, ingest_into_rem
 
-    # Check rem_query signature
+    # Check search_rem signature
     import inspect
 
-    sig = inspect.signature(rem_query)
+    sig = inspect.signature(search_rem)
     params = list(sig.parameters.keys())
 
-    print(f"  rem_query parameters ({len(params)}):")
-    expected_params = ["query_type", "tenant_id", "entity_key", "query_text", "table_name"]
+    print(f"  search_rem parameters ({len(params)}):")
+    expected_params = ["query_type", "tenant_id", "entity_key", "query_text", "table"]
     for param in expected_params[:5]:  # Show first 5
         if param in params:
             print(f"    ✓ {param}")
         else:
             print(f"    ✗ {param}")
 
-    # Check ask_rem signature
-    sig = inspect.signature(ask_rem)
+    # Check ask_rem_agent signature
+    sig = inspect.signature(ask_rem_agent)
     params = list(sig.parameters.keys())
 
-    print(f"\n  ask_rem parameters ({len(params)}):")
-    print(f"    ✓ natural_query")
+    print(f"\n  ask_rem_agent parameters ({len(params)}):")
+    print(f"    ✓ query")
     print(f"    ✓ tenant_id")
-    print(f"    ✓ llm_model")
+    print(f"    ✓ agent_schema")
 
-    # Check create_resource signature
-    sig = inspect.signature(create_resource)
+    # Check ingest_into_rem signature
+    sig = inspect.signature(ingest_into_rem)
     params = list(sig.parameters.keys())
 
-    print(f"\n  create_resource parameters ({len(params)}):")
+    print(f"\n  ingest_into_rem parameters ({len(params)}):")
+    print(f"    ✓ file_uri")
     print(f"    ✓ tenant_id")
-    print(f"    ✓ name")
-    print(f"    ✓ content")
+    print(f"    ✓ user_id")
     print(f"    ✓ generate_embeddings")
 
     print()

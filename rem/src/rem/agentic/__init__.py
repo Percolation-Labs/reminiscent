@@ -15,6 +15,7 @@ from .schema import (
     validate_agent_schema,
     create_agent_schema,
 )
+from .providers.pydantic_ai import create_agent_from_schema_file, create_agent
 
 __all__ = [
     # Context and Query
@@ -27,4 +28,7 @@ __all__ = [
     "MCPResourceReference",
     "validate_agent_schema",
     "create_agent_schema",
+    # Agent Factories
+    "create_agent_from_schema_file",
+    "create_agent",
 ]

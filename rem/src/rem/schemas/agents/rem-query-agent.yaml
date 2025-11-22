@@ -218,7 +218,8 @@ required:
   - confidence
 
 json_schema_extra:
-  fully_qualified_name: "rem.agents.REMQueryAgent"
+  kind: agent
+  name: rem-query-agent
   version: "1.0.0"
   model: "cerebras:qwen-3-32b"  # Ultra-fast query generation (1.2s reasoning, 2400 tok/s)
   tools: []  # No tools needed - pure reasoning agent

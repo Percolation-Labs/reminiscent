@@ -1,12 +1,24 @@
 """Test that exports session data to YAML for inspection."""
 
 import yaml
+from pathlib import Path
 
 import pytest
 from rem.services.session import MessageCompressor
 
-# Import from local tests.fixtures (not rem.tests.fixtures)
-from tests.fixtures import COMPRESSION_TEST_CONVERSATION, REM_INTRO_CONVERSATION
+
+# Load conversations from YAML file
+def _load_conversations():
+    """Load sample conversations from YAML file."""
+    yaml_path = Path(__file__).parent.parent / "data" / "sample_conversations.yaml"
+    with open(yaml_path) as f:
+        data = yaml.safe_load(f)
+    return data
+
+
+CONVERSATIONS = _load_conversations()
+REM_INTRO_CONVERSATION = CONVERSATIONS["rem_intro"]
+COMPRESSION_TEST_CONVERSATION = CONVERSATIONS["compression_test"]
 
 
 @pytest.mark.asyncio

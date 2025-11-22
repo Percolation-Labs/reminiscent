@@ -6,48 +6,15 @@ Each tool is decorated with @mcp.tool() and registered with the FastMCP server.
 
 Design Pattern:
 - Tools receive parameters from LLM
-- Tools delegate to RemService or PostgresService
+- Tools delegate to RemService or ContentService
 - Tools return structured results
 - Tools handle errors gracefully with informative messages
 
 Available Tools:
-- rem_query: Execute REM queries (LOOKUP, FUZZY, SEARCH, SQL, TRAVERSE)
-- ask_rem: Natural language to REM query conversion
-- create_resource: Create new resource with content
-- create_moment: Create temporal narrative
-- update_graph_edges: Add/update entity graph edges
-- parse_and_ingest_file: Full ingestion pipeline (read + store + process)
-
-**ARCHITECTURE - File Ingestion Code Paths**:
-
-Three different entry points for file processing:
-
-1. **CLI: `rem process uri <file>`** (cli/commands/process.py)
-   - READ-ONLY: No file storage, no database writes
-   - Uses: ContentService.process_uri() directly
-   - Returns: Extracted content to stdout
-   - Use case: Testing file parsing, one-off content extraction
-
-2. **MCP: `parse_and_ingest_file`** (this file, line 455)
-   - FULL PIPELINE: Read → Store → Process → Create Resources
-   - Uses: Inline file I/O (DUPLICATED from FileSystemService)
-   - Creates: File entity + Resource chunks in database
-   - Storage: ~/.rem/fs/{tenant_id}/files/{id}/{name} or S3
-   - Use case: LLM-driven file ingestion via MCP protocol
-
-3. **Worker: SQS File Processor** (workers/sqs_file_processor.py)
-   - BACKGROUND: Processes files from S3 event queue
-   - Uses: FileSystemService + ContentService
-   - Creates: Resource chunks from existing File entities
-   - Use case: Async processing of uploaded files
-
-**SHARED CODE**:
-- ContentService: File parsing (PDF, Markdown, etc.) - SHARED by all paths
-- FileSystemService: File I/O (read/write S3, local) - SHOULD be shared
-
-**CODE DUPLICATION WARNING**:
-parse_and_ingest_file (line 455) duplicates FileSystemService logic.
-See inline TODO comments for refactoring plan.
+- search_rem: Execute REM queries (LOOKUP, FUZZY, SEARCH, SQL, TRAVERSE)
+- ask_rem_agent: Natural language to REM query conversion via agent
+- ingest_into_rem: Full file ingestion pipeline (read + store + parse + chunk)
+- read_resource: Access MCP resources (for Claude Desktop compatibility)
 """
 
 from typing import Any, Literal
@@ -89,7 +56,7 @@ def init_services(postgres_service: PostgresService, rem_service: RemService):
     logger.info("MCP tools initialized with service instances")
 
 
-async def rem_query(
+async def search_rem(
     query_type: Literal["lookup", "fuzzy", "search", "sql", "traverse"],
     tenant_id: str,
     # LOOKUP parameters
@@ -98,391 +65,299 @@ async def rem_query(
     # FUZZY parameters
     query_text: str | None = None,
     threshold: float = 0.7,
-    limit: int = 10,
     # SEARCH parameters
-    table_name: str | None = None,
-    field_name: str | None = None,
-    provider: str | None = None,
-    min_similarity: float = 0.7,
+    table: str | None = None,
+    limit: int = 20,
     # SQL parameters
-    where_clause: str | None = None,
+    sql_query: str | None = None,
     # TRAVERSE parameters
-    start_key: str | None = None,
-    max_depth: int = 1,
-    rel_type: str | None = None,
+    initial_query: str | None = None,
+    edge_types: list[str] | None = None,
+    depth: int = 1,
 ) -> dict[str, Any]:
     """
-    Execute REM query with specified type and parameters.
+    Execute REM queries for entity lookup, semantic search, and graph traversal.
 
-    REM Query Types:
-    - LOOKUP: O(1) entity resolution (requires: entity_key)
-    - FUZZY: Fuzzy text matching (requires: query_text)
-    - SEARCH: Semantic vector search (requires: query_text, table_name)
-    - SQL: Direct SQL queries (requires: table_name, optional: where_clause)
-    - TRAVERSE: Graph traversal (requires: start_key, optional: rel_type, max_depth)
+    REM supports multiple query types for different retrieval patterns:
+
+    **LOOKUP** - O(1) entity resolution by natural language key:
+    - Fast exact match across all tables
+    - Uses indexed label_vector for instant retrieval
+    - Example: LOOKUP "Sarah Chen" returns all entities named "Sarah Chen"
+
+    **FUZZY** - Fuzzy text matching with similarity threshold:
+    - Finds partial matches and typos
+    - Example: FUZZY "sara" threshold=0.7 finds "Sarah Chen", "Sara Martinez"
+
+    **SEARCH** - Semantic vector search (table-specific):
+    - Finds conceptually similar entities
+    - Example: SEARCH "database migration" table=resources returns related documents
+
+    **SQL** - Direct SQL queries for structured data:
+    - Full PostgreSQL query power
+    - Example: SQL "SELECT * FROM users WHERE role = 'engineer'"
+
+    **TRAVERSE** - Graph traversal following relationships:
+    - Explores entity neighborhood via graph edges
+    - Supports depth control and edge type filtering
+    - Example: TRAVERSE "Sarah Chen" edge_types=["manages", "reports_to"] depth=2
 
     Args:
-        query_type: Type of query to execute
-        tenant_id: Tenant identifier for scoping
-        entity_key: Key for LOOKUP queries
-        user_id: Optional user scoping
-        query_text: Query text for FUZZY/SEARCH
-        threshold: Similarity threshold for FUZZY
-        limit: Result limit
-        table_name: Table name for SEARCH/SQL
-        field_name: Field name for SEARCH (defaults to 'content')
-        provider: Embedding provider for SEARCH
-        min_similarity: Minimum similarity for SEARCH
-        where_clause: WHERE clause for SQL
-        start_key: Starting entity for TRAVERSE
-        max_depth: Maximum traversal depth
-        rel_type: Relationship type filter for TRAVERSE
+        query_type: Type of query (lookup, fuzzy, search, sql, traverse)
+        tenant_id: Tenant identifier for data isolation
+        entity_key: Entity key for LOOKUP (e.g., "Sarah Chen")
+        user_id: Optional user filter for LOOKUP
+        query_text: Search text for FUZZY or SEARCH
+        threshold: Similarity threshold for FUZZY (0.0-1.0)
+        table: Target table for SEARCH (resources, moments, users, etc.)
+        limit: Max results for SEARCH
+        sql_query: SQL query string for SQL type
+        initial_query: Starting entity for TRAVERSE
+        edge_types: Edge types to follow for TRAVERSE (e.g., ["manages", "reports_to"])
+        depth: Traversal depth for TRAVERSE (0=plan only, 1-5=actual traversal)
 
     Returns:
-        Query results with metadata
+        Dict with query results, metadata, and execution info
 
-    Raises:
-        ValueError: If required parameters are missing
-        QueryExecutionError: If query execution fails
+    Examples:
+        # Lookup entity
+        search_rem(
+            query_type="lookup",
+            entity_key="Sarah Chen",
+            tenant_id="acme-corp"
+        )
+
+        # Semantic search
+        search_rem(
+            query_type="search",
+            query_text="database migration",
+            table="resources",
+            tenant_id="acme-corp",
+            limit=10
+        )
+
+        # Graph traversal
+        search_rem(
+            query_type="traverse",
+            initial_query="Sarah Chen",
+            edge_types=["manages", "reports_to"],
+            depth=2,
+            tenant_id="acme-corp"
+        )
     """
     if not _rem_service:
-        raise RuntimeError("RemService not initialized. Call init_services() first.")
+        return {
+            "status": "error",
+            "error": "RemService not initialized. Check server startup.",
+        }
 
-    # Build parameters based on query type
-    query_type_enum = QueryType(query_type.upper())
+    try:
+        # Build RemQuery based on query_type
+        if query_type == "lookup":
+            if not entity_key:
+                return {"status": "error", "error": "entity_key required for LOOKUP"}
 
-    if query_type_enum == QueryType.LOOKUP:
-        if not entity_key:
-            raise ValueError("LOOKUP requires entity_key parameter")
-        parameters = LookupParameters(entity_key=entity_key, user_id=user_id)
+            query = RemQuery(
+                query_type=QueryType.LOOKUP,
+                parameters=LookupParameters(
+                    entity_key=entity_key,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                ),
+            )
 
-    elif query_type_enum == QueryType.FUZZY:
-        if not query_text:
-            raise ValueError("FUZZY requires query_text parameter")
-        parameters = FuzzyParameters(
-            query_text=query_text,
-            threshold=threshold,
-            limit=limit,
-            user_id=user_id,
-        )
+        elif query_type == "fuzzy":
+            if not query_text:
+                return {"status": "error", "error": "query_text required for FUZZY"}
 
-    elif query_type_enum == QueryType.SEARCH:
-        if not query_text or not table_name:
-            raise ValueError("SEARCH requires query_text and table_name parameters")
-        parameters = SearchParameters(
-            query_text=query_text,
-            table_name=table_name,
-            field_name=field_name,
-            provider=provider,
-            min_similarity=min_similarity,
-            limit=limit,
-            user_id=user_id,
-        )
+            query = RemQuery(
+                query_type=QueryType.FUZZY,
+                parameters=FuzzyParameters(
+                    query_text=query_text,
+                    tenant_id=tenant_id,
+                    threshold=threshold,
+                    user_id=user_id,
+                ),
+            )
 
-    elif query_type_enum == QueryType.SQL:
-        if not table_name:
-            raise ValueError("SQL requires table_name parameter")
-        parameters = SQLParameters(
-            table_name=table_name,
-            where_clause=where_clause,
-            limit=limit,
-        )
+        elif query_type == "search":
+            if not query_text:
+                return {"status": "error", "error": "query_text required for SEARCH"}
+            if not table:
+                return {"status": "error", "error": "table required for SEARCH"}
 
-    elif query_type_enum == QueryType.TRAVERSE:
-        if not start_key:
-            raise ValueError("TRAVERSE requires start_key parameter")
-        parameters = TraverseParameters(
-            start_key=start_key,
-            max_depth=max_depth,
-            rel_type=rel_type,
-            user_id=user_id,
-        )
+            query = RemQuery(
+                query_type=QueryType.SEARCH,
+                parameters=SearchParameters(
+                    query_text=query_text,
+                    table=table,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    limit=limit,
+                ),
+            )
 
-    else:
-        raise ValueError(f"Unknown query type: {query_type}")
+        elif query_type == "sql":
+            if not sql_query:
+                return {"status": "error", "error": "sql_query required for SQL"}
 
-    # Execute query
-    query = RemQuery(
-        query_type=query_type_enum,
-        parameters=parameters,
-        tenant_id=tenant_id,
-    )
+            query = RemQuery(
+                query_type=QueryType.SQL,
+                parameters=SQLParameters(
+                    sql_query=sql_query,
+                    tenant_id=tenant_id,
+                ),
+            )
 
-    result = await _rem_service.execute_query(query)
-    logger.info(f"REM query executed: {query_type} ({result['count']} results)")
+        elif query_type == "traverse":
+            if not initial_query:
+                return {
+                    "status": "error",
+                    "error": "initial_query required for TRAVERSE",
+                }
 
-    return result
+            query = RemQuery(
+                query_type=QueryType.TRAVERSE,
+                parameters=TraverseParameters(
+                    initial_query=initial_query,
+                    edge_types=edge_types or [],
+                    depth=depth,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                ),
+            )
+
+        else:
+            return {"status": "error", "error": f"Unknown query_type: {query_type}"}
+
+        # Execute query
+        logger.info(f"Executing REM query: {query_type} for tenant {tenant_id}")
+        result = await _rem_service.execute_query(query)
+
+        logger.info(f"Query completed successfully: {query_type}")
+        return {
+            "status": "success",
+            "query_type": query_type,
+            "results": result,
+        }
+
+    except Exception as e:
+        logger.error(f"REM query failed: {e}", exc_info=True)
+        return {
+            "status": "error",
+            "query_type": query_type,
+            "error": str(e),
+        }
 
 
-async def ask_rem(
-    natural_query: str,
+async def ask_rem_agent(
+    query: str,
     tenant_id: str,
-    llm_model: str | None = None,
-    plan_mode: bool = False,
+    user_id: str | None = None,
+    agent_schema: str = "ask_rem",
+    agent_version: str | None = None,
 ) -> dict[str, Any]:
     """
-    Convert natural language question to REM query and optionally execute it.
+    Ask REM using natural language via agent-driven query conversion.
 
-    Uses REM Query Agent (LLM) to interpret user questions and generate
-    appropriate REM queries. Auto-executes if confidence >= 0.7.
+    This tool converts natural language questions into optimized REM queries
+    using an agent that understands the REM query language and schema.
+
+    The agent can perform multi-turn reasoning and iterated retrieval:
+    1. Initial exploration (LOOKUP/FUZZY to find entities)
+    2. Semantic search (SEARCH for related content)
+    3. Graph traversal (TRAVERSE to explore relationships)
+    4. Synthesis (combine results into final answer)
 
     Args:
-        natural_query: Natural language question (e.g., "Who is Sarah?")
-        tenant_id: Tenant identifier for scoping
-        llm_model: Optional LLM model override
-        plan_mode: If True, hints agent to use TRAVERSE with depth=0 for edge analysis
-                   without full traversal (useful for multi-turn exploration)
+        query: Natural language question or task
+        tenant_id: Tenant identifier for data isolation
+        user_id: Optional user identifier
+        agent_schema: Agent schema name (default: "ask_rem")
+        agent_version: Optional agent version (default: latest)
 
     Returns:
         Dict with:
-        - query_output: REMQueryOutput from agent
-        - results: Executed query results (if confidence >= 0.7)
-        - warning: Low confidence warning (if confidence < 0.7)
+        - status: "success" or "error"
+        - response: Agent's natural language response
+        - query_output: Structured query results (if available)
+        - queries_executed: List of REM queries executed
+        - metadata: Agent execution metadata
 
-    Example:
-        >>> result = await ask_rem("Who is Sarah?", tenant_id="acme")
-        >>> print(result["query_output"]["query_type"])
-        "LOOKUP"
-        >>> print(result["results"]["count"])
-        1
-
-        >>> # Plan mode - analyze edges without traversal
-        >>> result = await ask_rem(
-        ...     "What are Sarah's connections?",
-        ...     tenant_id="acme",
-        ...     plan_mode=True
-        ... )
-        >>> print(result["query_output"]["query_type"])
-        "TRAVERSE"
-        >>> print(result["query_output"]["parameters"]["max_depth"])
-        0
-    """
-    if not _rem_service:
-        raise RuntimeError("RemService not initialized. Call init_services() first.")
-
-    # Modify query with plan mode hint if requested
-    query_with_hint = natural_query
-    if plan_mode:
-        query_with_hint = (
-            f"{natural_query}\n\n"
-            "HINT: Use TRAVERSE query with max_depth=0 (PLAN mode) to analyze edges "
-            "without full traversal. This is useful for understanding what relationships "
-            "exist before deciding which paths to explore."
+    Examples:
+        # Simple question
+        ask_rem_agent(
+            query="Who is Sarah Chen?",
+            tenant_id="acme-corp"
         )
 
-    result = await _rem_service.ask_rem(
-        natural_query=query_with_hint,
-        tenant_id=tenant_id,
-        llm_model=llm_model,
-    )
-
-    logger.info(
-        f"ask_rem executed: '{natural_query}' (plan_mode={plan_mode}) "
-        f"(confidence: {result['query_output']['confidence']})"
-    )
-
-    return result
-
-
-async def create_resource(
-    tenant_id: str,
-    name: str,
-    content: str,
-    category: str | None = None,
-    user_id: str | None = None,
-    metadata: dict[str, Any] | None = None,
-    generate_embeddings: bool = True,
-) -> dict[str, Any]:
-    """
-    Create new resource in REM system.
-
-    Resources are chunked, embedded content from documents, files, or conversations.
-
-    Args:
-        tenant_id: Tenant identifier
-        name: Resource name/label
-        content: Resource content text
-        category: Optional category (document, conversation, etc.)
-        user_id: Optional user ownership
-        metadata: Optional metadata dict
-        generate_embeddings: Whether to generate embeddings (default: True)
-
-    Returns:
-        Dict with created resource details
-
-    Example:
-        >>> result = await create_resource(
-        ...     tenant_id="acme",
-        ...     name="api-design-v2",
-        ...     content="API design document for v2...",
-        ...     category="document"
-        ... )
-    """
-    if not _postgres_service:
-        raise RuntimeError(
-            "PostgresService not initialized. Call init_services() first."
+        # Complex multi-step question
+        ask_rem_agent(
+            query="What are the key findings from last week's sprint retrospective?",
+            tenant_id="acme-corp",
+            user_id="john-doe"
         )
 
-    from ...models.entities import Resource
-
-    resource = Resource(
-        name=name,
-        content=content,
-        category=category,
-        tenant_id=tenant_id,
-        user_id=user_id,
-        metadata=metadata or {},
-    )
-
-    result = await _postgres_service.batch_upsert(
-        records=[resource],
-        model=Resource,
-        table_name="resources",
-        entity_key_field="name",
-        generate_embeddings=generate_embeddings,
-    )
-
-    logger.info(f"Resource created: {name} (tenant: {tenant_id})")
-
-    return {
-        "resource_id": str(resource.id),
-        "name": name,
-        "tenant_id": tenant_id,
-        "upserted": result["upserted_count"],
-        "embeddings_generated": result["embeddings_generated"],
-    }
-
-
-async def create_moment(
-    tenant_id: str,
-    name: str,
-    moment_type: str,
-    summary: str | None = None,
-    present_persons: list[dict[str, Any]] | None = None,
-    emotion_tags: list[str] | None = None,
-    topic_tags: list[str] | None = None,
-    source_resource_ids: list[str] | None = None,
-    user_id: str | None = None,
-) -> dict[str, Any]:
+        # Graph exploration
+        ask_rem_agent(
+            query="Show me Sarah's reporting chain and their recent projects",
+            tenant_id="acme-corp"
+        )
     """
-    Create new moment (temporal narrative) in REM system.
+    try:
+        from ...agentic import AgentContext, create_agent
+        from ...services.schema_repository import SchemaRepository
 
-    Moments are time-bound events that classify and organize resources and entities.
-
-    Args:
-        tenant_id: Tenant identifier
-        name: Moment name/label
-        moment_type: Type (meeting, coding_session, conversation, etc.)
-        summary: Natural language summary
-        present_persons: List of Person dicts with id, name, role
-        emotion_tags: Emotion tags (happy, frustrated, focused, etc.)
-        topic_tags: Topic tags (project names, concepts)
-        source_resource_ids: Referenced resource IDs
-        user_id: Optional user ownership
-
-    Returns:
-        Dict with created moment details
-
-    Example:
-        >>> result = await create_moment(
-        ...     tenant_id="acme",
-        ...     name="api-design-meeting-2025-01-15",
-        ...     moment_type="meeting",
-        ...     summary="Team discussed API v2 design...",
-        ...     present_persons=[{"id": "sarah-chen", "name": "Sarah Chen", "role": "lead"}],
-        ...     topic_tags=["api-design", "architecture"]
-        ... )
-    """
-    if not _postgres_service:
-        raise RuntimeError(
-            "PostgresService not initialized. Call init_services() first."
+        # Create agent context
+        context = AgentContext(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            default_model=settings.llm.default_model,
         )
 
-    from ...models.entities import Moment
+        # Load agent schema
+        schema_repo = SchemaRepository()
+        schema = await schema_repo.get_schema(agent_schema, agent_version)
 
-    moment = Moment(
-        name=name,
-        moment_type=moment_type,
-        summary=summary,
-        present_persons=present_persons or [],
-        emotion_tags=emotion_tags or [],
-        topic_tags=topic_tags or [],
-        source_resource_ids=source_resource_ids or [],
-        tenant_id=tenant_id,
-        user_id=user_id,
-    )
+        if not schema:
+            return {
+                "status": "error",
+                "error": f"Agent schema not found: {agent_schema}",
+            }
 
-    result = await _postgres_service.batch_upsert(
-        records=[moment],
-        model=Moment,
-        table_name="moments",
-        entity_key_field="name",
-        generate_embeddings=False,  # Moments don't need embeddings
-    )
-
-    logger.info(f"Moment created: {name} (tenant: {tenant_id})")
-
-    return {
-        "moment_id": str(moment.id),
-        "name": name,
-        "moment_type": moment_type,
-        "tenant_id": tenant_id,
-        "upserted": result["upserted_count"],
-    }
-
-
-async def update_graph_edges(
-    entity_id: str,
-    edges: list[dict[str, Any]],
-    merge: bool = True,
-) -> dict[str, Any]:
-    """
-    Update graph edges for an entity.
-
-    Edges use InlineEdge format with human-readable destination labels.
-
-    Args:
-        entity_id: Entity UUID
-        edges: List of InlineEdge dicts with dst, rel_type, weight, properties
-        merge: If True, merge with existing edges; if False, replace
-
-    Returns:
-        Dict with update status
-
-    Example:
-        >>> result = await update_graph_edges(
-        ...     entity_id="uuid-123",
-        ...     edges=[
-        ...         {
-        ...             "dst": "sarah-chen",
-        ...             "rel_type": "authored_by",
-        ...             "weight": 1.0,
-        ...             "properties": {"dst_name": "Sarah Chen", "dst_entity_type": "person"}
-        ...         }
-        ...     ]
-        ... )
-    """
-    if not _postgres_service:
-        raise RuntimeError(
-            "PostgresService not initialized. Call init_services() first."
+        # Create agent
+        agent = await create_agent(
+            context=context,
+            agent_schema_override=schema,
         )
 
-    await _postgres_service.update_graph_edges(
-        entity_id=entity_id,
-        edges=edges,
-        merge=merge,
-    )
+        # Run agent
+        logger.info(f"Running ask_rem agent for query: {query[:100]}...")
+        result = await agent.run(query)
 
-    logger.info(f"Graph edges updated: {entity_id} ({len(edges)} edges)")
+        # Extract output
+        from rem.agentic.serialization import serialize_agent_result
+        query_output = serialize_agent_result(result.output)
 
-    return {
-        "entity_id": entity_id,
-        "edges_updated": len(edges),
-        "merge": merge,
-    }
+        logger.info("Agent execution completed successfully")
+
+        return {
+            "status": "success",
+            "response": str(result.output),
+            "query_output": query_output,
+            "natural_query": query,
+        }
+
+    except Exception as e:
+        logger.error(f"Agent execution failed: {e}", exc_info=True)
+        return {
+            "status": "error",
+            "error": str(e),
+            "natural_query": query,
+        }
 
 
-async def parse_and_ingest_file(
+async def ingest_into_rem(
     file_uri: str,
     tenant_id: str,
     user_id: str | None = None,
@@ -491,110 +366,201 @@ async def parse_and_ingest_file(
     is_local_server: bool = False,
 ) -> dict[str, Any]:
     """
-    Parse and ingest file into REM, creating searchable resources.
+    Ingest file into REM, creating searchable resources and embeddings.
 
-    **ARCHITECTURE - CENTRALIZED INGESTION**:
-    This MCP tool delegates to ContentService.ingest_file() which provides the
-    complete ingestion pipeline:
-
-    1. **Read**: File from local/S3/HTTP (via FileSystemService)
-    2. **Store**: To tenant-scoped internal storage (~/.rem/fs/ or S3)
-    3. **Parse**: Extract content, metadata, tables, images (parsing state)
-    4. **Chunk**: Semantic chunking with tiktoken for embeddings
+    This tool provides the complete file ingestion pipeline:
+    1. **Read**: File from local/S3/HTTP
+    2. **Store**: To tenant-scoped internal storage
+    3. **Parse**: Extract content, metadata, tables, images
+    4. **Chunk**: Semantic chunking for embeddings
     5. **Embed**: Create Resource chunks with vector embeddings
 
-    **PARSING STATE - The Innovation**:
-    Files (PDF, WAV, DOCX) → Rich parsing state:
-    - **Markdown**: Structured text with hierarchy preserved
-    - **Tables**: Extracted as CSV for structured queries
-    - **Images**: Saved for multimodal RAG
-    - **Metadata**: Provenance tracking (parser used, settings, timestamps)
+    Supported file types:
+    - Documents: PDF, DOCX, TXT, Markdown
+    - Code: Python, JavaScript, TypeScript, etc.
+    - Data: CSV, JSON, YAML
+    - Audio: WAV, MP3 (transcription)
 
-    This enables agents to deeply understand documents beyond simple text.
-
-    **CLIENT ABSTRACTION**: Clients don't worry about:
-    - Storage backend selection (S3 vs local)
-    - File parser selection (PDF vs DOCX)
-    - Chunking strategy (semantic vs fixed-size)
-    - Embedding generation (batching, retry logic)
-
-    Just call this tool and get searchable resources.
-
-    **PERMISSION CHECK**: Remote MCP servers cannot read local files (security).
-    The `is_local_server` parameter is checked by ContentService.ingest_file().
-
-    **DEDUPLICATION NOTE**: This is the ONLY place file ingestion logic exists.
-    CLI commands use ContentService.process_uri() for read-only extraction.
-    Workers use ContentService.process_and_save() for existing files.
-    This tool uses ContentService.ingest_file() for full pipeline.
+    **Security**: Remote MCP servers cannot read local files. Only local/stdio
+    MCP servers can access local filesystem paths.
 
     Args:
-        file_uri: File location - local path, s3:// URI, or http(s):// URL
+        file_uri: File location (local path, s3:// URI, or http(s):// URL)
         tenant_id: Tenant identifier for data isolation
         user_id: Optional user ownership
-        category: Optional category (document, code, agent, etc.)
+        category: Optional category (document, code, audio, etc.)
         tags: Optional tags for file
         is_local_server: True if running as local/stdio MCP server
 
     Returns:
         Dict with:
+        - status: "success" or "error"
         - file_id: Created file UUID
         - file_name: Original filename
-        - storage_uri: Internal storage URI (s3:// or file://)
-        - internal_key: S3 key or filesystem path
-        - size_bytes: File size
-        - content_type: MIME type
-        - source_uri: Original file location
-        - source_type: "local", "s3", or "url"
+        - storage_uri: Internal storage URI
         - processing_status: "completed" or "failed"
         - resources_created: Number of Resource chunks created
-        - parsing_metadata: Rich parsing state details
+        - content: Parsed file content (markdown format) if completed
         - message: Human-readable status message
 
-    Raises:
-        PermissionError: If remote server tries to read local file
-        FileNotFoundError: If source file doesn't exist
-        RuntimeError: If storage or processing fails
+    Examples:
+        # Ingest local file (local server only)
+        ingest_into_rem(
+            file_uri="/Users/me/contract.pdf",
+            tenant_id="acme-corp",
+            category="legal",
+            is_local_server=True
+        )
 
-    Example:
-        >>> # Local file (local server only)
-        >>> result = await parse_and_ingest_file(
-        ...     file_uri="/Users/me/contract.pdf",
-        ...     tenant_id="acme-corp",
-        ...     category="legal",
-        ...     is_local_server=True
-        ... )
-        >>> print(f"Created {result['resources_created']} searchable chunks")
+        # Ingest from S3
+        ingest_into_rem(
+            file_uri="s3://bucket/docs/report.pdf",
+            tenant_id="acme-corp"
+        )
 
-        >>> # S3 URI (all servers)
-        >>> result = await parse_and_ingest_file(
-        ...     file_uri="s3://bucket/docs/report.pdf",
-        ...     tenant_id="acme-corp"
-        ... )
-
-        >>> # HTTP URL (all servers)
-        >>> result = await parse_and_ingest_file(
-        ...     file_uri="https://example.com/whitepaper.pdf",
-        ...     tenant_id="acme-corp"
-        ... )
+        # Ingest from HTTP
+        ingest_into_rem(
+            file_uri="https://example.com/whitepaper.pdf",
+            tenant_id="acme-corp",
+            tags=["research", "whitepaper"]
+        )
     """
     from ...services.content import ContentService
 
-    # Delegate to ContentService for centralized ingestion
-    content_service = ContentService()
-    result = await content_service.ingest_file(
-        file_uri=file_uri,
-        tenant_id=tenant_id,
-        user_id=user_id,
-        category=category,
-        tags=tags,
-        is_local_server=is_local_server,
-    )
+    try:
+        # Delegate to ContentService for centralized ingestion
+        content_service = ContentService()
+        result = await content_service.ingest_file(
+            file_uri=file_uri,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            category=category,
+            tags=tags,
+            is_local_server=is_local_server,
+        )
 
-    logger.info(
-        f"MCP ingestion complete: {result['file_name']} "
-        f"(status: {result['processing_status']}, "
-        f"resources: {result['resources_created']})"
-    )
+        logger.info(
+            f"MCP ingestion complete: {result['file_name']} "
+            f"(status: {result['processing_status']}, "
+            f"resources: {result['resources_created']})"
+        )
 
-    return result
+        return {
+            "status": "success",
+            **result,
+        }
+
+    except PermissionError as e:
+        logger.error(f"Permission denied: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "message": "Remote servers cannot access local files. Use S3 or HTTP URLs.",
+        }
+
+    except FileNotFoundError as e:
+        logger.error(f"File not found: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "message": f"File not found: {file_uri}",
+        }
+
+    except Exception as e:
+        logger.exception(f"Ingestion failed: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "message": f"Failed to ingest file: {file_uri}",
+        }
+
+
+async def read_resource(uri: str) -> dict[str, Any]:
+    """
+    Read an MCP resource by URI.
+
+    This tool provides automatic access to MCP resources in Claude Desktop.
+    Resources contain authoritative, up-to-date reference data.
+
+    **IMPORTANT**: This tool enables Claude Desktop to automatically access
+    resources based on query relevance. While FastMCP correctly exposes resources
+    via standard MCP resource endpoints, Claude Desktop currently requires manual
+    resource attachment. This tool bridges that gap by exposing resource access
+    as a tool, which Claude Desktop WILL automatically invoke.
+
+    **Available Resources:**
+
+    Agent Schemas:
+    • rem://schemas - List all agent schemas
+    • rem://schema/{name} - Get specific schema definition
+    • rem://schema/{name}/{version} - Get specific version
+
+    System Status:
+    • rem://status - System health and statistics
+
+    Args:
+        uri: Resource URI (e.g., "rem://schemas", "rem://schema/ask_rem")
+
+    Returns:
+        Dict with:
+        - status: "success" or "error"
+        - uri: Original URI
+        - data: Resource data (format depends on resource type)
+
+    Examples:
+        # List all schemas
+        read_resource(uri="rem://schemas")
+
+        # Get specific schema
+        read_resource(uri="rem://schema/ask_rem")
+
+        # Get schema version
+        read_resource(uri="rem://schema/ask_rem/v1.0.0")
+
+        # Check system status
+        read_resource(uri="rem://status")
+    """
+    try:
+        logger.info(f"📖 Reading resource: {uri}")
+
+        # Import here to avoid circular dependency
+        from .resources import load_resource
+
+        # Load resource using the existing resource handler
+        result = await load_resource(uri)
+
+        logger.info(f"✓ Resource loaded successfully: {uri}")
+
+        # If result is already a dict, return it
+        if isinstance(result, dict):
+            return {
+                "status": "success",
+                "uri": uri,
+                "data": result,
+            }
+
+        # If result is a string (JSON), parse it
+        import json
+
+        try:
+            data = json.loads(result)
+            return {
+                "status": "success",
+                "uri": uri,
+                "data": data,
+            }
+        except json.JSONDecodeError:
+            # Return as plain text if not JSON
+            return {
+                "status": "success",
+                "uri": uri,
+                "data": {"content": result},
+            }
+
+    except Exception as e:
+        logger.error(f"Failed to read resource {uri}: {e}")
+        return {
+            "status": "error",
+            "uri": uri,
+            "error": str(e),
+        }

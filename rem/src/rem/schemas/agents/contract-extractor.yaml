@@ -1,57 +1,74 @@
----
-# Contract Extractor Agent Schema
-# Extracts key terms and obligations from legal contracts
-# Based on user-provided schema
-
 type: object
-description: |
-  You are a contract analysis agent with access to legal knowledge base and document parsing tools.
+description: 'You are a contract analysis agent with access to legal knowledge base
+  and document parsing tools.
+
 
   Your purpose is to extract structured information from contracts and legal documents.
 
+
   ## Your Capabilities
 
+
   - Extract parties, dates, and key terms from contracts
+
   - Search legal knowledge base for best practices and definitions
+
   - Parse additional documents when needed
+
   - Identify and categorize contract clauses
+
   - Assess risk levels in contract provisions
+
 
   ## Output Format
 
+
   You MUST provide all of the following:
 
+
   1. **document_title**: The title or name of the contract
+
   2. **parties**: List of parties involved in the contract
-  3. **effective_date**: The effective date of the contract (YYYY-MM-DD or descriptive text)
+
+  3. **effective_date**: The effective date of the contract (YYYY-MM-DD or descriptive
+  text)
+
   4. **key_terms**: List of important defined terms
+
   5. **key_clauses**: List of important clauses with summaries
+
   6. **risk_assessment**: Overall risk assessment (low, medium, high, critical)
+
   7. **tools_used**: List of tools you called during analysis
+
 
   ## Tool Usage Guidelines
 
+
   - Use **search_rem** to look up legal terms, clause best practices, or risk factors
+
   - Use **ingest_to_rem** if you need to extract text from referenced documents
+
   - Always cite which tools you used in the tools_used field
 
+  '
 properties:
   document_title:
     type: string
-    description: "The title or name of the contract"
+    description: The title or name of the contract
   parties:
     type: array
     items:
       type: string
-    description: "List of parties involved in the contract"
+    description: List of parties involved in the contract
   effective_date:
     type: string
-    description: "The effective date of the contract"
+    description: The effective date of the contract
   key_terms:
     type: array
     items:
       type: string
-    description: "List of important defined terms from the contract"
+    description: List of important defined terms from the contract
   key_clauses:
     type: array
     items:
@@ -59,53 +76,59 @@ properties:
       properties:
         type:
           type: string
-          description: "Type of clause (e.g., Indemnification, Confidentiality)"
+          description: Type of clause (e.g., Indemnification, Confidentiality)
         section:
           type: string
-          description: "Section reference in the document"
+          description: Section reference in the document
         summary:
           type: string
-          description: "Brief summary of the clause"
-    description: "List of important clauses with their summaries"
+          description: Brief summary of the clause
+    description: List of important clauses with their summaries
   risk_assessment:
     type: string
-    enum: ["low", "medium", "high", "critical"]
-    description: "Overall risk assessment of the contract"
+    enum:
+    - low
+    - medium
+    - high
+    - critical
+    description: Overall risk assessment of the contract
   tools_used:
     type: array
     items:
       type: string
-    description: "List of tools that were called during analysis"
-
+    description: List of tools that were called during analysis
 required:
+- document_title
+- parties
+- effective_date
+- key_terms
+- key_clauses
+- risk_assessment
+- tools_used
+json_schema_extra:
+  kind: agent
+  name: contract-extractor
+  version: 1.0.0
+  tags:
+  - legal
+  - contract-analysis
+  author: User-provided
+  tools:
+  - name: search_rem
+    mcp_server: rem
+    description: Use this to search the legal knowledge base for relevant information
+      about contract clauses, legal terms, and best practices
+  - name: ingest_to_rem
+    mcp_server: rem
+    description: Use this to parse and extract text from PDF or other document files
+      when you need to read referenced documents
+  resources: []
+  embedding_fields:
   - document_title
-  - parties
-  - effective_date
   - key_terms
   - key_clauses
-  - risk_assessment
-  - tools_used
-
-json_schema_extra:
-  fully_qualified_name: "contract_reader.agents.contract_extractor.ContractExtractor"
-  version: "1.0.0"
-  name: ContractExtractor
-  short_name: "contract-extractor"
-  tags:
-    - legal
-    - contract-analysis
-  author: "User-provided"
-  tools:
-    - name: "search_rem"
-      mcp_server: "rem"
-      description: "Use this to search the legal knowledge base for relevant information about contract clauses, legal terms, and best practices"
-    - name: "ingest_to_rem"
-      mcp_server: "rem"
-      description: "Use this to parse and extract text from PDF or other document files when you need to read referenced documents"
-  resources: []
-  embedding_fields: ["document_title", "key_terms", "key_clauses"]
   provider_configs:
-    - provider_name: anthropic
-      model_name: claude-sonnet-4-5-20250929
-    - provider_name: openai
-      model_name: gpt-4o
+  - provider_name: anthropic
+    model_name: claude-sonnet-4-5-20250929
+  - provider_name: openai
+    model_name: gpt-4o

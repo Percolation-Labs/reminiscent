@@ -2,7 +2,7 @@
 Pytest configuration and fixtures for REM tests.
 """
 
-import json
+import yaml
 from pathlib import Path
 
 import pytest
@@ -16,23 +16,23 @@ def tests_data_dir() -> Path:
 
 @pytest.fixture
 def query_agent_schema(tests_data_dir: Path) -> dict:
-    """Load query agent JSON schema."""
-    schema_path = tests_data_dir / "agents" / "query_agent.json"
+    """Load query agent YAML schema."""
+    schema_path = tests_data_dir / "schemas" / "agents" / "query_agent.yaml"
     with open(schema_path) as f:
-        return json.load(f)
+        return yaml.safe_load(f)
 
 
 @pytest.fixture
 def summarization_agent_schema(tests_data_dir: Path) -> dict:
-    """Load summarization agent JSON schema."""
-    schema_path = tests_data_dir / "agents" / "summarization_agent.json"
+    """Load summarization agent YAML schema."""
+    schema_path = tests_data_dir / "schemas" / "agents" / "summarization_agent.yaml"
     with open(schema_path) as f:
-        return json.load(f)
+        return yaml.safe_load(f)
 
 
 @pytest.fixture
 def accuracy_evaluator_schema(tests_data_dir: Path) -> dict:
-    """Load accuracy evaluator JSON schema."""
-    schema_path = tests_data_dir / "agents" / "evaluators" / "accuracy_evaluator.json"
+    """Load accuracy evaluator YAML schema."""
+    schema_path = tests_data_dir / "schemas" / "evaluators" / "accuracy_evaluator.yaml"
     with open(schema_path) as f:
-        return json.load(f)
+        return yaml.safe_load(f)

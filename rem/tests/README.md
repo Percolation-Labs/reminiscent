@@ -175,8 +175,8 @@ pytest-watch tests/unit/
 ```python
 @pytest.fixture
 def query_agent_schema(tests_data_dir: Path) -> dict:
-    """Load query agent JSON schema."""
-    # Loads from tests/data/agents/query_agent.json
+    """Load query agent schema."""
+    # Loads from tests/data/schemas/agents/query_agent.yaml
 ```
 
 ### Integration Test Fixtures
@@ -192,15 +192,29 @@ async def postgres_service() -> PostgresService:
 
 ## Test Data
 
-Test data lives in `tests/data/`:
+Test data lives in `tests/data/` - all in YAML format:
 ```
 tests/data/
-├── agents/              # Agent JSON schemas
-│   ├── query_agent.json
-│   └── summarization_agent.json
-└── seed/                # Seed data for integration tests
+├── schemas/                        # Schema files (YAML)
+│   ├── agents/                     # Agent schemas
+│   │   ├── query_agent.yaml
+│   │   ├── summarization_agent.yaml
+│   │   └── test-cv-parser.yaml
+│   └── evaluators/                 # Evaluator schemas
+├── content-examples/               # Sample files for testing
+│   ├── service_agreement.txt
+│   ├── service_agreement_output.yaml
+│   ├── pdf/
+│   │   ├── service_contract.pdf
+│   │   └── [more PDFs]
+│   └── README.md
+├── sample_conversations.yaml       # Conversation fixtures
+├── graph_seed.yaml                 # Graph relationship seed data
+└── seed/                           # Additional seed data for integration tests
     └── resources.yaml
 ```
+
+**Convention:** All configuration and fixture data uses YAML format (not JSON or Python files). Executable code belongs in `tests/integration/` as proper test files.
 
 ## Test Requirements
 

@@ -17,7 +17,7 @@ import click
 from loguru import logger
 
 from ...agentic.context import AgentContext
-from ...agentic.providers.pydantic_ai import create_pydantic_ai_agent
+from ...agentic.providers.pydantic_ai import create_agent
 from ...agentic.query import AgentQuery
 from ...settings import settings
 
@@ -28,8 +28,14 @@ async def load_schema_from_file(file_path: Path) -> dict[str, Any]:
 
     Searches in order:
     1. Exact path if it exists
-    2. Packaged schemas (src/rem/schemas/)
-    3. Current directory + path
+    2. Packaged schemas/agents/ with .yaml extension
+    3. Packaged schemas/ with .yaml extension
+    4. Packaged schemas/ as-is
+
+    Supports short names:
+    - "contract-analyzer" → "schemas/agents/contract-analyzer.yaml"
+    - "agents/contract-analyzer" → "schemas/agents/contract-analyzer.yaml"
+    - "contract-analyzer.yaml" → "schemas/agents/contract-analyzer.yaml"
 
     Args:
         file_path: Path to YAML file containing agent schema
@@ -47,21 +53,52 @@ async def load_schema_from_file(file_path: Path) -> dict[str, Any]:
         logger.debug(f"Loaded schema from {file_path}: {list(schema.keys())}")
         return schema
 
-    # Try packaged schemas
-    try:
-        schemas_ref = importlib.resources.files("rem") / "schemas" / str(file_path)
-        schemas_path = Path(str(schemas_ref))
-        if schemas_path.exists():
-            with open(schemas_path, "r") as f:
-                schema = yaml.safe_load(f)
-            logger.debug(f"Loaded schema from package {schemas_path}: {list(schema.keys())}")
-            return schema
-    except Exception as e:
-        logger.debug(f"Could not load from package schemas: {e}")
+    # Try packaged schemas with various transformations
+    search_paths = []
+
+    # Convert Path to string for easier manipulation
+    path_str = str(file_path)
+
+    # Remove .yaml/.yml extension if present for normalization
+    base_name = path_str
+    if path_str.endswith('.yaml') or path_str.endswith('.yml'):
+        base_name = path_str.rsplit('.', 1)[0]
+
+    # Build search paths in priority order
+    # 1. schemas/agents/{name}.yaml (most common)
+    if not base_name.startswith('schemas/'):
+        # Remove 'agents/' prefix if present
+        clean_name = base_name.replace('agents/', '')
+        search_paths.append(f"schemas/agents/{clean_name}.yaml")
+
+    # 2. schemas/{name}.yaml
+    if not base_name.startswith('schemas/'):
+        search_paths.append(f"schemas/{base_name}.yaml")
+
+    # 3. Original path with .yaml extension
+    if not path_str.endswith('.yaml') and not path_str.endswith('.yml'):
+        search_paths.append(f"{path_str}.yaml")
+
+    # 4. Original path as-is
+    search_paths.append(path_str)
+
+    # Try each search path
+    for search_path in search_paths:
+        try:
+            schemas_ref = importlib.resources.files("rem") / search_path
+            schemas_path = Path(str(schemas_ref))
+            if schemas_path.exists():
+                with open(schemas_path, "r") as f:
+                    schema = yaml.safe_load(f)
+                logger.debug(f"Loaded schema from package {schemas_path}: {list(schema.keys())}")
+                return schema
+        except Exception as e:
+            logger.debug(f"Could not load from {search_path}: {e}")
+            continue
 
     raise FileNotFoundError(
         f"Schema file not found: {file_path}\n"
-        f"Searched: {file_path}, rem/schemas/{file_path}"
+        f"Searched: {', '.join(search_paths)}"
     )
 
 
@@ -163,10 +200,8 @@ async def run_agent_streaming(
         if hasattr(result, "output"):
             logger.info("Final structured result:")
             output = result.output
-            if hasattr(output, "model_dump"):
-                print(json.dumps(output.model_dump(), indent=2))
-            else:
-                print(output)
+            from rem.agentic.serialization import serialize_agent_result
+            print(json.dumps(serialize_agent_result(output), indent=2))
 
     except Exception as e:
         logger.error(f"Agent execution failed: {e}")
@@ -174,8 +209,8 @@ async def run_agent_streaming(
 
 
 async def run_agent_non_streaming(
-    agent, query_text: str, max_turns: int = 10
-) -> None:
+    agent, query_text: str, max_turns: int = 10, output_file: Path | None = None
+) -> dict[str, Any] | None:
     """
     Run agent in non-streaming mode using agent.run().
 
@@ -183,6 +218,10 @@ async def run_agent_non_streaming(
         agent: Pydantic AI agent
         query_text: User query
         max_turns: Maximum turns for agent execution (not used in current API)
+        output_file: Optional path to save output
+
+    Returns:
+        Output data if successful, None otherwise
     """
     logger.info("Running agent in non-streaming mode...")
 
@@ -194,27 +233,79 @@ async def run_agent_non_streaming(
         # Run agent and get complete result
         result = await agent.run(prompt)
 
-        # Display result
-        logger.info("Agent result:")
-        # AgentRunResult has different attributes based on whether result_type is set
+        # Extract output data
+        output_data = None
         if hasattr(result, "output"):
             output = result.output
-            if hasattr(output, "model_dump"):
-                print(json.dumps(output.model_dump(), indent=2))
-            else:
-                print(output)
+            from rem.agentic.serialization import serialize_agent_result
+            output_data = serialize_agent_result(output)
+            print(json.dumps(output_data, indent=2))
         else:
             # Fallback for text-only results
             print(result)
+
+        # Save to file if requested
+        if output_file and output_data:
+            await _save_output_file(output_file, output_data)
+
+        return output_data
 
     except Exception as e:
         logger.error(f"Agent execution failed: {e}")
         raise
 
 
+async def _load_input_file(
+    file_path: Path, tenant_id: str, user_id: str | None = None
+) -> str:
+    """
+    Load content from input file using ContentService.
+
+    Simple parse operation - just extracts content without creating Resources.
+
+    Args:
+        file_path: Path to input file
+        tenant_id: Tenant ID (not used for simple parse, but kept for consistency)
+        user_id: Optional user ID (not used for simple parse)
+
+    Returns:
+        Parsed file content as string (markdown format)
+    """
+    from ...services.content import ContentService
+
+    # Create ContentService instance
+    content_service = ContentService()
+
+    # Parse file (read-only, no database writes)
+    logger.info(f"Parsing file: {file_path}")
+    result = content_service.process_uri(str(file_path))
+    content = result["content"]
+
+    logger.info(
+        f"Loaded {len(content)} characters from {file_path.suffix} file using {result['provider']}"
+    )
+    return content
+
+
+async def _save_output_file(file_path: Path, data: dict[str, Any]) -> None:
+    """
+    Save output data to file in YAML format.
+
+    Args:
+        file_path: Path to output file
+        data: Data to save
+    """
+    import yaml
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+    logger.success(f"Output saved to: {file_path}")
+
+
 @click.command()
 @click.argument("name")
-@click.argument("query")
+@click.argument("query", required=False)
 @click.option(
     "--model",
     "-m",
@@ -242,8 +333,8 @@ async def run_agent_non_streaming(
 )
 @click.option(
     "--stream/--no-stream",
-    default=True,
-    help="Enable streaming mode (default: enabled)",
+    default=False,
+    help="Enable streaming mode (default: disabled)",
 )
 @click.option(
     "--user-id",
@@ -260,9 +351,23 @@ async def run_agent_non_streaming(
     default=None,
     help="Session ID for context (default: auto-generated)",
 )
+@click.option(
+    "--input-file",
+    "-i",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Read input from file instead of QUERY argument (supports PDF, TXT, Markdown)",
+)
+@click.option(
+    "--output-file",
+    "-o",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Write output to file (YAML format)",
+)
 def ask(
     name: str,
-    query: str,
+    query: str | None,
     model: str | None,
     temperature: float | None,
     max_turns: int,
@@ -271,20 +376,31 @@ def ask(
     user_id: str,
     tenant_id: str,
     session_id: str | None,
+    input_file: Path | None,
+    output_file: Path | None,
 ):
     """
-    Test Pydantic AI agent with query.
+    Run an agent with a query or file input.
 
-    NAME can be either:
-    - A schema name (e.g., "query-agent") - loads from registry
-    - A file path (e.g., "schemas/query-agent.yaml") - loads from file
+    NAME is the agent schema name (YAML files in schemas/agents/):
+    - Short name: "contract-analyzer" → schemas/agents/contract-analyzer.yaml
+    - With extension: "contract-analyzer.yaml" → schemas/agents/contract-analyzer.yaml
+    - Full path also works: "schemas/agents/contract-analyzer.yaml"
 
-    QUERY is the user query to send to the agent.
+    QUERY is the user query (optional if --input-file is used).
 
     Examples:
-        rem ask query-agent "Find all documents by Sarah"
-        rem ask schemas/query-agent.yaml "What is the weather?" --model gpt-4o
-        rem ask my-agent "Hello" --stream --temperature 0.7 --max-turns 5
+        # Simple query
+        rem ask simple-agent "What is 2+2?"
+
+        # Process file
+        rem ask contract-analyzer -i contract.pdf -o output.yaml
+
+        # With specific model
+        rem ask query-agent "Find documents" -m openai:gpt-4o
+
+        # Streaming mode
+        rem ask simple-agent "Hello" --stream
     """
     asyncio.run(
         _ask_async(
@@ -298,13 +414,15 @@ def ask(
             user_id=user_id,
             tenant_id=tenant_id,
             session_id=session_id,
+            input_file=input_file,
+            output_file=output_file,
         )
     )
 
 
 async def _ask_async(
     name: str,
-    query: str,
+    query: str | None,
     model: str | None,
     temperature: float | None,
     max_turns: int,
@@ -313,8 +431,24 @@ async def _ask_async(
     user_id: str,
     tenant_id: str,
     session_id: str | None,
+    input_file: Path | None,
+    output_file: Path | None,
 ):
     """Async implementation of ask command."""
+    # Validate input arguments
+    if not query and not input_file:
+        logger.error("Either QUERY argument or --input-file must be provided")
+        sys.exit(1)
+
+    if query and input_file:
+        logger.error("Cannot use both QUERY argument and --input-file")
+        sys.exit(1)
+
+    # Load input from file if specified
+    if input_file:
+        logger.info(f"Loading input from file: {input_file}")
+        query = await _load_input_file(input_file, tenant_id=tenant_id, user_id=user_id)
+
     # Determine if name is a file path or schema name
     name_path = Path(name)
     if name_path.exists() and name_path.suffix in [".yaml", ".yml", ".json"]:
@@ -341,7 +475,7 @@ async def _ask_async(
     )
 
     # Create agent
-    agent = await create_pydantic_ai_agent(
+    agent = await create_agent(
         context=context,
         agent_schema_override=schema,
         model_override=model,
@@ -360,7 +494,7 @@ async def _ask_async(
     if stream:
         await run_agent_streaming(agent, query, max_turns=max_turns)
     else:
-        await run_agent_non_streaming(agent, query, max_turns=max_turns)
+        await run_agent_non_streaming(agent, query, max_turns=max_turns, output_file=output_file)
 
 
 def register_command(parent_group):
