@@ -2,10 +2,9 @@
 OpenAI-compatible chat completions router for REM.
 
 Design Pattern:
-- Headers map to AgentContext (X-User-Id, X-Tenant-Id, X-Session-Id, X-Model-Name, X-Agent-Schema)
+- Headers map to AgentContext (X-User-Id, X-Tenant-Id, X-Session-Id, X-Agent-Schema)
 - ContextBuilder centralizes message construction with user profile + session history
 - Body.model is the LLM model for Pydantic AI
-- X-Model-Name header can override body.model
 - X-Agent-Schema header specifies which agent schema to use (defaults to 'rem')
 - Support for streaming (SSE) and non-streaming modes
 - Response format control (text vs json_object)
@@ -54,6 +53,8 @@ Example Request:
     }
 """
 
+import base64
+import tempfile
 import time
 import uuid
 from datetime import datetime
@@ -67,6 +68,7 @@ from loguru import logger
 from ....agentic.context import AgentContext
 from ....agentic.context_builder import ContextBuilder
 from ....agentic.providers.pydantic_ai import create_pydantic_ai_agent
+from ....services.audio.transcriber import AudioTranscriber
 from ....services.session import SessionMessageStore, reload_session
 from ....settings import settings
 from .json_utils import extract_json_resilient
