@@ -54,11 +54,11 @@ def test_mcp_resource_reference():
 def test_agent_schema_metadata_minimal():
     """Test AgentSchemaMetadata with minimal fields."""
     metadata = AgentSchemaMetadata(
-        fully_qualified_name="rem.agents.TestAgent"
+        name="TestAgent"
     )
 
-    assert metadata.fully_qualified_name == "rem.agents.TestAgent"
-    assert metadata.name is None
+    assert metadata.name == "TestAgent"
+    assert metadata.kind is None
     assert metadata.version is None
     assert metadata.tools == []
     assert metadata.resources == []
@@ -67,9 +67,8 @@ def test_agent_schema_metadata_minimal():
 def test_agent_schema_metadata_complete():
     """Test AgentSchemaMetadata with all fields."""
     metadata = AgentSchemaMetadata(
-        fully_qualified_name="rem.agents.QueryAgent",
-        name="Query Agent",
-        short_name="query",
+        name="QueryAgent",
+        kind="agent",
         version="1.0.0",
         tools=[
             {"name": "lookup", "mcp_server": "rem"},
@@ -82,9 +81,8 @@ def test_agent_schema_metadata_complete():
         author="REM Team"
     )
 
-    assert metadata.fully_qualified_name == "rem.agents.QueryAgent"
-    assert metadata.name == "Query Agent"
-    assert metadata.short_name == "query"
+    assert metadata.name == "QueryAgent"
+    assert metadata.kind == "agent"
     assert metadata.version == "1.0.0"
     assert len(metadata.tools) == 2
     assert len(metadata.resources) == 1
@@ -101,7 +99,7 @@ def test_agent_schema_minimal():
         },
         required=["answer"],
         json_schema_extra=AgentSchemaMetadata(
-            fully_qualified_name="rem.agents.TestAgent"
+            name="test-agent"
         )
     )
 
@@ -109,7 +107,7 @@ def test_agent_schema_minimal():
     assert schema.description == "You are a test agent."
     assert "answer" in schema.properties
     assert schema.required == ["answer"]
-    assert schema.json_schema_extra.fully_qualified_name == "rem.agents.TestAgent"
+    assert schema.json_schema_extra.name == "test-agent"
 
 
 def test_agent_schema_complete():
@@ -124,7 +122,8 @@ def test_agent_schema_complete():
         },
         required=["answer", "confidence"],
         json_schema_extra=AgentSchemaMetadata(
-            fully_qualified_name="rem.agents.QueryAgent",
+            name="query-agent", # Adjusted to match new metadata structure
+            kind="agent", # Added kind as it was in the metadata, but not passed here
             version="1.0.0",
             tools=[{"name": "lookup", "mcp_server": "rem"}]
         ),
@@ -150,7 +149,7 @@ def test_validate_agent_schema():
         },
         "required": ["result"],
         "json_schema_extra": {
-            "fully_qualified_name": "rem.agents.Test"
+            "name": "test-agent"
         }
     }
 
@@ -158,7 +157,7 @@ def test_validate_agent_schema():
 
     assert isinstance(validated, AgentSchema)
     assert validated.description == "Test agent"
-    assert validated.json_schema_extra.fully_qualified_name == "rem.agents.Test"
+    assert validated.json_schema_extra.name == "test-agent"
 
 
 def test_validate_agent_schema_invalid():
@@ -182,7 +181,8 @@ def test_create_agent_schema():
             "sources": {"type": "array", "items": {"type": "string"}}
         },
         required=["answer"],
-        fully_qualified_name="rem.agents.Assistant",
+        name="Assistant", # Changed from fully_qualified_name
+        kind="agent", # Added for completeness as it was implied
         tools=[{"name": "search", "mcp_server": "rem"}],
         resources=[{"uri_pattern": "rem://.*", "mcp_server": "rem"}],
         version="1.0.0"
@@ -192,7 +192,7 @@ def test_create_agent_schema():
     assert schema.description == "You are a helpful assistant."
     assert len(schema.properties) == 2
     assert schema.required == ["answer"]
-    assert schema.json_schema_extra.fully_qualified_name == "rem.agents.Assistant"
+    assert schema.json_schema_extra.name == "Assistant" # Changed to name
     assert schema.json_schema_extra.version == "1.0.0"
     assert len(schema.json_schema_extra.tools) == 1
     assert len(schema.json_schema_extra.resources) == 1
@@ -204,11 +204,12 @@ def test_create_agent_schema_with_extra_fields():
         description="Test agent",
         properties={"result": {"type": "string"}},
         required=["result"],
-        fully_qualified_name="rem.agents.Test",
+        name="Test", # Changed from fully_qualified_name
         title="Test Agent",
         definitions={"EntityKey": {"type": "string", "pattern": "^[a-z0-9-]+$"}}
     )
 
+    assert schema.json_schema_extra.name == "Test" # Added assertion
     assert schema.title == "Test Agent"
     assert schema.definitions == {"EntityKey": {"type": "string", "pattern": "^[a-z0-9-]+$"}}
 
@@ -219,7 +220,7 @@ def test_agent_schema_serialization():
         description="Test agent",
         properties={"answer": {"type": "string"}},
         required=["answer"],
-        fully_qualified_name="rem.agents.Test",
+        name="Test", # Changed from fully_qualified_name
         version="1.0.0"
     )
 
@@ -229,7 +230,7 @@ def test_agent_schema_serialization():
     assert schema_dict["type"] == "object"
     assert schema_dict["description"] == "Test agent"
     assert "answer" in schema_dict["properties"]
-    assert schema_dict["json_schema_extra"]["fully_qualified_name"] == "rem.agents.Test"
+    assert schema_dict["json_schema_extra"]["name"] == "Test" # Changed from fully_qualified_name
     assert schema_dict["json_schema_extra"]["version"] == "1.0.0"
 
     # Should be able to validate it back

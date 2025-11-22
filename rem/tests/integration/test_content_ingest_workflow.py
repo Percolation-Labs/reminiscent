@@ -91,7 +91,7 @@ async def test_ingest_file_full_workflow(postgres_service):
     # Run ingestion
     result = await content_service.ingest_file(
         file_uri=str(test_file),
-        tenant_id=user_id,  # Using user_id for tenant_id (user-based partitioning)
+        # tenant_id removed - using user_id only (user-based partitioning)
         user_id=user_id,
         category="test-document",
         tags=["integration-test"],
@@ -197,7 +197,7 @@ async def test_ingest_file_storage_location(postgres_service):
     # Run ingestion
     result = await content_service.ingest_file(
         file_uri=str(test_file),
-        tenant_id=user_id,  # Using user_id for tenant_id (user-based partitioning)
+        # tenant_id removed - using user_id only (user-based partitioning)
         user_id=user_id,
         is_local_server=True,
     )

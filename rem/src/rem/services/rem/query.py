@@ -39,7 +39,7 @@ class REMQueryService:
     """
     REM Query Service - Executes REM dialect queries.
 
-    Integrates with PostgresService for database operations.
+    Parses SQL-like REM dialect and delegates to REMQueryExecutor.
     """
 
     def __init__(self, postgres_service: Any):
@@ -50,15 +50,20 @@ class REMQueryService:
             postgres_service: PostgresService instance
         """
         self.pg = postgres_service
+
+        # Delegate PostgreSQL function calls to shared executor
+        from .executor import REMQueryExecutor
+        self.executor = REMQueryExecutor(postgres_service)
+
         logger.info("Initialized REMQueryService")
 
-    async def execute(self, query: str, tenant_id: Optional[str] = None) -> REMQueryResult:
+    async def execute(self, query: str, user_id: Optional[str] = None) -> REMQueryResult:
         """
         Execute REM dialect query.
 
         Args:
             query: REM query string
-            tenant_id: Optional tenant filter
+            user_id: Optional user filter
 
         Returns:
             REMQueryResult with results and metadata
@@ -71,32 +76,32 @@ class REMQueryService:
 
         # Parse operation
         if query.upper().startswith("SQL "):
-            return await self._execute_sql(query[4:].strip(), tenant_id)
+            return await self._execute_sql(query[4:].strip(), user_id)
         elif query.upper().startswith("SEARCH "):
-            return await self._execute_search(query[7:].strip(), tenant_id)
+            return await self._execute_search(query[7:].strip(), user_id)
         elif query.upper().startswith("LOOKUP "):
-            return await self._execute_lookup(query[7:].strip(), tenant_id)
+            return await self._execute_lookup(query[7:].strip(), user_id)
         elif query.upper().startswith("FUZZY LOOKUP "):
-            return await self._execute_fuzzy_lookup(query[13:].strip(), tenant_id)
+            return await self._execute_fuzzy_lookup(query[13:].strip(), user_id)
         elif query.upper().startswith("TRAVERSE "):
-            return await self._execute_traverse(query[9:].strip(), tenant_id)
+            return await self._execute_traverse(query[9:].strip(), user_id)
         else:
             raise ValueError(f"Unknown REM operation: {query.split()[0]}")
 
-    async def _execute_sql(self, query: str, tenant_id: Optional[str]) -> REMQueryResult:
+    async def _execute_sql(self, query: str, user_id: Optional[str]) -> REMQueryResult:
         """
         Execute raw SQL query.
 
         Args:
             query: SQL query string
-            tenant_id: Optional tenant filter
+            user_id: Optional user filter
 
         Returns:
             Query results
         """
         logger.debug(f"Executing SQL: {query}")
 
-        results = await self.pg.execute(query)
+        results = await self.executor.execute_sql(query)
 
         return REMQueryResult(
             operation="SQL",
@@ -105,7 +110,7 @@ class REMQueryService:
             metadata={"query": query},
         )
 
-    async def _execute_search(self, query: str, tenant_id: Optional[str]) -> REMQueryResult:
+    async def _execute_search(self, query: str, user_id: Optional[str]) -> REMQueryResult:
         """
         Execute vector similarity SEARCH using rem_search() DB function.
 
@@ -113,7 +118,7 @@ class REMQueryService:
 
         Args:
             query: Search query string
-            tenant_id: Optional tenant filter
+            user_id: Optional user filter
 
         Returns:
             Similar entities ranked by cosine similarity
@@ -145,15 +150,16 @@ class REMQueryService:
         # Generate embedding for search query
         provider_str = f"{settings.llm.embedding_provider}:{settings.llm.embedding_model}"
         query_embedding = generate_embeddings(provider_str, [search_text])[0]
-        embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
 
-        sql = """
-            SELECT entity_key, entity_type, entity_id, distance, content_summary
-            FROM rem_search($1::vector(1536), $2, 'content', $3, 'openai', 0.0, $4, NULL)
-        """
-
-        results = await self.pg.execute(
-            sql, (embedding_str, table_name, tenant_id, limit)
+        # Delegate to executor
+        results = await self.executor.execute_search(
+            query_embedding=query_embedding,
+            table_name=table_name,
+            field_name="content",
+            provider=settings.llm.embedding_provider,
+            min_similarity=0.0,
+            limit=limit,
+            user_id=user_id,
         )
 
         return REMQueryResult(
@@ -167,7 +173,7 @@ class REMQueryService:
             },
         )
 
-    async def _execute_lookup(self, query: str, tenant_id: Optional[str]) -> REMQueryResult:
+    async def _execute_lookup(self, query: str, user_id: Optional[str]) -> REMQueryResult:
         """
         Execute exact KV store LOOKUP using rem_lookup() DB function.
 
@@ -175,7 +181,7 @@ class REMQueryService:
 
         Args:
             query: Lookup query string
-            tenant_id: Optional tenant filter
+            user_id: Optional user filter
 
         Returns:
             Exact matches from KV store (O(1) lookup)
@@ -193,13 +199,11 @@ class REMQueryService:
 
         logger.debug(f"LOOKUP: key='{entity_key}', type={entity_type}")
 
-        sql = """
-            SELECT entity_key, entity_type, entity_id, tenant_id, user_id, created_at,
-                   content_summary, metadata
-            FROM rem_lookup($1, $2, NULL)
-        """
-
-        results = await self.pg.execute(sql, (entity_key, tenant_id))
+        # Delegate to executor
+        results = await self.executor.execute_lookup(
+            entity_key=entity_key,
+            user_id=user_id,
+        )
 
         return REMQueryResult(
             operation="LOOKUP",
@@ -209,7 +213,7 @@ class REMQueryService:
         )
 
     async def _execute_fuzzy_lookup(
-        self, query: str, tenant_id: Optional[str]
+        self, query: str, user_id: Optional[str]
     ) -> REMQueryResult:
         """
         Execute fuzzy LOOKUP using rem_fuzzy() DB function with trigram similarity.
@@ -218,7 +222,7 @@ class REMQueryService:
 
         Args:
             query: Fuzzy lookup query string
-            tenant_id: Optional tenant filter
+            user_id: Optional user filter
 
         Returns:
             Fuzzy matches ranked by similarity
@@ -243,13 +247,13 @@ class REMQueryService:
             f"FUZZY LOOKUP: text='{search_text}', type={entity_type}, threshold={threshold}"
         )
 
-        sql = """
-            SELECT entity_key, entity_type, entity_id, tenant_id, user_id, created_at,
-                   content_summary, metadata, similarity_score
-            FROM rem_fuzzy($1, $2, $3, 10, NULL)
-        """
-
-        results = await self.pg.execute(sql, (search_text, tenant_id, threshold))
+        # Delegate to executor
+        results = await self.executor.execute_fuzzy(
+            query_text=search_text,
+            user_id=user_id,
+            threshold=threshold,
+            limit=10,
+        )
 
         return REMQueryResult(
             operation="FUZZY LOOKUP",
@@ -262,7 +266,7 @@ class REMQueryService:
             },
         )
 
-    async def _execute_traverse(self, query: str, tenant_id: Optional[str]) -> REMQueryResult:
+    async def _execute_traverse(self, query: str, user_id: Optional[str]) -> REMQueryResult:
         """
         Execute graph TRAVERSE using rem_traverse() DB function.
 
@@ -273,7 +277,7 @@ class REMQueryService:
 
         Args:
             query: Traverse query string
-            tenant_id: Optional tenant filter
+            user_id: Optional user filter
 
         Returns:
             Connected entities via graph edges
@@ -312,9 +316,9 @@ class REMQueryService:
 
         entity_key = entity_identifier
         if re.match(r"^[a-f0-9-]{36}$", entity_identifier):
-            lookup_sql = "SELECT entity_key FROM kv_store WHERE entity_id = $1 AND tenant_id = $2"
+            lookup_sql = "SELECT entity_key FROM kv_store WHERE entity_id = $1 AND user_id = $2"
             lookup_result = await self.pg.execute(
-                lookup_sql, (entity_identifier, tenant_id)
+                lookup_sql, (entity_identifier, user_id)
             )
             if lookup_result:
                 entity_key = lookup_result[0]["entity_key"]
@@ -332,17 +336,16 @@ class REMQueryService:
                     },
                 )
 
-        # Convert single edge_type to list for new SQL signature
+        # Convert single edge_type to list
         edge_types = [edge_type] if edge_type else None
 
-        sql = """
-            SELECT depth, entity_key, entity_type, entity_id,
-                   rel_type AS edge_type, rel_weight, path
-            FROM rem_traverse($1, $2, $3, $4, NULL)
-        """
-
-        results = await self.pg.execute(
-            sql, (entity_key, tenant_id, depth, edge_types)
+        # Delegate to executor
+        results = await self.executor.execute_traverse(
+            start_key=entity_key,
+            direction=direction,
+            max_depth=depth,
+            edge_types=edge_types,
+            user_id=user_id,
         )
 
         return REMQueryResult(

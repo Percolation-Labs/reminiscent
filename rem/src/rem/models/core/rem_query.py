@@ -191,7 +191,7 @@ class RemQuery(BaseModel):
         | SQLParameters
         | TraverseParameters
     ) = Field(..., description="Query parameters")
-    tenant_id: str = Field(..., description="Tenant identifier for isolation")
+    user_id: str = Field(..., description="User identifier for isolation")
 
 
 class TraverseStage(BaseModel):

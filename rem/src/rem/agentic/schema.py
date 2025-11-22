@@ -100,7 +100,8 @@ class AgentSchemaMetadata(BaseModel):
     All fields are optional but recommended for production agents.
     """
 
-    kind: str = Field(
+    kind: str | None = Field(
+        default=None,
         description=(
             "Schema kind/type. Determines how the schema is processed. "
             "Values: 'agent', 'evaluator', 'engram'. "
@@ -164,6 +165,22 @@ class AgentSchemaMetadata(BaseModel):
             "Agent author or team. "
             "Examples: 'REM Team', 'john@example.com'. "
             "Used for attribution and maintenance tracking."
+        ),
+    )
+
+    override_temperature: float | None = Field(
+        default=None,
+        description=(
+            "Override default LLM temperature (0.0-1.0) for this agent. "
+            "If None, uses global settings.llm.default_temperature."
+        ),
+    )
+
+    override_max_iterations: int | None = Field(
+        default=None,
+        description=(
+            "Override maximum iterations for this agent. "
+            "If None, uses global settings.llm.default_max_iterations."
         ),
     )
 
@@ -316,11 +333,13 @@ def create_agent_schema(
     description: str,
     properties: dict[str, Any],
     required: list[str],
-    kind: str,
     name: str,
+    kind: str | None = None,
     tools: list[dict[str, Any]] | None = None,
     resources: list[dict[str, Any]] | None = None,
     version: str = "1.0.0",
+    override_temperature: float | None = None,
+    override_max_iterations: int | None = None,
     **kwargs,
 ) -> AgentSchema:
     """
@@ -330,11 +349,13 @@ def create_agent_schema(
         description: System prompt
         properties: Output schema properties
         required: Required field names
-        kind: Schema kind ('agent' or 'evaluator')
         name: Schema name in kebab-case (e.g., 'query-agent')
+        kind: Schema kind ('agent' or 'evaluator'), optional
         tools: MCP tool references
         resources: MCP resource patterns
         version: Schema version
+        override_temperature: Override default LLM temperature for this agent.
+        override_max_iterations: Override maximum iterations for this agent.
         **kwargs: Additional JSON Schema fields
 
     Returns:
@@ -362,6 +383,8 @@ def create_agent_schema(
         tools=[MCPToolReference.model_validate(t) for t in (tools or [])],
         resources=[MCPResourceReference.model_validate(r) for r in (resources or [])],
         version=version,
+        override_temperature=override_temperature,
+        override_max_iterations=override_max_iterations,
     )
 
     return AgentSchema(

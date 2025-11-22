@@ -12,6 +12,7 @@ Key Design Pattern
 - Clean separation: context (who/what) vs agent (how)
 """
 
+from loguru import logger
 from pydantic import BaseModel, Field
 
 from ..settings import settings
@@ -66,6 +67,47 @@ class AgentContext(BaseModel):
     )
 
     model_config = {"populate_by_name": True}
+
+    @staticmethod
+    def get_user_id_or_default(
+        user_id: str | None,
+        source: str = "context",
+        default: str = "default",
+    ) -> str:
+        """
+        Get user_id or fallback to default with logging.
+
+        Centralized helper for consistent user_id fallback behavior across
+        API endpoints, MCP tools, CLI commands, and services.
+
+        Args:
+            user_id: User identifier (may be None)
+            source: Source of the call (for logging clarity)
+            default: Default value to use (default: "default")
+
+        Returns:
+            user_id if provided, otherwise default
+
+        Example:
+            # In MCP tool
+            user_id = AgentContext.get_user_id_or_default(
+                user_id, source="ask_rem_agent"
+            )
+
+            # In API endpoint
+            user_id = AgentContext.get_user_id_or_default(
+                temp_context.user_id, source="chat_completions"
+            )
+
+            # In CLI command
+            user_id = AgentContext.get_user_id_or_default(
+                args.user_id, source="rem ask"
+            )
+        """
+        if user_id is None:
+            logger.debug(f"No user_id provided from {source}, using '{default}'")
+            return default
+        return user_id
 
     @classmethod
     def from_headers(cls, headers: dict[str, str]) -> "AgentContext":

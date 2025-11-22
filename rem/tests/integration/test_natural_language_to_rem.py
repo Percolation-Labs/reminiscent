@@ -31,7 +31,7 @@ import asyncio
 from datetime import datetime
 from typing import Any
 
-from rem.agentic.agents.rem_query_agent import ask_rem
+from rem.agentic import ask_rem
 
 
 # Test data representing different maturity stages

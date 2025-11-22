@@ -38,7 +38,7 @@ async def seed_conversation(
         return
 
     db = get_postgres_service()
-    store = SessionMessageStore(db=db, tenant_id=tenant_id)
+    store = SessionMessageStore(db=db, user_id=tenant_id)
 
     # Store conversation with compression
     compressed = await store.store_session_messages(
@@ -134,7 +134,7 @@ async def demonstrate_lookup_retrieval(tenant_id: str, session_id: str):
         return
 
     db = get_postgres_service()
-    store = SessionMessageStore(db=db, tenant_id=tenant_id)
+    store = SessionMessageStore(db=db, user_id=tenant_id)
 
     logger.info(f"Demonstrating LOOKUP retrieval for session: {session_id}")
 

@@ -256,8 +256,7 @@ class ContentService:
     async def ingest_file(
         self,
         file_uri: str,
-        tenant_id: str,
-        user_id: str | None = None,
+        user_id: str,
         category: str | None = None,
         tags: list[str] | None = None,
         is_local_server: bool = False,
@@ -269,7 +268,7 @@ class ContentService:
         in REM. It handles:
 
         1. **File Reading**: From local/S3/HTTP sources via FileSystemService
-        2. **Storage**: Writes to tenant-scoped internal storage (~/.rem/fs/ or S3)
+        2. **Storage**: Writes to user-scoped internal storage (~/.rem/fs/ or S3)
         3. **Parsing**: Extracts content, metadata, tables, images (parsing state)
         4. **Chunking**: Splits content into semantic chunks for embedding
         5. **Database**: Creates File entity + Resource chunks with embeddings
@@ -301,8 +300,7 @@ class ContentService:
 
         Args:
             file_uri: Source file location (local path, s3://, or https://)
-            tenant_id: Tenant identifier for data isolation
-            user_id: Optional user ownership
+            user_id: User identifier for data isolation and ownership
             category: Optional category tag (document, code, audio, etc.)
             tags: Optional list of tags
             is_local_server: True if running as local/stdio MCP server
@@ -329,7 +327,7 @@ class ContentService:
             >>> service = ContentService()
             >>> result = await service.ingest_file(
             ...     file_uri="s3://bucket/contract.pdf",
-            ...     tenant_id="acme-corp",
+            ...     user_id="user-123",
             ...     category="legal"
             ... )
             >>> print(f"Created {result['resources_created']} searchable chunks")
@@ -350,11 +348,11 @@ class ContentService:
         file_size = len(file_content)
         logger.info(f"Read {file_size} bytes from {file_uri} (source: {source_type})")
 
-        # Step 2: Write to internal storage (tenant-scoped)
+        # Step 2: Write to internal storage (user-scoped)
         file_id = str(uuid4())
         storage_uri, internal_key, content_type, _ = await fs_service.write_to_internal_storage(
             content=file_content,
-            tenant_id=tenant_id,
+            tenant_id=user_id,  # Using user_id for storage scoping
             file_name=file_name,
             file_id=file_id,
         )
@@ -363,7 +361,7 @@ class ContentService:
         # Step 3: Create File entity
         file_entity = File(
             id=file_id,
-            tenant_id=tenant_id,
+            tenant_id=user_id,  # Set tenant_id to user_id (application scoped to user)
             user_id=user_id,
             name=file_name,
             uri=storage_uri,
@@ -383,16 +381,17 @@ class ContentService:
         )
 
         # Step 4: Save File entity to database
-        postgres_service = PostgresService()
+        from rem.services.postgres import get_postgres_service
+        from rem.services.postgres.repository import Repository
+
+        postgres_service = get_postgres_service()
+        if not postgres_service:
+            raise RuntimeError("PostgreSQL is disabled. Cannot save File entity to database.")
+
         await postgres_service.connect()
         try:
-            await postgres_service.batch_upsert(
-                records=[file_entity],
-                model=File,
-                table_name="files",
-                entity_key_field="name",
-                generate_embeddings=False,
-            )
+            repo = Repository(File, "files", db=postgres_service)
+            await repo.upsert(file_entity)
         finally:
             await postgres_service.disconnect()
 
@@ -417,7 +416,7 @@ class ContentService:
 
         logger.info(
             f"File ingestion complete: {file_name} "
-            f"(tenant: {tenant_id}, status: {processing_status}, "
+            f"(user: {user_id}, status: {processing_status}, "
             f"resources: {resources_created})"
         )
 

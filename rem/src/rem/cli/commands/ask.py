@@ -20,86 +20,7 @@ from ...agentic.context import AgentContext
 from ...agentic.providers.pydantic_ai import create_agent
 from ...agentic.query import AgentQuery
 from ...settings import settings
-
-
-async def load_schema_from_file(file_path: Path) -> dict[str, Any]:
-    """
-    Load agent schema from YAML file.
-
-    Searches in order:
-    1. Exact path if it exists
-    2. Packaged schemas/agents/ with .yaml extension
-    3. Packaged schemas/ with .yaml extension
-    4. Packaged schemas/ as-is
-
-    Supports short names:
-    - "contract-analyzer" → "schemas/agents/contract-analyzer.yaml"
-    - "agents/contract-analyzer" → "schemas/agents/contract-analyzer.yaml"
-    - "contract-analyzer.yaml" → "schemas/agents/contract-analyzer.yaml"
-
-    Args:
-        file_path: Path to YAML file containing agent schema
-
-    Returns:
-        Agent schema as dictionary
-    """
-    import yaml
-    import importlib.resources
-
-    # Try exact path first
-    if file_path.exists():
-        with open(file_path, "r") as f:
-            schema = yaml.safe_load(f)
-        logger.debug(f"Loaded schema from {file_path}: {list(schema.keys())}")
-        return schema
-
-    # Try packaged schemas with various transformations
-    search_paths = []
-
-    # Convert Path to string for easier manipulation
-    path_str = str(file_path)
-
-    # Remove .yaml/.yml extension if present for normalization
-    base_name = path_str
-    if path_str.endswith('.yaml') or path_str.endswith('.yml'):
-        base_name = path_str.rsplit('.', 1)[0]
-
-    # Build search paths in priority order
-    # 1. schemas/agents/{name}.yaml (most common)
-    if not base_name.startswith('schemas/'):
-        # Remove 'agents/' prefix if present
-        clean_name = base_name.replace('agents/', '')
-        search_paths.append(f"schemas/agents/{clean_name}.yaml")
-
-    # 2. schemas/{name}.yaml
-    if not base_name.startswith('schemas/'):
-        search_paths.append(f"schemas/{base_name}.yaml")
-
-    # 3. Original path with .yaml extension
-    if not path_str.endswith('.yaml') and not path_str.endswith('.yml'):
-        search_paths.append(f"{path_str}.yaml")
-
-    # 4. Original path as-is
-    search_paths.append(path_str)
-
-    # Try each search path
-    for search_path in search_paths:
-        try:
-            schemas_ref = importlib.resources.files("rem") / search_path
-            schemas_path = Path(str(schemas_ref))
-            if schemas_path.exists():
-                with open(schemas_path, "r") as f:
-                    schema = yaml.safe_load(f)
-                logger.debug(f"Loaded schema from package {schemas_path}: {list(schema.keys())}")
-                return schema
-        except Exception as e:
-            logger.debug(f"Could not load from {search_path}: {e}")
-            continue
-
-    raise FileNotFoundError(
-        f"Schema file not found: {file_path}\n"
-        f"Searched: {', '.join(search_paths)}"
-    )
+from ...utils.schema_loader import load_agent_schema
 
 
 async def load_schema_from_registry(
@@ -256,7 +177,7 @@ async def run_agent_non_streaming(
 
 
 async def _load_input_file(
-    file_path: Path, tenant_id: str, user_id: str | None = None
+    file_path: Path, user_id: str | None = None
 ) -> str:
     """
     Load content from input file using ContentService.
@@ -265,7 +186,6 @@ async def _load_input_file(
 
     Args:
         file_path: Path to input file
-        tenant_id: Tenant ID (not used for simple parse, but kept for consistency)
         user_id: Optional user ID (not used for simple parse)
 
     Returns:
@@ -342,11 +262,6 @@ async def _save_output_file(file_path: Path, data: dict[str, Any]) -> None:
     help="User ID for context (default: cli-user)",
 )
 @click.option(
-    "--tenant-id",
-    default="default",
-    help="Tenant ID for context (default: default)",
-)
-@click.option(
     "--session-id",
     default=None,
     help="Session ID for context (default: auto-generated)",
@@ -374,7 +289,6 @@ def ask(
     version: str | None,
     stream: bool,
     user_id: str,
-    tenant_id: str,
     session_id: str | None,
     input_file: Path | None,
     output_file: Path | None,
@@ -412,7 +326,6 @@ def ask(
             version=version,
             stream=stream,
             user_id=user_id,
-            tenant_id=tenant_id,
             session_id=session_id,
             input_file=input_file,
             output_file=output_file,
@@ -429,7 +342,6 @@ async def _ask_async(
     version: str | None,
     stream: bool,
     user_id: str,
-    tenant_id: str,
     session_id: str | None,
     input_file: Path | None,
     output_file: Path | None,
@@ -447,25 +359,21 @@ async def _ask_async(
     # Load input from file if specified
     if input_file:
         logger.info(f"Loading input from file: {input_file}")
-        query = await _load_input_file(input_file, tenant_id=tenant_id, user_id=user_id)
+        query = await _load_input_file(input_file, user_id=user_id)
 
-    # Determine if name is a file path or schema name
-    name_path = Path(name)
-    if name_path.exists() and name_path.suffix in [".yaml", ".yml", ".json"]:
-        logger.info(f"Loading schema from file: {name_path}")
-        schema = await load_schema_from_file(name_path)
-    else:
-        logger.info(f"Loading schema from registry: {name} (version: {version or 'latest'})")
-        try:
-            schema = await load_schema_from_registry(name, version=version)
-        except NotImplementedError as e:
-            logger.error(str(e))
-            sys.exit(1)
+    # Load schema using centralized utility
+    # Handles both file paths and schema names automatically
+    logger.info(f"Loading schema: {name} (version: {version or 'latest'})")
+    try:
+        schema = load_agent_schema(name)
+    except FileNotFoundError as e:
+        logger.error(str(e))
+        sys.exit(1)
 
     # Create agent context
     context = AgentContext(
         user_id=user_id,
-        tenant_id=tenant_id,
+        tenant_id=user_id,  # Set tenant_id to user_id for backward compat
         session_id=session_id,
         default_model=model or settings.llm.default_model,
     )

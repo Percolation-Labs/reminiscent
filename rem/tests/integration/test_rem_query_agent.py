@@ -21,7 +21,7 @@ Or directly:
 """
 
 import pytest
-from rem.agentic.agents.rem_query_agent import ask_rem
+from rem.agentic import ask_rem
 
 
 @pytest.mark.asyncio
@@ -155,7 +155,7 @@ async def test_confidence_and_reasoning():
 
 def test_query_output_structure():
     """Test REMQueryOutput model structure."""
-    from rem.agentic.agents.rem_query_agent import REMQueryOutput
+    from rem.agentic import REMQueryOutput
 
     # Test valid output with all fields
     output = REMQueryOutput(

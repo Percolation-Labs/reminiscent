@@ -186,7 +186,7 @@ class ContextBuilder:
 
             # ALWAYS load session history (if session_id provided) with compression
             if context.session_id and settings.postgres.enabled:
-                store = SessionMessageStore(tenant_id=context.tenant_id or "default")
+                store = SessionMessageStore(user_id=context.user_id or "default")
                 session_history = await store.load_session_messages(
                     session_id=context.session_id,
                     user_id=context.user_id,

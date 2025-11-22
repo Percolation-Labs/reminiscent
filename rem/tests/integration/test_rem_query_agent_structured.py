@@ -30,7 +30,7 @@ import yaml
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root / "src"))
 
-from rem.agentic.providers.pydantic_ai import create_pydantic_ai_agent
+from rem.agentic.providers.pydantic_ai import create_agent as create_ai_agent_provider
 from rem.models.core.rem_query import QueryType
 
 
@@ -59,7 +59,7 @@ async def create_agent():
     )
 
     # Create agent with schema override
-    agent = await create_pydantic_ai_agent(
+    agent = await create_ai_agent_provider(
         context=context,
         agent_schema_override=schema,
         model_override="openai:gpt-4o-mini",  # Fast, cheap model for testing

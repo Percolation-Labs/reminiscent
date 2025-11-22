@@ -17,10 +17,12 @@ Available Tools:
 - read_resource: Access MCP resources (for Claude Desktop compatibility)
 """
 
-from typing import Any, Literal
+from functools import wraps
+from typing import Any, Callable, Literal
 
 from loguru import logger
 
+from ...agentic.context import AgentContext
 from ...models.core import (
     FuzzyParameters,
     LookupParameters,
@@ -56,12 +58,50 @@ def init_services(postgres_service: PostgresService, rem_service: RemService):
     logger.info("MCP tools initialized with service instances")
 
 
+def mcp_tool_error_handler(func: Callable) -> Callable:
+    """
+    Decorator for consistent MCP tool error handling.
+
+    Wraps tool functions to:
+    - Log errors with full context
+    - Return standardized error responses
+    - Prevent exceptions from bubbling to LLM
+
+    Usage:
+        @mcp_tool_error_handler
+        async def my_tool(...) -> dict[str, Any]:
+            # Pure business logic - no try/except needed
+            result = await service.do_work()
+            return {"data": result}
+
+    Returns:
+        {"status": "success", **result} on success
+        {"status": "error", "error": str(e)} on failure
+    """
+    @wraps(func)
+    async def wrapper(*args, **kwargs) -> dict[str, Any]:
+        try:
+            result = await func(*args, **kwargs)
+            # If result already has status, return as-is
+            if isinstance(result, dict) and "status" in result:
+                return result
+            # Otherwise wrap in success response
+            return {"status": "success", **result}
+        except Exception as e:
+            logger.error(f"{func.__name__} failed: {e}", exc_info=True)
+            return {
+                "status": "error",
+                "error": str(e),
+                "tool": func.__name__,
+            }
+    return wrapper
+
+
+@mcp_tool_error_handler
 async def search_rem(
     query_type: Literal["lookup", "fuzzy", "search", "sql", "traverse"],
-    tenant_id: str,
     # LOOKUP parameters
     entity_key: str | None = None,
-    user_id: str | None = None,
     # FUZZY parameters
     query_text: str | None = None,
     threshold: float = 0.7,
@@ -74,6 +114,8 @@ async def search_rem(
     initial_query: str | None = None,
     edge_types: list[str] | None = None,
     depth: int = 1,
+    # Optional context override (defaults to authenticated user)
+    user_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Execute REM queries for entity lookup, semantic search, and graph traversal.
@@ -104,9 +146,7 @@ async def search_rem(
 
     Args:
         query_type: Type of query (lookup, fuzzy, search, sql, traverse)
-        tenant_id: Tenant identifier for data isolation
         entity_key: Entity key for LOOKUP (e.g., "Sarah Chen")
-        user_id: Optional user filter for LOOKUP
         query_text: Search text for FUZZY or SEARCH
         threshold: Similarity threshold for FUZZY (0.0-1.0)
         table: Target table for SEARCH (resources, moments, users, etc.)
@@ -115,16 +155,16 @@ async def search_rem(
         initial_query: Starting entity for TRAVERSE
         edge_types: Edge types to follow for TRAVERSE (e.g., ["manages", "reports_to"])
         depth: Traversal depth for TRAVERSE (0=plan only, 1-5=actual traversal)
+        user_id: Optional user identifier (defaults to authenticated user or "default")
 
     Returns:
         Dict with query results, metadata, and execution info
 
     Examples:
-        # Lookup entity
+        # Lookup entity (uses authenticated user context)
         search_rem(
             query_type="lookup",
-            entity_key="Sarah Chen",
-            tenant_id="acme-corp"
+            entity_key="Sarah Chen"
         )
 
         # Semantic search
@@ -132,7 +172,6 @@ async def search_rem(
             query_type="search",
             query_text="database migration",
             table="resources",
-            tenant_id="acme-corp",
             limit=10
         )
 
@@ -141,8 +180,7 @@ async def search_rem(
             query_type="traverse",
             initial_query="Sarah Chen",
             edge_types=["manages", "reports_to"],
-            depth=2,
-            tenant_id="acme-corp"
+            depth=2
         )
     """
     if not _rem_service:
@@ -151,111 +189,101 @@ async def search_rem(
             "error": "RemService not initialized. Check server startup.",
         }
 
-    try:
-        # Build RemQuery based on query_type
-        if query_type == "lookup":
-            if not entity_key:
-                return {"status": "error", "error": "entity_key required for LOOKUP"}
+    # Get user_id from context if not provided
+    # TODO: Extract from authenticated session context when auth is enabled
+    user_id = AgentContext.get_user_id_or_default(user_id, source="search_rem")
 
-            query = RemQuery(
-                query_type=QueryType.LOOKUP,
-                parameters=LookupParameters(
-                    entity_key=entity_key,
-                    tenant_id=tenant_id,
-                    user_id=user_id,
-                ),
-            )
+    # Build RemQuery based on query_type
+    if query_type == "lookup":
+        if not entity_key:
+            return {"status": "error", "error": "entity_key required for LOOKUP"}
 
-        elif query_type == "fuzzy":
-            if not query_text:
-                return {"status": "error", "error": "query_text required for FUZZY"}
+        query = RemQuery(
+            query_type=QueryType.LOOKUP,
+            parameters=LookupParameters(
+                entity_key=entity_key,
+                user_id=user_id,
+            ),
+        )
 
-            query = RemQuery(
-                query_type=QueryType.FUZZY,
-                parameters=FuzzyParameters(
-                    query_text=query_text,
-                    tenant_id=tenant_id,
-                    threshold=threshold,
-                    user_id=user_id,
-                ),
-            )
+    elif query_type == "fuzzy":
+        if not query_text:
+            return {"status": "error", "error": "query_text required for FUZZY"}
 
-        elif query_type == "search":
-            if not query_text:
-                return {"status": "error", "error": "query_text required for SEARCH"}
-            if not table:
-                return {"status": "error", "error": "table required for SEARCH"}
+        query = RemQuery(
+            query_type=QueryType.FUZZY,
+            parameters=FuzzyParameters(
+                query_text=query_text,
+                user_id=user_id,
+                threshold=threshold,
+            ),
+        )
 
-            query = RemQuery(
-                query_type=QueryType.SEARCH,
-                parameters=SearchParameters(
-                    query_text=query_text,
-                    table=table,
-                    tenant_id=tenant_id,
-                    user_id=user_id,
-                    limit=limit,
-                ),
-            )
+    elif query_type == "search":
+        if not query_text:
+            return {"status": "error", "error": "query_text required for SEARCH"}
+        if not table:
+            return {"status": "error", "error": "table required for SEARCH"}
 
-        elif query_type == "sql":
-            if not sql_query:
-                return {"status": "error", "error": "sql_query required for SQL"}
+        query = RemQuery(
+            query_type=QueryType.SEARCH,
+            parameters=SearchParameters(
+                query_text=query_text,
+                table=table,
+                user_id=user_id,
+                limit=limit,
+            ),
+        )
 
-            query = RemQuery(
-                query_type=QueryType.SQL,
-                parameters=SQLParameters(
-                    sql_query=sql_query,
-                    tenant_id=tenant_id,
-                ),
-            )
+    elif query_type == "sql":
+        if not sql_query:
+            return {"status": "error", "error": "sql_query required for SQL"}
 
-        elif query_type == "traverse":
-            if not initial_query:
-                return {
-                    "status": "error",
-                    "error": "initial_query required for TRAVERSE",
-                }
+        query = RemQuery(
+            query_type=QueryType.SQL,
+            parameters=SQLParameters(
+                sql_query=sql_query,
+                user_id=user_id,
+            ),
+        )
 
-            query = RemQuery(
-                query_type=QueryType.TRAVERSE,
-                parameters=TraverseParameters(
-                    initial_query=initial_query,
-                    edge_types=edge_types or [],
-                    depth=depth,
-                    tenant_id=tenant_id,
-                    user_id=user_id,
-                ),
-            )
+    elif query_type == "traverse":
+        if not initial_query:
+            return {
+                "status": "error",
+                "error": "initial_query required for TRAVERSE",
+            }
 
-        else:
-            return {"status": "error", "error": f"Unknown query_type: {query_type}"}
+        query = RemQuery(
+            query_type=QueryType.TRAVERSE,
+            parameters=TraverseParameters(
+                initial_query=initial_query,
+                edge_types=edge_types or [],
+                depth=depth,
+                user_id=user_id,
+            ),
+        )
 
-        # Execute query
-        logger.info(f"Executing REM query: {query_type} for tenant {tenant_id}")
-        result = await _rem_service.execute_query(query)
+    else:
+        return {"status": "error", "error": f"Unknown query_type: {query_type}"}
 
-        logger.info(f"Query completed successfully: {query_type}")
-        return {
-            "status": "success",
-            "query_type": query_type,
-            "results": result,
-        }
+    # Execute query (errors handled by decorator)
+    logger.info(f"Executing REM query: {query_type} for user {user_id}")
+    result = await _rem_service.execute_query(query)
 
-    except Exception as e:
-        logger.error(f"REM query failed: {e}", exc_info=True)
-        return {
-            "status": "error",
-            "query_type": query_type,
-            "error": str(e),
-        }
+    logger.info(f"Query completed successfully: {query_type}")
+    return {
+        "query_type": query_type,
+        "results": result,
+    }
 
 
+@mcp_tool_error_handler
 async def ask_rem_agent(
     query: str,
-    tenant_id: str,
-    user_id: str | None = None,
     agent_schema: str = "ask_rem",
     agent_version: str | None = None,
+    user_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Ask REM using natural language via agent-driven query conversion.
@@ -271,10 +299,9 @@ async def ask_rem_agent(
 
     Args:
         query: Natural language question or task
-        tenant_id: Tenant identifier for data isolation
-        user_id: Optional user identifier
         agent_schema: Agent schema name (default: "ask_rem")
         agent_version: Optional agent version (default: latest)
+        user_id: Optional user identifier (defaults to authenticated user or "default")
 
     Returns:
         Dict with:
@@ -285,92 +312,82 @@ async def ask_rem_agent(
         - metadata: Agent execution metadata
 
     Examples:
-        # Simple question
+        # Simple question (uses authenticated user context)
         ask_rem_agent(
-            query="Who is Sarah Chen?",
-            tenant_id="acme-corp"
+            query="Who is Sarah Chen?"
         )
 
         # Complex multi-step question
         ask_rem_agent(
-            query="What are the key findings from last week's sprint retrospective?",
-            tenant_id="acme-corp",
-            user_id="john-doe"
+            query="What are the key findings from last week's sprint retrospective?"
         )
 
         # Graph exploration
         ask_rem_agent(
-            query="Show me Sarah's reporting chain and their recent projects",
-            tenant_id="acme-corp"
+            query="Show me Sarah's reporting chain and their recent projects"
         )
     """
-    try:
-        from ...agentic import AgentContext, create_agent
-        from ...services.schema_repository import SchemaRepository
+    # Get user_id from context if not provided
+    # TODO: Extract from authenticated session context when auth is enabled
+    user_id = AgentContext.get_user_id_or_default(user_id, source="ask_rem_agent")
 
-        # Create agent context
-        context = AgentContext(
-            user_id=user_id,
-            tenant_id=tenant_id,
-            default_model=settings.llm.default_model,
-        )
+    from ...agentic import create_agent
+    from ...services.schema_repository import SchemaRepository
 
-        # Load agent schema
-        schema_repo = SchemaRepository()
-        schema = await schema_repo.get_schema(agent_schema, agent_version)
+    # Create agent context
+    context = AgentContext(
+        user_id=user_id,
+        tenant_id=user_id,  # Set tenant_id to user_id for backward compat
+        default_model=settings.llm.default_model,
+    )
 
-        if not schema:
-            return {
-                "status": "error",
-                "error": f"Agent schema not found: {agent_schema}",
-            }
+    # Load agent schema
+    schema_repo = SchemaRepository()
+    schema = await schema_repo.get_schema(agent_schema, agent_version)
 
-        # Create agent
-        agent = await create_agent(
-            context=context,
-            agent_schema_override=schema,
-        )
-
-        # Run agent
-        logger.info(f"Running ask_rem agent for query: {query[:100]}...")
-        result = await agent.run(query)
-
-        # Extract output
-        from rem.agentic.serialization import serialize_agent_result
-        query_output = serialize_agent_result(result.output)
-
-        logger.info("Agent execution completed successfully")
-
-        return {
-            "status": "success",
-            "response": str(result.output),
-            "query_output": query_output,
-            "natural_query": query,
-        }
-
-    except Exception as e:
-        logger.error(f"Agent execution failed: {e}", exc_info=True)
+    if not schema:
         return {
             "status": "error",
-            "error": str(e),
-            "natural_query": query,
+            "error": f"Agent schema not found: {agent_schema}",
         }
 
+    # Create agent
+    agent = await create_agent(
+        context=context,
+        agent_schema_override=schema,
+    )
 
+    # Run agent (errors handled by decorator)
+    logger.info(f"Running ask_rem agent for query: {query[:100]}...")
+    result = await agent.run(query)
+
+    # Extract output
+    from rem.agentic.serialization import serialize_agent_result
+    query_output = serialize_agent_result(result.output)
+
+    logger.info("Agent execution completed successfully")
+
+    return {
+        "response": str(result.output),
+        "query_output": query_output,
+        "natural_query": query,
+    }
+
+
+@mcp_tool_error_handler
 async def ingest_into_rem(
     file_uri: str,
-    tenant_id: str,
-    user_id: str | None = None,
     category: str | None = None,
     tags: list[str] | None = None,
     is_local_server: bool = False,
+    user_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Ingest file into REM, creating searchable resources and embeddings.
 
     This tool provides the complete file ingestion pipeline:
     1. **Read**: File from local/S3/HTTP
-    2. **Store**: To tenant-scoped internal storage
+    2. **Store**: To user-scoped internal storage
     3. **Parse**: Extract content, metadata, tables, images
     4. **Chunk**: Semantic chunking for embeddings
     5. **Embed**: Create Resource chunks with vector embeddings
@@ -386,11 +403,10 @@ async def ingest_into_rem(
 
     Args:
         file_uri: File location (local path, s3:// URI, or http(s):// URL)
-        tenant_id: Tenant identifier for data isolation
-        user_id: Optional user ownership
         category: Optional category (document, code, audio, etc.)
         tags: Optional tags for file
         is_local_server: True if running as local/stdio MCP server
+        user_id: Optional user identifier (defaults to authenticated user or "default")
 
     Returns:
         Dict with:
@@ -404,77 +420,50 @@ async def ingest_into_rem(
         - message: Human-readable status message
 
     Examples:
-        # Ingest local file (local server only)
+        # Ingest local file (local server only, uses authenticated user context)
         ingest_into_rem(
             file_uri="/Users/me/contract.pdf",
-            tenant_id="acme-corp",
             category="legal",
             is_local_server=True
         )
 
         # Ingest from S3
         ingest_into_rem(
-            file_uri="s3://bucket/docs/report.pdf",
-            tenant_id="acme-corp"
+            file_uri="s3://bucket/docs/report.pdf"
         )
 
         # Ingest from HTTP
         ingest_into_rem(
             file_uri="https://example.com/whitepaper.pdf",
-            tenant_id="acme-corp",
             tags=["research", "whitepaper"]
         )
     """
     from ...services.content import ContentService
 
-    try:
-        # Delegate to ContentService for centralized ingestion
-        content_service = ContentService()
-        result = await content_service.ingest_file(
-            file_uri=file_uri,
-            tenant_id=tenant_id,
-            user_id=user_id,
-            category=category,
-            tags=tags,
-            is_local_server=is_local_server,
-        )
+    # Get user_id from context if not provided
+    # TODO: Extract from authenticated session context when auth is enabled
+    user_id = AgentContext.get_user_id_or_default(user_id, source="ingest_into_rem")
 
-        logger.info(
-            f"MCP ingestion complete: {result['file_name']} "
-            f"(status: {result['processing_status']}, "
-            f"resources: {result['resources_created']})"
-        )
+    # Delegate to ContentService for centralized ingestion (errors handled by decorator)
+    content_service = ContentService()
+    result = await content_service.ingest_file(
+        file_uri=file_uri,
+        user_id=user_id,
+        category=category,
+        tags=tags,
+        is_local_server=is_local_server,
+    )
 
-        return {
-            "status": "success",
-            **result,
-        }
+    logger.info(
+        f"MCP ingestion complete: {result['file_name']} "
+        f"(status: {result['processing_status']}, "
+        f"resources: {result['resources_created']})"
+    )
 
-    except PermissionError as e:
-        logger.error(f"Permission denied: {e}")
-        return {
-            "status": "error",
-            "error": str(e),
-            "message": "Remote servers cannot access local files. Use S3 or HTTP URLs.",
-        }
-
-    except FileNotFoundError as e:
-        logger.error(f"File not found: {e}")
-        return {
-            "status": "error",
-            "error": str(e),
-            "message": f"File not found: {file_uri}",
-        }
-
-    except Exception as e:
-        logger.exception(f"Ingestion failed: {e}")
-        return {
-            "status": "error",
-            "error": str(e),
-            "message": f"Failed to ingest file: {file_uri}",
-        }
+    return result
 
 
+@mcp_tool_error_handler
 async def read_resource(uri: str) -> dict[str, Any]:
     """
     Read an MCP resource by URI.
@@ -520,47 +509,35 @@ async def read_resource(uri: str) -> dict[str, Any]:
         # Check system status
         read_resource(uri="rem://status")
     """
-    try:
-        logger.info(f"📖 Reading resource: {uri}")
+    logger.info(f"📖 Reading resource: {uri}")
 
-        # Import here to avoid circular dependency
-        from .resources import load_resource
+    # Import here to avoid circular dependency
+    from .resources import load_resource
 
-        # Load resource using the existing resource handler
-        result = await load_resource(uri)
+    # Load resource using the existing resource handler (errors handled by decorator)
+    result = await load_resource(uri)
 
-        logger.info(f"✓ Resource loaded successfully: {uri}")
+    logger.info(f"✓ Resource loaded successfully: {uri}")
 
-        # If result is already a dict, return it
-        if isinstance(result, dict):
-            return {
-                "status": "success",
-                "uri": uri,
-                "data": result,
-            }
-
-        # If result is a string (JSON), parse it
-        import json
-
-        try:
-            data = json.loads(result)
-            return {
-                "status": "success",
-                "uri": uri,
-                "data": data,
-            }
-        except json.JSONDecodeError:
-            # Return as plain text if not JSON
-            return {
-                "status": "success",
-                "uri": uri,
-                "data": {"content": result},
-            }
-
-    except Exception as e:
-        logger.error(f"Failed to read resource {uri}: {e}")
+    # If result is already a dict, return it
+    if isinstance(result, dict):
         return {
-            "status": "error",
             "uri": uri,
-            "error": str(e),
+            "data": result,
+        }
+
+    # If result is a string (JSON), parse it
+    import json
+
+    try:
+        data = json.loads(result)
+        return {
+            "uri": uri,
+            "data": data,
+        }
+    except json.JSONDecodeError:
+        # Return as plain text if not JSON
+        return {
+            "uri": uri,
+            "data": {"content": result},
         }

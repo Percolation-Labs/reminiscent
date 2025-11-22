@@ -340,9 +340,9 @@ def rebuild_cache(connection: str | None):
 
 @click.command()
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
-@click.option("--tenant-id", default="test-tenant", help="Tenant ID for loaded data")
+@click.option("--user-id", default="test-user", help="User ID for loaded data")
 @click.option("--dry-run", is_flag=True, help="Show what would be loaded without loading")
-def load(file_path: Path, tenant_id: str, dry_run: bool):
+def load(file_path: Path, user_id: str, dry_run: bool):
     """
     Load data from YAML file into database.
 
@@ -355,21 +355,21 @@ def load(file_path: Path, tenant_id: str, dry_run: bool):
 
     Examples:
         rem db load rem/tests/data/graph_seed.yaml
-        rem db load data.yaml --tenant-id my-tenant
+        rem db load data.yaml --user-id my-user
         rem db load data.yaml --dry-run
     """
-    asyncio.run(_load_async(file_path, tenant_id, dry_run))
+    asyncio.run(_load_async(file_path, user_id, dry_run))
 
 
-async def _load_async(file_path: Path, tenant_id: str, dry_run: bool):
+async def _load_async(file_path: Path, user_id: str, dry_run: bool):
     """Async implementation of load command."""
     import yaml
     from ...models.core.inline_edge import InlineEdge
     from ...models.entities import Resource, Moment, User
-    from ...services.postgres import PostgresService
+    from ...services.postgres import get_postgres_service
 
     logger.info(f"Loading data from: {file_path}")
-    logger.info(f"Tenant ID: {tenant_id}")
+    logger.info(f"User ID: {user_id}")
 
     # Load YAML file
     with open(file_path) as f:
@@ -392,7 +392,11 @@ async def _load_async(file_path: Path, tenant_id: str, dry_run: bool):
     }
 
     # Connect to database
-    pg = PostgresService()
+    pg = get_postgres_service()
+    if not pg:
+        logger.error("PostgreSQL is disabled in settings. Enable with POSTGRES__ENABLED=true")
+        raise click.Abort()
+
     await pg.connect()
 
     try:
@@ -410,8 +414,9 @@ async def _load_async(file_path: Path, tenant_id: str, dry_run: bool):
             model_class = MODEL_MAP[table_name]
 
             for row_data in rows:
-                # Add tenant_id
-                row_data["tenant_id"] = tenant_id
+                # Add user_id and tenant_id (set to user_id for backward compat)
+                row_data["user_id"] = user_id
+                row_data["tenant_id"] = user_id
 
                 # Convert graph_edges to InlineEdge format if present
                 if "graph_edges" in row_data:

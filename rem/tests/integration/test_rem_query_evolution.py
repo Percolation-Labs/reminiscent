@@ -29,7 +29,7 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Any
 
-from rem.agentic.agents.rem_query_agent import ask_rem
+from rem.agentic import ask_rem
 from rem.services.rem.service import RemService
 from rem.models.core import RemQuery, QueryType
 from rem.models.entities import Resource

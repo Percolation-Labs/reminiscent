@@ -99,6 +99,11 @@ class LLMSettings(BaseSettings):
         description="Maximum agent request retries (prevents infinite loops from tool errors)",
     )
 
+    default_max_iterations: int = Field(
+        default=7,
+        description="Default max iterations for agentic calls",
+    )
+
     evaluator_model: str = Field(
         default="gpt-4.1",
         description="Model for LLM-as-judge evaluators (separate from generation model)",

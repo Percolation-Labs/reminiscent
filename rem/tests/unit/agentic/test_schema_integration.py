@@ -32,7 +32,7 @@ def test_validate_query_agent_schema(query_agent_schema_path):
     # Check core fields
     assert validated.type == "object"
     assert "REM Query Agent" in validated.description
-    assert validated.json_schema_extra.fully_qualified_name == "rem.agents.QueryAgent"
+    assert validated.json_schema_extra.name == "query"
 
     # Check output properties
     assert "answer" in validated.properties
@@ -75,7 +75,7 @@ def test_validate_summarization_agent_schema(summarization_agent_schema_path):
     # Check core fields
     assert validated.type == "object"
     assert "Summarization Agent" in validated.description
-    assert validated.json_schema_extra.fully_qualified_name == "rem.agents.SummarizationAgent"
+    assert validated.json_schema_extra.name == "summarization"
 
     # Check output properties
     assert "summary" in validated.properties
@@ -118,10 +118,7 @@ def test_schema_roundtrip(query_agent_schema_path):
     assert serialized["required"] == original["required"]
 
     # Metadata should be preserved
-    assert (
-        serialized["json_schema_extra"]["fully_qualified_name"]
-        == original["json_schema_extra"]["fully_qualified_name"]
-    )
+    assert serialized["json_schema_extra"]["name"] == original["json_schema_extra"]["name"]
     assert len(serialized["json_schema_extra"]["tools"]) == len(
         original["json_schema_extra"]["tools"]
     )
@@ -138,7 +135,7 @@ def test_schema_metadata_access(query_agent_schema_path):
     validated = validate_agent_schema(schema_dict)
 
     # Access via dot notation (Pydantic)
-    assert validated.json_schema_extra.fully_qualified_name == "rem.agents.QueryAgent"
+    assert validated.json_schema_extra.name == "query"
 
     # Access tools
     first_tool = validated.json_schema_extra.tools[0]

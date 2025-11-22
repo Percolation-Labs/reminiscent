@@ -82,11 +82,23 @@ class PostgresService:
         Args:
             query: SQL query string
         """
-        if not self.pool:
-            raise RuntimeError("PostgreSQL pool not connected. Call connect() first.")
+        self._ensure_pool()
 
         async with self.pool.acquire() as conn:
             await conn.execute(query)
+
+    def _ensure_pool(self) -> None:
+        """
+        Ensure database connection pool is established.
+
+        Raises:
+            RuntimeError: If pool is not connected
+
+        Usage:
+            Internal helper used by all query methods to validate connection state.
+        """
+        if not self.pool:
+            raise RuntimeError("PostgreSQL pool not connected. Call connect() first.")
 
     def get_repository(self, model_class: Type[BaseModel], table_name: str) -> "Repository":
         """
@@ -161,8 +173,7 @@ class PostgresService:
         Returns:
             List of result rows as dicts
         """
-        if not self.pool:
-            raise RuntimeError("PostgreSQL pool not connected. Call connect() first.")
+        self._ensure_pool()
 
         async with self.pool.acquire() as conn:
             if params:
@@ -183,8 +194,7 @@ class PostgresService:
         Returns:
             List of asyncpg.Record objects
         """
-        if not self.pool:
-            raise RuntimeError("PostgreSQL pool not connected. Call connect() first.")
+        self._ensure_pool()
 
         async with self.pool.acquire() as conn:
             return await conn.fetch(query, *params)
@@ -200,8 +210,7 @@ class PostgresService:
         Returns:
             asyncpg.Record or None if no rows found
         """
-        if not self.pool:
-            raise RuntimeError("PostgreSQL pool not connected. Call connect() first.")
+        self._ensure_pool()
 
         async with self.pool.acquire() as conn:
             return await conn.fetchrow(query, *params)
@@ -217,8 +226,7 @@ class PostgresService:
         Returns:
             Single value or None if no rows found
         """
-        if not self.pool:
-            raise RuntimeError("PostgreSQL pool not connected. Call connect() first.")
+        self._ensure_pool()
 
         async with self.pool.acquire() as conn:
             return await conn.fetchval(query, *params)
@@ -228,62 +236,108 @@ class PostgresService:
         Create a database transaction context manager.
 
         Returns:
-            Transaction context manager that binds connection to service
+            Transaction object with bound connection for executing queries within a transaction
 
         Usage:
-            async with postgres_service.transaction():
-                await postgres_service.execute("INSERT ...")
-                await postgres_service.execute("UPDATE ...")
-        """
-        if not self.pool:
-            raise RuntimeError("PostgreSQL pool not connected. Call connect() first.")
+            async with postgres_service.transaction() as txn:
+                await txn.execute("INSERT ...")
+                await txn.execute("UPDATE ...")
 
-        # Return a context manager that acquires a connection and starts a transaction
+        Note:
+            The transaction object has the same query methods as PostgresService
+            (execute, fetch, fetchrow, fetchval) but executes them on a single
+            connection within a transaction.
+        """
+        self._ensure_pool()
+
         from contextlib import asynccontextmanager
 
         @asynccontextmanager
         async def _transaction_context():
             async with self.pool.acquire() as conn:
                 async with conn.transaction():
-                    # Temporarily bind this connection to the service
-                    # Store original execute/fetch methods
-                    original_execute = self.execute
-                    original_fetch = self.fetch
-                    original_fetchrow = self.fetchrow
-                    original_fetchval = self.fetchval
-
-                    # Override with connection-bound versions
-                    async def _execute(query, params=None):
-                        if params:
-                            results = await conn.fetch(query, *params)
-                        else:
-                            results = await conn.fetch(query)
-                        return [dict(row) for row in results]
-
-                    async def _fetch(query, *params):
-                        return await conn.fetch(query, *params)
-
-                    async def _fetchrow(query, *params):
-                        return await conn.fetchrow(query, *params)
-
-                    async def _fetchval(query, *params):
-                        return await conn.fetchval(query, *params)
-
-                    self.execute = _execute
-                    self.fetch = _fetch
-                    self.fetchrow = _fetchrow
-                    self.fetchval = _fetchval
-
-                    try:
-                        yield
-                    finally:
-                        # Restore original methods
-                        self.execute = original_execute
-                        self.fetch = original_fetch
-                        self.fetchrow = original_fetchrow
-                        self.fetchval = original_fetchval
+                    # Yield a transaction wrapper that provides query methods
+                    yield _TransactionContext(conn)
 
         return _transaction_context()
+
+
+class _TransactionContext:
+    """
+    Transaction context with bound connection.
+
+    Provides the same query interface as PostgresService but executes
+    all queries on a single connection within a transaction.
+
+    This is safer than method swapping and provides explicit transaction scope.
+    """
+
+    def __init__(self, conn: asyncpg.Connection):
+        """
+        Initialize transaction context.
+
+        Args:
+            conn: Database connection bound to this transaction
+        """
+        self.conn = conn
+
+    async def execute(
+        self, query: str, params: Optional[tuple] = None
+    ) -> list[dict[str, Any]]:
+        """
+        Execute SQL query within transaction.
+
+        Args:
+            query: SQL query string
+            params: Query parameters
+
+        Returns:
+            List of result rows as dicts
+        """
+        if params:
+            rows = await self.conn.fetch(query, *params)
+        else:
+            rows = await self.conn.fetch(query)
+        return [dict(row) for row in rows]
+
+    async def fetch(self, query: str, *params) -> list[asyncpg.Record]:
+        """
+        Fetch multiple rows within transaction.
+
+        Args:
+            query: SQL query string
+            *params: Query parameters
+
+        Returns:
+            List of asyncpg.Record objects
+        """
+        return await self.conn.fetch(query, *params)
+
+    async def fetchrow(self, query: str, *params) -> Optional[asyncpg.Record]:
+        """
+        Fetch single row within transaction.
+
+        Args:
+            query: SQL query string
+            *params: Query parameters
+
+        Returns:
+            asyncpg.Record or None if no rows found
+        """
+        return await self.conn.fetchrow(query, *params)
+
+    async def fetchval(self, query: str, *params) -> Any:
+        """
+        Fetch single value within transaction.
+
+        Args:
+            query: SQL query string
+            *params: Query parameters
+
+        Returns:
+            Single value or None if no rows found
+        """
+        return await self.conn.fetchval(query, *params)
 
     async def execute_many(
         self, query: str, params_list: list[tuple]
@@ -295,8 +349,7 @@ class PostgresService:
             query: SQL query string
             params_list: List of parameter tuples
         """
-        if not self.pool:
-            raise RuntimeError("PostgreSQL pool not connected. Call connect() first.")
+        self._ensure_pool()
 
         async with self.pool.acquire() as conn:
             await conn.executemany(query, params_list)
@@ -507,8 +560,7 @@ class PostgresService:
         batch_count = 0
         upserted_ids = []  # Track IDs of upserted records
 
-        if not self.pool:
-            raise RuntimeError("PostgreSQL pool not connected. Call connect() first.")
+        self._ensure_pool()
 
         for batch in batch_iterator(prepared_records, batch_size):
             batch_count += 1

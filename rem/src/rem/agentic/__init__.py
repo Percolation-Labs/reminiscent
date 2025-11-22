@@ -16,6 +16,7 @@ from .schema import (
     create_agent_schema,
 )
 from .providers.pydantic_ai import create_agent_from_schema_file, create_agent
+from .query_helper import ask_rem, REMQueryOutput
 
 __all__ = [
     # Context and Query
@@ -31,4 +32,7 @@ __all__ = [
     # Agent Factories
     "create_agent_from_schema_file",
     "create_agent",
+    # REM Query Helpers
+    "ask_rem",
+    "REMQueryOutput",
 ]

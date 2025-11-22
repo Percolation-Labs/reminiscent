@@ -100,7 +100,6 @@ Options:
   --input-file, -i PATH       Read input from file (PDF, TXT, Markdown, etc.)
   --output-file, -o PATH      Write output to file (YAML format)
   --user-id TEXT              User ID for context (default: cli-user)
-  --tenant-id TEXT            Tenant ID for context (default: default)
   --session-id TEXT           Session ID for context (default: auto-generated)
 ```
 

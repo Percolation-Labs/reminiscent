@@ -60,7 +60,6 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-import yaml
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from loguru import logger
@@ -71,6 +70,7 @@ from ....agentic.providers.pydantic_ai import create_agent
 from ....services.audio.transcriber import AudioTranscriber
 from ....services.session import SessionMessageStore, reload_session
 from ....settings import settings
+from ....utils.schema_loader import load_agent_schema
 from .json_utils import extract_json_resilient
 from .models import (
     ChatCompletionChoice,
@@ -85,36 +85,6 @@ router = APIRouter(prefix="/v1", tags=["chat"])
 
 # Default agent schema file
 DEFAULT_AGENT_SCHEMA = "rem"
-# Path: .../rem/src/rem/api/routers/chat/completions.py -> .../rem/schemas
-SCHEMAS_DIR = Path(__file__).parent.parent.parent.parent.parent.parent / "schemas"
-
-
-def load_agent_schema(schema_name: str) -> dict | None:
-    """
-    Load agent schema from YAML file.
-
-    Looks for schema in schemas/agents/ directory.
-
-    Args:
-        schema_name: Schema name (e.g., 'rem', 'query', 'hello-world')
-
-    Returns:
-        Agent schema dict or None if not found
-    """
-    # Look for schema in agents/ subdirectory
-    schema_file = SCHEMAS_DIR / "agents" / f"{schema_name}.yaml"
-    if not schema_file.exists():
-        logger.warning(f"Agent schema not found: {schema_file}")
-        return None
-
-    try:
-        with open(schema_file, "r") as f:
-            schema = yaml.safe_load(f)
-        logger.debug(f"Loaded agent schema: {schema_name}")
-        return schema
-    except Exception as e:
-        logger.error(f"Failed to load agent schema {schema_name}: {e}")
-        return None
 
 
 @router.post("/chat/completions", response_model=None)
@@ -162,22 +132,24 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
     # Extract AgentContext first to get schema name
     temp_context = AgentContext.from_headers(dict(request.headers))
     schema_name = temp_context.agent_schema_uri or DEFAULT_AGENT_SCHEMA
-    agent_schema = load_agent_schema(schema_name)
 
-    if agent_schema is None:
+    # Load schema using centralized utility
+    try:
+        agent_schema = load_agent_schema(schema_name)
+    except FileNotFoundError:
         # Fallback to default if specified schema not found
         logger.warning(f"Schema '{schema_name}' not found, falling back to '{DEFAULT_AGENT_SCHEMA}'")
         schema_name = DEFAULT_AGENT_SCHEMA
-        agent_schema = load_agent_schema(schema_name)
+        try:
+            agent_schema = load_agent_schema(schema_name)
+        except FileNotFoundError:
+            # No schema available at all
+            from fastapi import HTTPException
 
-    if agent_schema is None:
-        # No schema available at all
-        from fastapi import HTTPException
-
-        raise HTTPException(
-            status_code=500,
-            detail=f"Agent schema '{schema_name}' not found and default schema unavailable",
-        )
+            raise HTTPException(
+                status_code=500,
+                detail=f"Agent schema '{schema_name}' not found and default schema unavailable",
+            )
 
     logger.info(f"Using agent schema: {schema_name}, model: {body.model}")
 
@@ -279,7 +251,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
         }
 
         # Store messages with compression
-        store = SessionMessageStore(tenant_id=context.tenant_id or "default")
+        store = SessionMessageStore(user_id=context.user_id or "default")
 
         await store.store_session_messages(
             session_id=context.session_id,

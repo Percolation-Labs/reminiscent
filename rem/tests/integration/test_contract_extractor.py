@@ -7,7 +7,7 @@ import pytest
 import yaml
 
 from rem.agentic.context import AgentContext
-from rem.agentic.providers.pydantic_ai import create_pydantic_ai_agent
+from rem.agentic.providers.pydantic_ai import create_agent
 from rem.api.mcp_router.tools import ingest_into_rem, init_services
 from rem.settings import settings
 from rem.models.entities import Resource
@@ -146,7 +146,7 @@ async def test_run_contract_extractor_agent(monkeypatch):
     context = AgentContext(user_id="test-user", tenant_id="test-tenant")
 
     # Create the agent
-    agent = await create_pydantic_ai_agent(
+    agent = await create_agent(
         context=context,
         agent_schema_override=agent_schema,
     )

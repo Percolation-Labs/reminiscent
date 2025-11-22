@@ -27,13 +27,65 @@ Unique Design
 - Tools and resources loaded from MCP servers via schema config
 - Stripped descriptions to avoid LLM schema bloat
 
-TODO: Model Cache Implementation
-- Implement lazy-loaded model cache for frequently used agents
-- Cache Pydantic AI Model instances (not just schemas) to avoid re-initialization
-- Key models to cache: REM Query Agent (Cerebras), default reasoning models
-- Benefits: Faster agent creation, reduced API overhead, connection pooling
-- Design: LRU cache with max size, TTL for stale models, thread-safe access
-- Example: _model_cache[model_name] = Model instance, reuse across agent creations
+TODO: Model Cache Implementation (Critical for Production Scale)
+    Current bottleneck: Every agent.run() call creates a new Agent instance with
+    model initialization overhead. At scale (100+ requests/sec), this becomes expensive.
+
+    Need two-tier caching strategy:
+
+    1. Schema Cache (see rem/utils/schema_loader.py TODO):
+       - Filesystem schemas: LRU cache, no TTL (immutable)
+       - Database schemas: TTL cache (5-15 min)
+       - Reduces disk I/O and DB queries
+
+    2. Model Instance Cache (THIS TODO):
+       - Cache Pydantic AI Model() instances (connection pools, tokenizers)
+       - Key: (provider, model_name) → Model instance
+       - Benefits:
+         * Reuse HTTP connection pools (httpx.AsyncClient)
+         * Reuse tokenizer instances
+         * Faster model initialization
+         * Lower memory footprint
+       - Implementation:
+         ```python
+         _model_cache: dict[tuple[str, str], Model] = {}
+
+         def get_or_create_model(model_name: str) -> Model:
+             cache_key = _parse_model_name(model_name)  # ("anthropic", "claude-3-5-sonnet")
+             if cache_key not in _model_cache:
+                 _model_cache[cache_key] = Model(model_name)
+             return _model_cache[cache_key]
+         ```
+       - Considerations:
+         * Max cache size (LRU eviction, e.g., 20 models)
+         * Thread safety (asyncio.Lock for cache access)
+         * Model warmup on server startup for hot paths
+         * Clear cache on model config changes
+
+    3. Agent Instance Caching (Advanced):
+       - Cache complete Agent instances (model + schema + tools)
+       - Key: (schema_name, model_name) → Agent instance
+       - Benefits:
+         * Skip schema parsing and model creation entirely
+         * Fastest possible agent.run() latency
+       - Challenges:
+         * Agent state management (stateless required)
+         * Tool/resource updates (cache invalidation)
+         * Memory usage (agents are heavier than models)
+       - Recommendation: Start with Model cache, add Agent cache if profiling shows benefit
+
+    Profiling Targets (measure before optimizing):
+    - schema_loader.load_agent_schema() calls per request
+    - create_agent() execution time (model init overhead)
+    - Model() instance creation time by provider
+    - Agent.run() total latency breakdown
+
+    Related Files:
+    - rem/utils/schema_loader.py (schema caching TODO)
+    - rem/agentic/providers/pydantic_ai.py:339 (create_agent - this file)
+    - rem/services/schema_repository.py (database schema loading)
+
+    Priority: HIGH (blocks production scaling beyond 50 req/sec)
 
 Example Agent Schema:
 {
@@ -185,6 +237,8 @@ def _prepare_schema_for_qwen(schema: dict[str, Any]) -> dict[str, Any]:
 
             # Remove minimum/maximum from number fields (Qwen rejects these)
             if obj.get("type") == "number":
+                if "minimum" in obj or "maximum" in obj:
+                    logger.warning(f"Stripping min/max from number field in Qwen schema: {obj.keys()}")
                 obj.pop("minimum", None)
                 obj.pop("maximum", None)
 
@@ -283,48 +337,10 @@ async def create_agent_from_schema_file(
         # Load from custom path
         agent = await create_agent_from_schema_file("./my-agent.yaml")
     """
-    import yaml
-    import importlib.resources
-    from pathlib import Path
+    from ...utils.schema_loader import load_agent_schema
 
-    # Try to load schema file
-    path = Path(schema_name_or_path)
-
-    # 1. Try exact path (absolute or relative)
-    if path.exists():
-        with open(path, "r") as f:
-            agent_schema = yaml.safe_load(f)
-    else:
-        # 2. Try package resources with normalized name
-        base_name = str(schema_name_or_path).replace('.yaml', '').replace('.yml', '')
-        base_name = base_name.replace('agents/', '').replace('schemas/', '')
-
-        # Search paths in priority order
-        search_paths = [
-            f"schemas/agents/{base_name}.yaml",
-            f"schemas/evaluators/{base_name}.yaml",
-            f"schemas/{base_name}.yaml",
-        ]
-
-        schema_found = False
-        for search_path in search_paths:
-            try:
-                schema_ref = importlib.resources.files("rem") / search_path
-                schema_path = Path(str(schema_ref))
-                if schema_path.exists():
-                    with open(schema_path, "r") as f:
-                        agent_schema = yaml.safe_load(f)
-                    schema_found = True
-                    logger.debug(f"Loaded schema from package: {search_path}")
-                    break
-            except Exception:
-                continue
-
-        if not schema_found:
-            raise FileNotFoundError(
-                f"Schema not found: {schema_name_or_path}\n"
-                f"Searched: {', '.join(search_paths)}"
-            )
+    # Load schema using centralized utility
+    agent_schema = load_agent_schema(schema_name_or_path)
 
     # Create agent using existing factory
     return await create_agent(
@@ -439,7 +455,11 @@ async def create_agent(
 
     # Create dynamic result_type from schema if not provided
     if result_type is None and agent_schema and "properties" in agent_schema:
-        result_type = _create_model_from_schema(agent_schema)
+        # Pre-process schema for Qwen compatibility (strips min/max, sets additionalProperties=False)
+        # This ensures the generated Pydantic model doesn't have incompatible constraints
+        sanitized_schema = _prepare_schema_for_qwen(agent_schema)
+        result_type = _create_model_from_schema(sanitized_schema)
+        logger.debug(f"Created dynamic Pydantic model: {result_type.__name__}")
         logger.debug(f"Created dynamic Pydantic model: {result_type.__name__}")
 
     # Create agent with optional output_type for structured output and tools

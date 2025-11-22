@@ -18,8 +18,7 @@ from rem.settings import settings
 
 async def reload_session(
     session_id: str,
-    tenant_id: str,
-    user_id: str | None = None,
+    user_id: str,
     decompress_messages: bool = False,
 ) -> list[dict]:
     """
@@ -27,8 +26,7 @@ async def reload_session(
 
     Args:
         session_id: Session/conversation identifier
-        tenant_id: Tenant identifier for multi-tenancy isolation
-        user_id: Optional user identifier for filtering
+        user_id: User identifier for data isolation
         decompress_messages: Whether to decompress long messages via REM LOOKUP
 
     Returns:
@@ -42,7 +40,6 @@ async def reload_session(
         # Reload previous conversation history
         history = await reload_session(
             session_id=context.session_id,
-            tenant_id=context.tenant_id,
             user_id=context.user_id,
             decompress_messages=False,  # Use compressed versions for efficiency
         )
@@ -61,7 +58,7 @@ async def reload_session(
 
     try:
         # Create message store for this session
-        store = SessionMessageStore(tenant_id=tenant_id)
+        store = SessionMessageStore(user_id=user_id)
 
         # Load messages (optionally decompressed)
         messages = await store.load_session_messages(

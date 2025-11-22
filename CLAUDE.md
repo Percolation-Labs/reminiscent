@@ -1,5 +1,28 @@
 # CLAUDE.md
 
+## ⚠️ Important: tenant_id → user_id Migration (2025-11-22)
+
+**Status**: 90% complete
+
+The REM system is migrating from `tenant_id` to `user_id` for data scoping. This change simplifies the architecture and aligns with actual usage patterns.
+
+**What Changed:**
+- All PostgreSQL REM query functions now use `user_id` instead of `tenant_id`
+- All CLI commands now use `--user-id` flag (removed `--tenant-id`)
+- All MCP tools now extract `user_id` from context (no longer required parameters)
+- Service layer updated: ContentService, SessionMessageStore, etc.
+- Database schema: `tenant_id` column remains for backward compatibility but is set to `user_id` value
+
+**Migration File**: `src/rem/sql/migrations/006_tenant_to_user_migration.sql`
+
+**Remaining Work** (10%):
+- Dreaming Worker method signatures
+- Integration tests updates
+
+See [REFACTORING_TODO.md](rem/REFACTORING_TODO.md) for detailed migration tracking.
+
+---
+
 ## Architecture Overview
 
 This is a cloud-native REM (Resources Entities Moments) system for agentic AI workloads built on AWS EKS with modern best practices.
@@ -287,13 +310,14 @@ REM is a bio-inspired memory architecture mirroring human memory systems:
 
 ### 2. Header to Context Mapping Pattern (agentic/context.py)
 - HTTP headers automatically map to AgentContext fields
-- `X-User-Id` → `context.user_id`
-- `X-Tenant-Id` → `context.tenant_id` (REM multi-tenancy)
+- `X-User-Id` → `context.user_id` (primary identifier for data scoping)
+- `X-Tenant-Id` → `context.tenant_id` (backward compatibility, set to user_id internally)
 - `X-Session-Id` → `context.session_id`
 - `X-Agent-Schema` → `context.agent_schema_uri`
 - Case-insensitive header lookup
 - Support for both HTTP (via headers) and programmatic (direct instantiation) usage
 - AgentContext passed to agent factory, NOT stored in agent
+- **Note**: Application now scopes data by `user_id`, not `tenant_id` (migration in progress)
 
 ### 3. Agent Query Structure Pattern (agentic/query.py)
 - Standardized query/knowledge/scratchpad structure
@@ -511,13 +535,14 @@ Examples:
 - System fields (inherited from CoreModel):
   - Identity: `id` (UUID or string, generated per model type)
   - Temporal tracking: `created_at`, `updated_at`, `deleted_at`
-  - Multi-tenancy: `tenant_id` (optional, system-level field)
-  - Ownership: `user_id` (optional, tenant-scoped)
+  - Data scoping: `user_id` (primary field for data isolation)
+  - Legacy field: `tenant_id` (kept for backward compatibility, typically set to `user_id`)
   - Graph connectivity: `graph_edges` (list of InlineEdge dicts)
   - Flexible metadata: `metadata` (dict), `tags` (list)
   - Database schema: `column` (dict for schema metadata)
 - Entity-specific fields defined in each model (Resource, Message, User, File, Moment, Ontology)
 - No duplicate tenant_id or system fields in child models
+- **Migration Note**: Application logic now filters by `user_id`, not `tenant_id`
 
 ### Ontology Extraction Pattern (models/entities/ontology.py, services/ontology_extractor.py)
 
@@ -628,36 +653,27 @@ json_schema_extra:
 # Run custom extractor on user's data (resources, files, sessions)
 rem dreaming custom \
   --user-id user-123 \
-  --tenant-id acme-corp \
   --extractor cv-parser-v1
 
 # Run extractor with lookback window
 rem dreaming custom \
   --user-id user-123 \
-  --tenant-id acme-corp \
   --extractor contract-analyzer-v1 \
   --lookback-hours 168 \
   --limit 50
 
-# Process files through extractor
-rem process files \
-  --tenant-id acme-corp \
-  --extractor cv-parser-v1 \
-  --status completed \
-  --limit 10
-
 # Full dreaming workflow (includes extractors if configs exist)
-rem dreaming full --user-id user-123 --tenant-id acme-corp
+rem dreaming full --user-id user-123
 
 # Skip extractors in full workflow
-rem dreaming full --user-id user-123 --tenant-id acme-corp --skip-extractors
+rem dreaming full --user-id user-123 --skip-extractors
 ```
 
 **Key Design Principles**:
 - **Schema-driven**: Agent schemas in database, not hardcoded
 - **Provider-agnostic**: Test across multiple LLM providers
 - **Embedding-aware**: Automatically embeds configured fields
-- **Tenant-isolated**: All operations scoped to tenant_id
+- **User-scoped**: All operations scoped to `user_id` (not `tenant_id`)
 - **Serialization-safe**: Always serialize Pydantic models (critical!)
 - **Cost-conscious**: Optional provider configs for A/B testing
 

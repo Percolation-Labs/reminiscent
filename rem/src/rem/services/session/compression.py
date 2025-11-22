@@ -113,17 +113,17 @@ class SessionMessageStore:
 
     def __init__(
         self,
-        tenant_id: str,
+        user_id: str,
         compressor: MessageCompressor | None = None,
     ):
         """
         Initialize session message store.
 
         Args:
-            tenant_id: Tenant identifier
+            user_id: User identifier for data isolation
             compressor: Optional message compressor (creates default if None)
         """
-        self.tenant_id = tenant_id
+        self.user_id = user_id
         self.compressor = compressor or MessageCompressor()
         self.repo = Repository(Message)
 
@@ -158,8 +158,8 @@ class SessionMessageStore:
             content=message.get("content", ""),
             message_type=message.get("role", "assistant"),
             session_id=session_id,
-            tenant_id=self.tenant_id,
-            user_id=user_id,
+            tenant_id=self.user_id,  # Set tenant_id to user_id (application scoped to user)
+            user_id=user_id or self.user_id,
             metadata={
                 "message_index": message_index,
                 "entity_key": entity_key,  # Store entity key for LOOKUP
@@ -194,12 +194,12 @@ class SessionMessageStore:
             query = """
                 SELECT * FROM messages
                 WHERE metadata->>'entity_key' = $1
-                  AND tenant_id = $2
+                  AND user_id = $2
                   AND deleted_at IS NULL
                 LIMIT 1
             """
 
-            row = await self.repo.db.fetchrow(query, entity_key, self.tenant_id)
+            row = await self.repo.db.fetchrow(query, entity_key, self.user_id)
 
             if row:
                 msg = Message.model_validate(dict(row))
@@ -267,8 +267,8 @@ class SessionMessageStore:
                     content=content,
                     message_type=message.get("role", "user"),
                     session_id=session_id,
-                    tenant_id=self.tenant_id,
-                    user_id=user_id,
+                    tenant_id=self.user_id,  # Set tenant_id to user_id (application scoped to user)
+                    user_id=user_id or self.user_id,
                     metadata={
                         "message_index": idx,
                         "timestamp": message.get("timestamp"),

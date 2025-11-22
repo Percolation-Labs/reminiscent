@@ -61,6 +61,7 @@ dependencies = [
     "semchunk>=2.2.0",
     "tiktoken>=0.5.0",
     "gitpython>=3.1.45",
+    "pydub>=0.25.0", # Added for audio processing
 ]
 
 [project.urls]

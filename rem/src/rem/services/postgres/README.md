@@ -51,8 +51,8 @@ Comprehensive service for PostgreSQL 18 with pgvector, including:
 ```sql
 CREATE TABLE resources (
     id UUID PRIMARY KEY,
-    tenant_id VARCHAR(100) NOT NULL,
-    user_id VARCHAR(100),
+    tenant_id VARCHAR(100),     -- Optional: for future multi-tenant SaaS use
+    user_id VARCHAR(100) NOT NULL,
     name TEXT NOT NULL,
     description TEXT,
     content TEXT,
@@ -123,13 +123,13 @@ CREATE UNLOGGED TABLE kv_store (
     entity_key VARCHAR(255) NOT NULL,   -- Natural language key
     entity_type VARCHAR(100) NOT NULL,  -- Table name
     entity_id UUID NOT NULL,            -- Foreign key to entity
-    tenant_id VARCHAR(100) NOT NULL,    -- Multi-tenancy
-    user_id VARCHAR(100),               -- Optional user scope
+    tenant_id VARCHAR(100),             -- Optional: for future multi-tenant SaaS use
+    user_id VARCHAR(100) NOT NULL,      -- Primary isolation scope
     content_summary TEXT,               -- For fuzzy search
     metadata JSONB DEFAULT '{}',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (tenant_id, entity_key)
+    PRIMARY KEY (user_id, entity_key)
 );
 ```
 
@@ -291,15 +291,13 @@ class BackgroundIndexer:
 # REM LOOKUP query
 result = await service.lookup_entity(
     entity_key="sarah-chen",
-    tenant_id="acme-corp",
-    user_id="user123"  # Optional: filter by user
+    user_id="user123"
 )
 
 # SQL:
 # SELECT entity_id, entity_type, metadata
 # FROM kv_store
-# WHERE tenant_id = $1 AND entity_key = $2
-# AND (user_id = $3 OR user_id IS NULL);
+# WHERE user_id = $1 AND entity_key = $2;
 ```
 
 **FUZZY Queries** use pg_trgm indexes:
@@ -308,7 +306,7 @@ result = await service.lookup_entity(
 # REM FUZZY query
 results = await service.fuzzy_search(
     query="sara",
-    tenant_id="acme-corp",
+    user_id="user123",
     threshold=0.3,
     limit=10
 )
@@ -316,7 +314,7 @@ results = await service.fuzzy_search(
 # SQL:
 # SELECT entity_key, entity_type, similarity(entity_key, $1) AS score
 # FROM kv_store
-# WHERE tenant_id = $2 AND entity_key % $1
+# WHERE user_id = $2 AND entity_key % $1
 # ORDER BY score DESC
 # LIMIT $3;
 ```
@@ -329,7 +327,7 @@ results = await service.vector_search(
     table_name="resources",
     query_text="machine learning documentation",
     field_name="content",
-    tenant_id="acme-corp",
+    user_id="user123",
     limit=10,
     min_similarity=0.7
 )
@@ -338,7 +336,7 @@ results = await service.vector_search(
 # SELECT r.*, 1 - (e.embedding <=> $1) AS similarity
 # FROM resources r
 # JOIN embeddings_resources e ON e.entity_id = r.id
-# WHERE r.tenant_id = $2
+# WHERE r.user_id = $2
 # AND e.field_name = 'content'
 # AND e.provider = 'openai'
 # AND 1 - (e.embedding <=> $1) >= $3
@@ -378,7 +376,7 @@ message = Message(
     content="Hello, world!",
     message_type="user",
     session_id="session-123",
-    tenant_id="acme-corp"
+    user_id="user123"
 )
 created = await message_repo.upsert(message)
 
@@ -389,24 +387,23 @@ created_messages = await message_repo.upsert(messages)
 # Find records
 messages = await message_repo.find({
     "session_id": "session-123",
-    "tenant_id": "acme-corp"
+    "user_id": "user123"
 }, order_by="created_at ASC", limit=100)
 
 # Get by ID
-message = await message_repo.get_by_id("msg-id", "acme-corp")
+message = await message_repo.get_by_id("msg-id", "user123")
 
 # Get by session (convenience method)
 session_messages = await message_repo.get_by_session(
     session_id="session-123",
-    tenant_id="acme-corp",
-    user_id="user-456"
+    user_id="user123"
 )
 
 # Count
 count = await message_repo.count({"session_id": "session-123"})
 
 # Delete (soft delete)
-deleted = await message_repo.delete("msg-id", "acme-corp")
+deleted = await message_repo.delete("msg-id", "user123")
 ```
 
 **When to use Repository vs PostgresService:**
@@ -456,7 +453,6 @@ resources = [
 result = await service.batch_upsert(
     table_name="resources",
     entities=resources,
-    tenant_id="acme-corp",
     user_id="user123",
     generate_embeddings=True
 )
@@ -471,13 +467,13 @@ print(f"Embeddings: {result['embeddings_generated']}")
 # LOOKUP by natural key
 entity = await service.lookup_entity(
     entity_key="api-design-doc",
-    tenant_id="acme-corp"
+    user_id="user123"
 )
 
 # FUZZY search
 results = await service.fuzzy_search(
     query="api design",
-    tenant_id="acme-corp",
+    user_id="user123",
     threshold=0.3,
     limit=5
 )
@@ -487,7 +483,7 @@ results = await service.vector_search(
     table_name="resources",
     query_text="how to deploy kubernetes",
     field_name="content",
-    tenant_id="acme-corp",
+    user_id="user123",
     limit=10
 )
 ```

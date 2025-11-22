@@ -213,8 +213,7 @@ COMMENT ON FUNCTION rebuild_kv_store() IS
 -- Returns entity metadata from KV_STORE cache
 CREATE OR REPLACE FUNCTION rem_lookup(
     p_entity_key VARCHAR(255),
-    p_tenant_id VARCHAR(100),
-    p_user_id VARCHAR(100) DEFAULT NULL
+    p_user_id VARCHAR(100)
 )
 RETURNS TABLE(
     entity_key VARCHAR(255),
@@ -238,23 +237,21 @@ BEGIN
         kv.content_summary,
         kv.metadata
     FROM kv_store kv
-    WHERE kv.tenant_id = p_tenant_id
-    AND kv.entity_key = p_entity_key
-    AND (p_user_id IS NULL OR kv.user_id = p_user_id OR kv.user_id IS NULL);
+    WHERE kv.user_id = p_user_id
+    AND kv.entity_key = p_entity_key;
 END;
 $$ LANGUAGE plpgsql STABLE;
 
 COMMENT ON FUNCTION rem_lookup IS
-'REM LOOKUP query: O(1) entity lookup by natural key with optional user scoping';
+'REM LOOKUP query: O(1) entity lookup by natural key scoped to user_id';
 
 -- REM FUZZY: Fuzzy text search using pg_trgm similarity
 -- Returns entities matching approximate text with similarity scores
 CREATE OR REPLACE FUNCTION rem_fuzzy(
     p_query TEXT,
-    p_tenant_id VARCHAR(100),
+    p_user_id VARCHAR(100),
     p_threshold REAL DEFAULT 0.3,
-    p_limit INTEGER DEFAULT 10,
-    p_user_id VARCHAR(100) DEFAULT NULL
+    p_limit INTEGER DEFAULT 10
 )
 RETURNS TABLE(
     entity_key VARCHAR(255),
@@ -280,8 +277,7 @@ BEGIN
         kv.metadata,
         similarity(kv.entity_key, p_query) AS similarity_score
     FROM kv_store kv
-    WHERE kv.tenant_id = p_tenant_id
-    AND (p_user_id IS NULL OR kv.user_id = p_user_id OR kv.user_id IS NULL)
+    WHERE kv.user_id = p_user_id
     AND kv.entity_key % p_query  -- Trigram similarity operator
     ORDER BY similarity_score DESC
     LIMIT p_limit;
@@ -289,16 +285,15 @@ END;
 $$ LANGUAGE plpgsql STABLE;
 
 COMMENT ON FUNCTION rem_fuzzy IS
-'REM FUZZY query: Fuzzy text search using pg_trgm with similarity scoring';
+'REM FUZZY query: Fuzzy text search using pg_trgm with similarity scoring scoped to user_id';
 
 -- REM TRAVERSE: Recursive graph traversal following edges
 -- Explores graph_edges starting from entity_key up to max_depth
 CREATE OR REPLACE FUNCTION rem_traverse(
     p_entity_key VARCHAR(255),
-    p_tenant_id VARCHAR(100),
+    p_user_id VARCHAR(100),
     p_max_depth INTEGER DEFAULT 1,
-    p_rel_type VARCHAR(100) DEFAULT NULL,
-    p_user_id VARCHAR(100) DEFAULT NULL
+    p_rel_type VARCHAR(100) DEFAULT NULL
 )
 RETURNS TABLE(
     depth INTEGER,
@@ -322,9 +317,8 @@ BEGIN
             NULL::REAL AS rel_weight,
             ARRAY[kv.entity_key]::TEXT[] AS path
         FROM kv_store kv
-        WHERE kv.tenant_id = p_tenant_id
+        WHERE kv.user_id = p_user_id
         AND kv.entity_key = p_entity_key
-        AND (p_user_id IS NULL OR kv.user_id = p_user_id OR kv.user_id IS NULL)
 
         UNION ALL
 
@@ -340,19 +334,18 @@ BEGIN
         FROM graph_traversal gt
         -- Join to primary table to get graph_edges JSONB
         JOIN kv_store source_kv ON source_kv.entity_key = gt.entity_key
-            AND source_kv.tenant_id = p_tenant_id
+            AND source_kv.user_id = p_user_id
         JOIN resources r ON r.id = source_kv.entity_id
         -- Extract edges from JSONB array
         CROSS JOIN LATERAL jsonb_array_elements(COALESCE(r.graph_edges, '[]'::jsonb)) AS edge
         -- Lookup target entity in KV store
         JOIN kv_store target_kv ON target_kv.entity_key = (edge->>'target')::VARCHAR(255)
-            AND target_kv.tenant_id = p_tenant_id
+            AND target_kv.user_id = p_user_id
         WHERE gt.depth < p_max_depth
         -- Filter by relationship type if specified
         AND (p_rel_type IS NULL OR (edge->>'type')::VARCHAR(100) = p_rel_type)
         -- Prevent cycles by checking path
         AND NOT (target_kv.entity_key = ANY(gt.path))
-        AND (p_user_id IS NULL OR target_kv.user_id = p_user_id OR target_kv.user_id IS NULL)
     )
     SELECT DISTINCT ON (entity_key)
         gt.depth,
@@ -369,7 +362,7 @@ END;
 $$ LANGUAGE plpgsql STABLE;
 
 COMMENT ON FUNCTION rem_traverse IS
-'REM TRAVERSE query: Recursive graph traversal following entity relationships via graph_edges';
+'REM TRAVERSE query: Recursive graph traversal following entity relationships via graph_edges scoped to user_id';
 
 -- REM SEARCH: Vector similarity search using embeddings
 -- Joins to embeddings table for semantic search
@@ -377,11 +370,10 @@ CREATE OR REPLACE FUNCTION rem_search(
     p_query_embedding vector(1536),
     p_table_name VARCHAR(100),
     p_field_name VARCHAR(100),
-    p_tenant_id VARCHAR(100),
+    p_user_id VARCHAR(100),
     p_provider VARCHAR(50) DEFAULT 'openai',
     p_min_similarity REAL DEFAULT 0.7,
-    p_limit INTEGER DEFAULT 10,
-    p_user_id VARCHAR(100) DEFAULT NULL
+    p_limit INTEGER DEFAULT 10
 )
 RETURNS TABLE(
     entity_key VARCHAR(255),
@@ -411,22 +403,21 @@ BEGIN
             kv.content_summary
         FROM kv_store kv
         JOIN %I e ON e.entity_id = kv.entity_id
-        WHERE kv.tenant_id = $2
+        WHERE kv.user_id = $2
         AND e.field_name = $3
         AND e.provider = $4
         AND (1.0 - (e.embedding <#> $1) * -1.0) <= (1.0 - $5)
-        AND ($6::VARCHAR(100) IS NULL OR kv.user_id = $6 OR kv.user_id IS NULL)
         ORDER BY e.embedding <#> $1 DESC
-        LIMIT $7
+        LIMIT $6
     ', embeddings_table);
 
     RETURN QUERY EXECUTE query_sql
-    USING p_query_embedding, p_tenant_id, p_field_name, p_provider, p_min_similarity, p_user_id, p_limit;
+    USING p_query_embedding, p_user_id, p_field_name, p_provider, p_min_similarity, p_limit;
 END;
 $$ LANGUAGE plpgsql STABLE;
 
 COMMENT ON FUNCTION rem_search IS
-'REM SEARCH query: Vector similarity search using inner product for OpenAI normalized embeddings (0=different, 1=identical)';
+'REM SEARCH query: Vector similarity search using inner product for OpenAI normalized embeddings (0=different, 1=identical) scoped to user_id';
 
 -- Function to get migration status
 CREATE OR REPLACE FUNCTION migration_status()

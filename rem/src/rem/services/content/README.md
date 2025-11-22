@@ -291,7 +291,6 @@ service = ContentService()
 # Full pipeline: read → store → parse → chunk → embed
 result = await service.ingest_file(
     file_uri="/path/to/contract.pdf",  # or s3://, https://
-    tenant_id="acme-corp",
     user_id="user-123",
     category="legal",
     tags=["contract", "q1-2025"],
@@ -347,7 +346,7 @@ rem process uri https://example.com/paper.pdf -s output.json
 # Via MCP protocol (uses ingest_file internally)
 result = await parse_and_ingest_file(
     file_uri="s3://bucket/report.pdf",
-    tenant_id="acme-corp",
+    user_id="user-123",
     is_local_server=False  # Remote server = no local file access
 )
 ```
@@ -865,7 +864,7 @@ async def _process_engram(data: dict, uri: str, user_id: str) -> dict:
     Args:
         data: Parsed engram with kind=engram
         uri: File URI
-        user_id: Tenant ID
+        user_id: User ID
 
     Returns:
         dict with resource_id, moment_ids, chunks_created
@@ -874,7 +873,6 @@ async def _process_engram(data: dict, uri: str, user_id: str) -> dict:
     processor = EngramProcessor(postgres)
     result = await processor.process_engram(
         data=data,
-        tenant_id=user_id,
         user_id=user_id,
     )
 

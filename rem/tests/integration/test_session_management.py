@@ -184,7 +184,7 @@ async def test_session_message_store(tenant_id, session_id, user_id):
     if not settings.postgres.enabled:
         pytest.skip("Postgres is disabled, skipping database tests")
 
-    store = SessionMessageStore(tenant_id=tenant_id)
+    store = SessionMessageStore(user_id=user_id)
 
     # Store conversation with compression
     compressed = await store.store_session_messages(
@@ -215,7 +215,7 @@ async def test_long_message_compression(tenant_id, session_id, user_id):
     if not settings.postgres.enabled:
         pytest.skip("Postgres is disabled, skipping database tests")
 
-    store = SessionMessageStore(tenant_id=tenant_id)
+    store = SessionMessageStore(user_id=user_id)
 
     # Create conversation with very long assistant response
     conversation = [
@@ -254,7 +254,7 @@ async def test_reload_session(tenant_id, session_id, user_id):
     if not settings.postgres.enabled:
         pytest.skip("Postgres is disabled, skipping database tests")
 
-    store = SessionMessageStore(tenant_id=tenant_id)
+    store = SessionMessageStore(user_id=user_id)
 
     # Store initial conversation
     await store.store_session_messages(
@@ -283,7 +283,7 @@ async def test_reload_session_with_decompression(tenant_id, session_id, user_id)
     if not settings.postgres.enabled:
         pytest.skip("Postgres is disabled, skipping database tests")
 
-    store = SessionMessageStore(tenant_id=tenant_id)
+    store = SessionMessageStore(user_id=user_id)
 
     # Store conversation with long message
     conversation = [
@@ -319,7 +319,7 @@ async def test_multi_turn_conversation(tenant_id, session_id, user_id):
     if not settings.postgres.enabled:
         pytest.skip("Postgres is disabled, skipping database tests")
 
-    store = SessionMessageStore(tenant_id=tenant_id)
+    store = SessionMessageStore(user_id=user_id)
 
     # Turn 1: User asks, assistant responds
     turn1 = [

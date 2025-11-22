@@ -31,8 +31,8 @@ CREATE TABLE messages (
     content TEXT NOT NULL,
     message_type VARCHAR,  -- 'user', 'assistant', 'system'
     session_id VARCHAR,    -- Groups messages by conversation
-    tenant_id VARCHAR,     -- Multi-tenancy isolation
-    user_id VARCHAR,       -- User ownership
+    tenant_id VARCHAR,     -- Optional: for future multi-tenant SaaS use
+    user_id VARCHAR NOT NULL,  -- User ownership (primary isolation scope)
     metadata JSONB,        -- Contains entity_key, message_index, timestamp
     created_at TIMESTAMP,
     updated_at TIMESTAMP,
@@ -40,7 +40,7 @@ CREATE TABLE messages (
 );
 
 -- Indexes for fast retrieval
-CREATE INDEX idx_messages_session ON messages(session_id, tenant_id);
+CREATE INDEX idx_messages_session ON messages(session_id, user_id);
 CREATE INDEX idx_messages_entity_key ON messages((metadata->>'entity_key'));
 ```
 
@@ -91,7 +91,6 @@ db = get_postgres_service()
 history = await reload_session(
     db=db,
     session_id="session-abc-123",
-    tenant_id="acme-corp",
     user_id="alice",
     decompress_messages=False  # Use compressed versions
 )
@@ -118,7 +117,7 @@ from rem.services.session import SessionMessageStore
 from rem.services.postgres import get_postgres_service
 
 db = get_postgres_service()
-store = SessionMessageStore(tenant_id="acme-corp")
+store = SessionMessageStore(user_id="alice")
 
 # Entity key format: session-{session_id}-msg-{index}
 entity_key = "session-abc-123-msg-5"
@@ -129,7 +128,7 @@ full_content = await store.retrieve_message(entity_key)
 # SQL executed:
 # SELECT * FROM messages
 # WHERE metadata->>'entity_key' = 'session-abc-123-msg-5'
-#   AND tenant_id = 'acme-corp'
+#   AND user_id = 'alice'
 # LIMIT 1
 ```
 
@@ -157,8 +156,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
         history = await reload_session(
             db=db,
             session_id=context.session_id,
-            tenant_id=context.tenant_id or "default",
-            user_id=context.user_id,
+            user_id=context.user_id or "default",
             decompress_messages=False
         )
 
@@ -168,14 +166,13 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
 
     # 4. Save new messages
     if context.session_id and db:
-        store = SessionMessageStore(db=db, tenant_id=context.tenant_id or "default")
+        store = SessionMessageStore(db=db, user_id=context.user_id or "default")
         await store.store_session_messages(
             session_id=context.session_id,
             messages=[
                 {"role": "user", "content": prompt},
                 {"role": "assistant", "content": result.output}
             ],
-            user_id=context.user_id,
             compress=True
         )
 
@@ -188,7 +185,6 @@ Include session context in HTTP headers:
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/chat/completions \
-  -H "X-Tenant-Id: acme-corp" \
   -H "X-Session-Id: session-abc-123" \
   -H "X-User-Id: alice" \
   -H "Content-Type: application/json" \
@@ -200,9 +196,8 @@ curl -X POST http://localhost:8000/api/v1/chat/completions \
 ```
 
 **Headers:**
-- `X-Tenant-Id`: Tenant identifier (required, default: "default")
+- `X-User-Id`: User identifier (required, default: "default")
 - `X-Session-Id`: Session/conversation identifier (optional)
-- `X-User-Id`: User identifier (optional)
 
 ## Testing
 
@@ -243,14 +238,13 @@ python -m rem.tests.scripts.seed_sample_sessions --all
 # Seed specific conversation
 python -m rem.tests.scripts.seed_sample_sessions \
   --conversation rem_intro \
-  --tenant-id test-acme \
   --user-id alice
 
 # Demonstrate LOOKUP retrieval
 python -m rem.tests.scripts.seed_sample_sessions \
   --demo-lookup \
   --session-id <session-id> \
-  --tenant-id test-acme
+  --user-id alice
 ```
 
 Sample conversations available:
@@ -310,7 +304,7 @@ if not settings.postgres.enabled:
 ## Design Principles
 
 1. **LOOKUP-First**: Entity keys enable O(1) retrieval
-2. **Tenant Isolation**: All queries scoped by tenant_id
+2. **User Isolation**: All queries scoped by user_id
 3. **Graceful Degradation**: Works without database
 4. **Compression-Aware**: LLM sees compression markers
 5. **Audit Trail**: Full messages always stored

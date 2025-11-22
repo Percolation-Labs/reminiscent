@@ -96,8 +96,8 @@ All REM entities inherit from CoreModel and have these system fields:
 * **created_at** (timestamp): Entity creation time (RECOMMENDED for filtering)
 * **updated_at** (timestamp): Last modification time (RECOMMENDED for filtering)
 * **deleted_at** (timestamp): Soft deletion time (null if active)
-* **tenant_id** (string): Tenant identifier (auto-filtered, don't use manually)
-* **user_id** (string): Owner user identifier
+* **tenant_id** (string): Optional, for future multi-tenant SaaS use (kept for backward compat)
+* **user_id** (string): Owner user identifier (primary isolation scope, auto-filtered)
 * **graph_edges** (JSONB array): Knowledge graph edges - USE IN SELECT, NOT WHERE
 * **metadata** (JSONB object): Flexible metadata storage
 * **tags** (array of strings): Entity tags
@@ -265,7 +265,7 @@ result = await rem_service.execute_query(
             max_depth=2,
             edge_types=["depends_on", "related_to"]
         ),
-        tenant_id="my-tenant"
+        user_id="user-123"
     )
 )
 ```

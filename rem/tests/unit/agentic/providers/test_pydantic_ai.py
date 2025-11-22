@@ -13,7 +13,7 @@ from rem.agentic.context import AgentContext
 from rem.agentic.providers.pydantic_ai import (
     _create_model_from_schema,
     _create_schema_wrapper,
-    create_pydantic_ai_agent,
+    create_agent as create_ai_agent_provider,
 )
 
 
@@ -165,7 +165,7 @@ class TestCreatePydanticAIAgent:
     async def test_create_agent_from_query_schema(self, query_agent_schema):
         """Test creating agent from query agent schema."""
         # TODO: Uncomment when implementation is complete
-        # agent = await create_pydantic_ai_agent(
+        # agent = await create_ai_agent_provider(
         #     agent_schema_override=query_agent_schema
         # )
         #
@@ -183,7 +183,7 @@ class TestCreatePydanticAIAgent:
         )
 
         # TODO: Uncomment when implementation is complete
-        # agent = await create_pydantic_ai_agent(
+        # agent = await create_ai_agent_provider(
         #     context=context,
         #     agent_schema_override=query_agent_schema
         # )
@@ -197,7 +197,7 @@ class TestCreatePydanticAIAgent:
         context = AgentContext(default_model="openai:gpt-4")
 
         # TODO: Uncomment when implementation is complete
-        # agent = await create_pydantic_ai_agent(
+        # agent = await create_ai_agent_provider(
         #     context=context,
         #     agent_schema_override=query_agent_schema,
         #     model_override="anthropic:claude-sonnet-4-5-20250929"
@@ -209,7 +209,7 @@ class TestCreatePydanticAIAgent:
     async def test_agent_system_prompt_from_description(self, query_agent_schema):
         """Test that agent system prompt comes from schema description."""
         # TODO: Uncomment when implementation is complete
-        # agent = await create_pydantic_ai_agent(
+        # agent = await create_ai_agent_provider(
         #     agent_schema_override=query_agent_schema
         # )
         #
@@ -222,7 +222,7 @@ class TestCreatePydanticAIAgent:
     async def test_agent_output_schema_properties(self, query_agent_schema):
         """Test that agent output schema matches JSON Schema properties."""
         # TODO: Uncomment when implementation is complete
-        # agent = await create_pydantic_ai_agent(
+        # agent = await create_ai_agent_provider(
         #     agent_schema_override=query_agent_schema
         # )
         #
@@ -239,7 +239,7 @@ class TestCreatePydanticAIAgent:
     async def test_agent_tools_from_schema(self, query_agent_schema):
         """Test that agent tools are loaded from schema."""
         # TODO: Uncomment when MCP tool loading is implemented
-        # agent = await create_pydantic_ai_agent(
+        # agent = await create_ai_agent_provider(
         #     agent_schema_override=query_agent_schema
         # )
         #
@@ -256,7 +256,7 @@ class TestCreatePydanticAIAgent:
     async def test_agent_with_evaluator_schema(self, accuracy_evaluator_schema):
         """Test creating evaluator agent from schema."""
         # TODO: Uncomment when implementation is complete
-        # agent = await create_pydantic_ai_agent(
+        # agent = await create_ai_agent_provider(
         #     agent_schema_override=accuracy_evaluator_schema
         # )
         #
@@ -273,7 +273,7 @@ class TestCreatePydanticAIAgent:
     async def test_schema_description_stripping(self, query_agent_schema):
         """Test that model description is stripped from output schema."""
         # TODO: Uncomment when implementation is complete
-        # agent = await create_pydantic_ai_agent(
+        # agent = await create_ai_agent_provider(
         #     agent_schema_override=query_agent_schema,
         #     strip_model_description=True
         # )
@@ -294,7 +294,7 @@ class TestCreatePydanticAIAgent:
     async def test_no_schema_description_stripping(self, query_agent_schema):
         """Test that model description is preserved when stripping disabled."""
         # TODO: Uncomment when implementation is complete
-        # agent = await create_pydantic_ai_agent(
+        # agent = await create_ai_agent_provider(
         #     agent_schema_override=query_agent_schema,
         #     strip_model_description=False
         # )
@@ -313,7 +313,7 @@ class TestAgentExecution:
     async def test_agent_run_simple_query(self, query_agent_schema):
         """Test running agent with simple query."""
         # TODO: Uncomment when implementation is complete and add mock MCP tools
-        # agent = await create_pydantic_ai_agent(
+        # agent = await create_ai_agent_provider(
         #     agent_schema_override=query_agent_schema
         # )
         #

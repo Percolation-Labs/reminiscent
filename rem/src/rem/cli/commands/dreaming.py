@@ -20,14 +20,12 @@ def register_commands(dreaming: click.Group):
 
     @dreaming.command("user-model")
     @click.option("--user-id", required=True, help="User ID to process")
-    @click.option("--tenant-id", help="Tenant ID (defaults to user-id if not provided)")
     @click.option("--time-window-days", type=int, default=30, help="Days to look back")
     @click.option("--max-sessions", type=int, default=100, help="Max sessions to analyze")
     @click.option("--max-moments", type=int, default=20, help="Max moments to include")
     @click.option("--max-resources", type=int, default=20, help="Max resources to include")
     def user_model(
         user_id: str,
-        tenant_id: Optional[str],
         time_window_days: int,
         max_sessions: int,
         max_moments: int,
@@ -37,7 +35,7 @@ def register_commands(dreaming: click.Group):
 
         Example:
             rem dreaming user-model --user-id user-123
-            rem dreaming user-model --user-id sarah-chen --tenant-id acme-corp
+            rem dreaming user-model --user-id sarah-chen
         """
         from ...workers.dreaming import DreamingWorker
 
@@ -47,7 +45,6 @@ def register_commands(dreaming: click.Group):
                 logger.info(f"Updating user model for user: {user_id}")
                 result = await worker.update_user_model(
                     user_id=user_id,
-                    tenant_id=tenant_id or user_id,
                     time_window_days=time_window_days,
                     max_sessions=max_sessions,
                     max_moments=max_moments,
@@ -72,12 +69,10 @@ def register_commands(dreaming: click.Group):
 
     @dreaming.command("moments")
     @click.option("--user-id", required=True, help="User ID to process")
-    @click.option("--tenant-id", help="Tenant ID (defaults to user-id if not provided)")
     @click.option("--lookback-hours", type=int, help="Hours to look back")
     @click.option("--limit", type=int, help="Max resources to process")
     def moments(
         user_id: str,
-        tenant_id: Optional[str],
         lookback_hours: Optional[int],
         limit: Optional[int],
     ):
@@ -85,7 +80,7 @@ def register_commands(dreaming: click.Group):
 
         Example:
             rem dreaming moments --user-id user-123 --lookback-hours 48
-            rem dreaming moments --user-id sarah-chen --tenant-id acme-corp
+            rem dreaming moments --user-id sarah-chen
         """
         from ...workers.dreaming import DreamingWorker
 
@@ -95,7 +90,6 @@ def register_commands(dreaming: click.Group):
                 logger.info(f"Constructing moments for user: {user_id}")
                 result = await worker.construct_moments(
                     user_id=user_id,
-                    tenant_id=tenant_id or user_id,
                     lookback_hours=lookback_hours,
                     limit=limit,
                 )
@@ -117,7 +111,6 @@ def register_commands(dreaming: click.Group):
 
     @dreaming.command("affinity")
     @click.option("--user-id", required=True, help="User ID to process")
-    @click.option("--tenant-id", help="Tenant ID (defaults to user-id if not provided)")
     @click.option("--use-llm", is_flag=True, help="Use LLM mode (expensive)")
     @click.option("--lookback-hours", type=int, help="Hours to look back")
     @click.option("--limit", type=int, help="Max resources (REQUIRED for LLM mode)")
@@ -125,7 +118,6 @@ def register_commands(dreaming: click.Group):
     @click.option("--top-k", type=int, default=3, help="Max similar resources per resource")
     def affinity(
         user_id: str,
-        tenant_id: Optional[str],
         use_llm: bool,
         lookback_hours: Optional[int],
         limit: Optional[int],
@@ -140,7 +132,7 @@ def register_commands(dreaming: click.Group):
         Examples:
             rem dreaming affinity --user-id user-123
             rem dreaming affinity --user-id user-123 --use-llm --limit 100
-            rem dreaming affinity --user-id sarah-chen --tenant-id acme-corp
+            rem dreaming affinity --user-id sarah-chen
         """
         from ...workers.dreaming import AffinityMode, DreamingWorker
 
@@ -156,7 +148,6 @@ def register_commands(dreaming: click.Group):
 
                 result = await worker.build_affinity(
                     user_id=user_id,
-                    tenant_id=tenant_id or user_id,
                     mode=mode,
                     lookback_hours=lookback_hours,
                     limit=limit,
@@ -223,14 +214,12 @@ def register_commands(dreaming: click.Group):
 
     @dreaming.command("full")
     @click.option("--user-id", help="User ID (or --all-users)")
-    @click.option("--tenant-id", help="Tenant ID (defaults to user-id if not provided)")
     @click.option("--all-users", is_flag=True, help="Process all active users")
     @click.option("--use-llm-affinity", is_flag=True, help="Use LLM mode for affinity")
     @click.option("--lookback-hours", type=int, help="Hours to look back")
     @click.option("--skip-extractors", is_flag=True, help="Skip custom extractors")
     def full(
         user_id: Optional[str],
-        tenant_id: Optional[str],
         all_users: bool,
         use_llm_affinity: bool,
         lookback_hours: Optional[int],
@@ -248,8 +237,8 @@ def register_commands(dreaming: click.Group):
             # Process single user
             rem dreaming full --user-id user-123
 
-            # Process with tenant
-            rem dreaming full --user-id sarah-chen --tenant-id acme-corp
+            # Process user with LLM affinity
+            rem dreaming full --user-id sarah-chen --use-llm-affinity
 
             # Process all active users (daily cron)
             rem dreaming full --all-users
@@ -281,7 +270,6 @@ def register_commands(dreaming: click.Group):
 
                     result = await worker.process_full(
                         user_id=user_id,
-                        tenant_id=tenant_id or user_id,
                         use_llm_affinity=use_llm_affinity,
                         lookback_hours=lookback_hours,
                         extract_ontologies=not skip_extractors,

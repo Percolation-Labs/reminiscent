@@ -17,6 +17,7 @@
   rows:
     - name: Engineering Sync
       moment_type: meeting
+      starts_timestamp: "2024-01-15T10:00:00Z"
       graph_edges:
         - dst: Sarah Chen
           rel_type: attendee
@@ -26,6 +27,7 @@
   key_field: name
   rows:
     - name: Meeting Notes
+      uri: meeting-notes
       content: Notes from the sync...
       category: document
       graph_edges:
@@ -34,9 +36,10 @@
           weight: 0.8
 
     - name: Project Plan
+      uri: project-plan
       content: High level plan...
       category: document
       graph_edges:
-        - dst: Meeting Notes
+        - dst: meeting-notes
           rel_type: referenced_by
           weight: 0.5

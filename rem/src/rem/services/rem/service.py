@@ -19,6 +19,7 @@ from typing import Any
 
 from loguru import logger
 
+from .parser import RemQueryParser
 from ...models.core import (
     FuzzyParameters,
     LookupParameters,
@@ -386,142 +387,10 @@ class RemService:
 
     def _parse_query_string(self, query_string: str) -> tuple[QueryType, dict[str, Any]]:
         """
-        Parse REM query string into QueryType and parameters.
-
-        Parses strings like:
-        - "LOOKUP sarah-chen" → (QueryType.LOOKUP, {"entity_key": "sarah-chen"})
-        - "FUZZY Sara threshold=0.3" → (QueryType.FUZZY, {"query_text": "Sara", "threshold": 0.3})
-        - "SEARCH database table=resources" → (QueryType.SEARCH, {"query_text": "database", "table_name": "resources"})
-        - "SQL table=moments where=\"...\"" → (QueryType.SQL, {"table_name": "moments", "where_clause": "..."})
-        - "TRAVERSE sarah-chen depth=1" → (QueryType.TRAVERSE, {"start_key": "sarah-chen", "max_depth": 1})
-
-        Args:
-            query_string: REM query string from agent
-
-        Returns:
-            Tuple of (QueryType, parameters dict)
-
-        Raises:
-            ValueError: If query string is invalid
+        Parse REM query string using the robust RemQueryParser.
         """
-        import re
-        import shlex
-
-        parts = query_string.strip().split(maxsplit=1)
-        if not parts:
-            raise ValueError("Empty query string")
-
-        query_type_str = parts[0].upper()
-        try:
-            query_type = QueryType(query_type_str)
-        except ValueError:
-            raise ValueError(f"Invalid query type: {query_type_str}")
-
-        # Parse parameters based on query type
-        params: dict[str, Any] = {}
-
-        if len(parts) == 1:
-            raise ValueError(f"{query_type_str} query requires parameters")
-
-        params_str = parts[1]
-
-        if query_type == QueryType.LOOKUP:
-            # LOOKUP entity-key [user_id=...]
-            # Simple: first token is entity_key
-            tokens = params_str.split()
-            params["entity_key"] = tokens[0]
-
-            # Parse optional key=value pairs
-            for token in tokens[1:]:
-                if "=" in token:
-                    key, val = token.split("=", 1)
-                    params[key] = val
-
-        elif query_type == QueryType.FUZZY:
-            # FUZZY text [threshold=0.3] [limit=10]
-            # First token(s) until key=value is query_text
-            tokens = params_str.split()
-            query_text_parts = []
-
-            for token in tokens:
-                if "=" in token:
-                    key, val = token.split("=", 1)
-                    if key == "threshold":
-                        params["threshold"] = float(val)
-                    elif key == "limit":
-                        params["limit"] = int(val)
-                    else:
-                        params[key] = val
-                else:
-                    query_text_parts.append(token)
-
-            params["query_text"] = " ".join(query_text_parts)
-
-        elif query_type == QueryType.SEARCH:
-            # SEARCH query text table=resources [field=content] [limit=10]
-            tokens = params_str.split()
-            query_text_parts = []
-
-            for token in tokens:
-                if "=" in token:
-                    key, val = token.split("=", 1)
-                    if key == "limit":
-                        params["limit"] = int(val)
-                    elif key == "table":
-                        params["table_name"] = val
-                    elif key == "field":
-                        params["field_name"] = val
-                    else:
-                        params[key] = val
-                else:
-                    query_text_parts.append(token)
-
-            params["query_text"] = " ".join(query_text_parts)
-
-        elif query_type == QueryType.SQL:
-            # SQL table=moments where="..." [limit=100]
-            # Need to handle quoted strings properly
-            # Use shlex to parse quoted strings
-            try:
-                tokens = shlex.split(params_str)
-            except ValueError:
-                # Fallback to simple split if quotes are unbalanced
-                tokens = params_str.split()
-
-            for token in tokens:
-                if "=" in token:
-                    key, val = token.split("=", 1)
-                    # Remove quotes if present
-                    val = val.strip('"').strip("'")
-                    if key == "limit":
-                        params["limit"] = int(val)
-                    elif key == "table":
-                        params["table_name"] = val
-                    elif key == "where":
-                        params["where_clause"] = val
-                    else:
-                        params[key] = val
-
-        elif query_type == QueryType.TRAVERSE:
-            # TRAVERSE entity-key [depth=1] [rel_type=manages]
-            tokens = params_str.split()
-            params["initial_query"] = tokens[0]
-
-            for token in tokens[1:]:
-                if "=" in token:
-                    key, val = token.split("=", 1)
-                    if key == "depth" or key == "max_depth":
-                        params["max_depth"] = int(val)
-                    elif key == "rel_type":
-                        # Legacy: single rel_type support
-                        params["edge_types"] = [val]
-                    elif key == "edge_types":
-                        # New: comma-separated list
-                        params["edge_types"] = val.split(",")
-                    else:
-                        params[key] = val
-
-        return query_type, params
+        parser = RemQueryParser()
+        return parser.parse(query_string)
 
     async def ask_rem(
         self, natural_query: str, tenant_id: str, llm_model: str | None = None, plan_mode: bool = False

@@ -38,10 +38,7 @@ def get_postgres_service() -> PostgresService | None:
     if not settings.postgres.enabled:
         return None
 
-    return PostgresService(
-        connection_string=settings.postgres.connection_string,
-        pool_size=settings.postgres.pool_size,
-    )
+    return PostgresService()
 
 T = TypeVar("T", bound=BaseModel)
 
