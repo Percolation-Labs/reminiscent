@@ -26,10 +26,10 @@ from typing import Any
 from uuid import uuid4
 
 from rem.models.entities.resource import Resource
-from rem.models.entities.session import Session
+from rem.models.entities.message import Message
 from rem.services.postgres.service import DatabaseService
 from rem.services.repositories.resource_repository import ResourceRepository
-from rem.services.repositories.session_repository import SessionRepository
+from rem.services.repositories.message_repository import MessageRepository
 from rem.settings import settings
 
 
@@ -55,17 +55,17 @@ class SampleDataLoader:
         # Initialize services
         self.db_service = DatabaseService(settings.postgres)
         self.resource_repo: ResourceRepository | None = None
-        self.session_repo: SessionRepository | None = None
+        self.message_repo: MessageRepository | None = None
 
         # Track created entities
         self.created_resources: list[Resource] = []
-        self.created_sessions: list[Session] = []
+        self.created_messages: list[Message] = []
 
     async def __aenter__(self):
         """Async context manager entry."""
         await self.db_service.__aenter__()
         self.resource_repo = ResourceRepository(self.db_service)
-        self.session_repo = SessionRepository(self.db_service)
+        self.message_repo = MessageRepository(self.db_service)
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -125,33 +125,33 @@ class SampleDataLoader:
         response: str,
         timestamp: datetime,
         metadata: dict[str, Any] | None = None,
-    ) -> Session:
+    ) -> Message:
         """
-        Create a session entity.
+        Create a message entity.
 
         Args:
             query: User query/message
             response: Assistant response
-            timestamp: Session timestamp
-            metadata: Optional session metadata
+            timestamp: Message timestamp
+            metadata: Optional message metadata
 
         Returns:
-            Created Session entity
+            Created Message entity
         """
-        session = Session(
+        message = Message(
             id=str(uuid4()),
             tenant_id=self.tenant_id,
             user_id=self.user_id,
-            query=query,
-            response=response,
+            role="user",
+            content=query,
             metadata=metadata or {},
             created_at=timestamp,
             updated_at=timestamp,
         )
 
-        await self.session_repo.put(session)
-        self.created_sessions.append(session)
-        return session
+        await self.message_repo.put(message)
+        self.created_messages.append(message)
+        return message
 
     async def load_all(self) -> dict[str, Any]:
         """
@@ -394,7 +394,7 @@ class SampleDataLoader:
 
         return {
             "total_resources": len(self.created_resources),
-            "total_sessions": len(self.created_sessions),
+            "total_messages": len(self.created_messages),
             "tenant_id": self.tenant_id,
             "user_id": self.user_id,
             "date_range": {
@@ -451,7 +451,7 @@ async def main():
 
         print("\nSample data loaded successfully!")
         print(f"Resources created: {summary['total_resources']}")
-        print(f"Sessions created: {summary['total_sessions']}")
+        print(f"Messages created: {summary['total_messages']}")
         print(f"Graph edges: {summary['graph_edges_created']}")
         print(f"Date range: {summary['date_range']['span_days']} days")
         print(f"\nCategories: {summary['resource_categories']}")

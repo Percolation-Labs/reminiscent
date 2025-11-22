@@ -160,6 +160,8 @@ The dreaming worker runs periodically to build user models:
 
 ## Usage Examples
 
+**Note on Authentication**: By default, authentication is disabled (`AUTH__ENABLED=false`) for local development and testing. The examples below work without an `Authorization` header. If authentication is enabled in your environment, add: `-H "Authorization: Bearer your_jwt_token"` to cURL requests or `"Authorization": "Bearer your_jwt_token"` to Python headers.
+
 ### cURL: Simple Chat
 
 ```bash
@@ -224,7 +226,7 @@ import requests
 import uuid
 
 url = "http://localhost:8000/api/v1/chat/completions"
-session_id = f"session-{uuid.uuid4()}"
+session_id = str(uuid.uuid4())  # Must be a valid UUID
 
 def send_message(content):
     headers = {
@@ -286,6 +288,36 @@ for line in response.iter_lines():
                 delta = chunk["choices"][0]["delta"]
                 if "content" in delta:
                     print(delta["content"], end="", flush=True)
+```
+
+### Python: Audio Input (Voice Chat)
+
+```python
+import requests
+import base64
+
+# Read audio file and encode to base64
+with open("recording.wav", "rb") as audio_file:
+    audio_b64 = base64.b64encode(audio_file.read()).decode('utf-8')
+
+url = "http://localhost:8000/api/v1/chat/completions"
+headers = {
+    "Content-Type": "application/json",
+    "X-User-Id": "sarah@example.com",
+    "X-Chat-Is-Audio": "true"  # Trigger audio transcription
+}
+data = {
+    "model": "anthropic:claude-sonnet-4-5-20250929",
+    "messages": [
+        {"role": "user", "content": audio_b64}  # Base64-encoded WAV audio
+    ]
+}
+
+response = requests.post(url, headers=headers, json=data)
+print(response.json()["choices"][0]["message"]["content"])
+
+# Audio is transcribed to text using OpenAI Whisper
+# Then processed as normal text chat
 ```
 
 ## Response Format

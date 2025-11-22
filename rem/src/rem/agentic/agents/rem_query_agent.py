@@ -38,6 +38,8 @@ class REMQueryOutput(BaseModel):
     )
 
     confidence: float = Field(
+        ge=0.0,
+        le=1.0,
         description="Confidence score (0-1). 1.0 = exact match, 0.8-0.9 = high confidence, 0.5-0.7 = moderate, <0.5 = low"
     )
 

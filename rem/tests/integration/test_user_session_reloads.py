@@ -22,7 +22,7 @@ Success Criteria:
 import pytest
 from datetime import datetime, timedelta, timezone
 
-from rem.models.entities.session import Session
+from rem.models.entities.message import Message
 from rem.models.entities.resource import Resource
 from rem.models.entities.user import User
 from rem.services.postgres.repository import Repository

@@ -181,14 +181,42 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
 
     logger.info(f"Using agent schema: {schema_name}, model: {body.model}")
 
-    # Build complete context from headers (includes user profile + session history + date)
-    # This replaces manual session reloading and message construction
+    # Check for audio input
+    is_audio = request.headers.get("x-chat-is-audio", "").lower() == "true"
+
+    # Process messages (transcribe audio if needed)
     new_messages = [msg.model_dump() for msg in body.messages]
+
+    if is_audio and new_messages and new_messages[0]["role"] == "user":
+        # First user message should be base64-encoded audio
+        try:
+            audio_b64 = new_messages[0]["content"]
+            audio_bytes = base64.b64decode(audio_b64)
+
+            # Write to temp file for transcription
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+                tmp_file.write(audio_bytes)
+                tmp_path = tmp_file.name
+
+            # Transcribe audio
+            transcriber = AudioTranscriber()
+            result = transcriber.transcribe_file(tmp_path)
+
+            # Replace audio content with transcribed text
+            new_messages[0]["content"] = result.text
+            logger.info(f"Transcribed audio: {len(result.text)} characters")
+
+            # Clean up temp file
+            Path(tmp_path).unlink()
+
+        except Exception as e:
+            logger.error(f"Failed to transcribe audio: {e}")
+            # Fall through with original content (will likely fail at agent)
 
     # Use ContextBuilder to construct complete message list with:
     # 1. System context hint (date + user profile)
     # 2. Session history (if session_id provided)
-    # 3. New messages from request body
+    # 3. New messages from request body (transcribed if audio)
     context, messages = await ContextBuilder.build_from_headers(
         headers=dict(request.headers),
         new_messages=new_messages,
