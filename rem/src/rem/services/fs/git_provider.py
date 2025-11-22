@@ -169,17 +169,8 @@ import shutil
 from urllib.parse import urlparse, parse_qs
 
 from loguru import logger
-
-try:
-    from git import Repo, GitCommandError
-    from git.exc import InvalidGitRepositoryError, NoSuchPathError
-    GitPython_available = True
-except ImportError:
-    GitPython_available = False
-    logger.warning(
-        "GitPython not installed. Git provider will not be available. "
-        "Install with: pip install GitPython"
-    )
+from git import Repo, GitCommandError
+from git.exc import InvalidGitRepositoryError, NoSuchPathError
 
 from rem.settings import settings
 

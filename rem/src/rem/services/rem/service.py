@@ -155,10 +155,13 @@ class RemService:
         """
         Execute LOOKUP query via rem_lookup() PostgreSQL function.
 
+        Supports both single key and list of keys. When given a list, executes
+        multiple LOOKUP queries and aggregates results.
+
         Delegates to: rem_lookup(entity_key, tenant_id, user_id)
 
         Args:
-            params: LookupParameters with entity key
+            params: LookupParameters with entity key (str or list[str])
             tenant_id: Tenant identifier
 
         Returns:
@@ -166,14 +169,20 @@ class RemService:
         """
         from .queries import LOOKUP_QUERY, get_lookup_params
 
-        query_params = get_lookup_params(params.entity_key, tenant_id, params.user_id)
-        results = await self.db.execute(LOOKUP_QUERY, query_params)
+        # Handle both single key and list of keys
+        keys = params.key if isinstance(params.key, list) else [params.key]
+
+        all_results = []
+        for key in keys:
+            query_params = get_lookup_params(key, tenant_id, params.user_id)
+            results = await self.db.execute(LOOKUP_QUERY, query_params)
+            all_results.extend(results)
 
         return {
             "query_type": "LOOKUP",
-            "entity_key": params.entity_key,
-            "results": results,
-            "count": len(results),
+            "keys": keys,  # Return list for consistency
+            "results": all_results,
+            "count": len(all_results),
         }
 
     async def _execute_fuzzy(
@@ -341,7 +350,7 @@ class RemService:
         """
         Execute TRAVERSE query via rem_traverse() PostgreSQL function.
 
-        Delegates to: rem_traverse(entity_key, tenant_id, max_depth, rel_type, user_id)
+        Delegates to: rem_traverse(entity_key, tenant_id, max_depth, rel_types, user_id)
 
         Args:
             params: TraverseParameters with start key and depth
@@ -352,83 +361,244 @@ class RemService:
         """
         from .queries import TRAVERSE_QUERY, get_traverse_params
 
+        # Handle edge_types wildcards
+        rel_types = params.edge_types
+        if not rel_types or "*" in rel_types:
+            rel_types = None
+
         query_params = get_traverse_params(
-            params.start_key,
+            params.initial_query,
             tenant_id,
             params.max_depth or 1,
-            params.rel_type,
-            params.user_id,
+            rel_types,
+            None, # user_id not yet in TraverseParameters, passing None
         )
         results = await self.db.execute(TRAVERSE_QUERY, query_params)
 
         return {
             "query_type": "TRAVERSE",
-            "start_key": params.start_key,
+            "start_key": params.initial_query,
             "max_depth": params.max_depth,
-            "rel_type": params.rel_type,
+            "edge_types": params.edge_types,
             "results": results,
             "count": len(results),
         }
 
+    def _parse_query_string(self, query_string: str) -> tuple[QueryType, dict[str, Any]]:
+        """
+        Parse REM query string into QueryType and parameters.
+
+        Parses strings like:
+        - "LOOKUP sarah-chen" → (QueryType.LOOKUP, {"entity_key": "sarah-chen"})
+        - "FUZZY Sara threshold=0.3" → (QueryType.FUZZY, {"query_text": "Sara", "threshold": 0.3})
+        - "SEARCH database table=resources" → (QueryType.SEARCH, {"query_text": "database", "table_name": "resources"})
+        - "SQL table=moments where=\"...\"" → (QueryType.SQL, {"table_name": "moments", "where_clause": "..."})
+        - "TRAVERSE sarah-chen depth=1" → (QueryType.TRAVERSE, {"start_key": "sarah-chen", "max_depth": 1})
+
+        Args:
+            query_string: REM query string from agent
+
+        Returns:
+            Tuple of (QueryType, parameters dict)
+
+        Raises:
+            ValueError: If query string is invalid
+        """
+        import re
+        import shlex
+
+        parts = query_string.strip().split(maxsplit=1)
+        if not parts:
+            raise ValueError("Empty query string")
+
+        query_type_str = parts[0].upper()
+        try:
+            query_type = QueryType(query_type_str)
+        except ValueError:
+            raise ValueError(f"Invalid query type: {query_type_str}")
+
+        # Parse parameters based on query type
+        params: dict[str, Any] = {}
+
+        if len(parts) == 1:
+            raise ValueError(f"{query_type_str} query requires parameters")
+
+        params_str = parts[1]
+
+        if query_type == QueryType.LOOKUP:
+            # LOOKUP entity-key [user_id=...]
+            # Simple: first token is entity_key
+            tokens = params_str.split()
+            params["entity_key"] = tokens[0]
+
+            # Parse optional key=value pairs
+            for token in tokens[1:]:
+                if "=" in token:
+                    key, val = token.split("=", 1)
+                    params[key] = val
+
+        elif query_type == QueryType.FUZZY:
+            # FUZZY text [threshold=0.3] [limit=10]
+            # First token(s) until key=value is query_text
+            tokens = params_str.split()
+            query_text_parts = []
+
+            for token in tokens:
+                if "=" in token:
+                    key, val = token.split("=", 1)
+                    if key == "threshold":
+                        params["threshold"] = float(val)
+                    elif key == "limit":
+                        params["limit"] = int(val)
+                    else:
+                        params[key] = val
+                else:
+                    query_text_parts.append(token)
+
+            params["query_text"] = " ".join(query_text_parts)
+
+        elif query_type == QueryType.SEARCH:
+            # SEARCH query text table=resources [field=content] [limit=10]
+            tokens = params_str.split()
+            query_text_parts = []
+
+            for token in tokens:
+                if "=" in token:
+                    key, val = token.split("=", 1)
+                    if key == "limit":
+                        params["limit"] = int(val)
+                    elif key == "table":
+                        params["table_name"] = val
+                    elif key == "field":
+                        params["field_name"] = val
+                    else:
+                        params[key] = val
+                else:
+                    query_text_parts.append(token)
+
+            params["query_text"] = " ".join(query_text_parts)
+
+        elif query_type == QueryType.SQL:
+            # SQL table=moments where="..." [limit=100]
+            # Need to handle quoted strings properly
+            # Use shlex to parse quoted strings
+            try:
+                tokens = shlex.split(params_str)
+            except ValueError:
+                # Fallback to simple split if quotes are unbalanced
+                tokens = params_str.split()
+
+            for token in tokens:
+                if "=" in token:
+                    key, val = token.split("=", 1)
+                    # Remove quotes if present
+                    val = val.strip('"').strip("'")
+                    if key == "limit":
+                        params["limit"] = int(val)
+                    elif key == "table":
+                        params["table_name"] = val
+                    elif key == "where":
+                        params["where_clause"] = val
+                    else:
+                        params[key] = val
+
+        elif query_type == QueryType.TRAVERSE:
+            # TRAVERSE entity-key [depth=1] [rel_type=manages]
+            tokens = params_str.split()
+            params["initial_query"] = tokens[0]
+
+            for token in tokens[1:]:
+                if "=" in token:
+                    key, val = token.split("=", 1)
+                    if key == "depth" or key == "max_depth":
+                        params["max_depth"] = int(val)
+                    elif key == "rel_type":
+                        # Legacy: single rel_type support
+                        params["edge_types"] = [val]
+                    elif key == "edge_types":
+                        # New: comma-separated list
+                        params["edge_types"] = val.split(",")
+                    else:
+                        params[key] = val
+
+        return query_type, params
+
     async def ask_rem(
-        self, natural_query: str, tenant_id: str, llm_model: str | None = None
+        self, natural_query: str, tenant_id: str, llm_model: str | None = None, plan_mode: bool = False
     ) -> dict[str, Any]:
         """
-        Natural language to REM query conversion.
+        Natural language to REM query conversion with optional execution.
 
-        Uses REM Query Agent (LLM) to convert user questions into REM queries.
+        Uses REM Query Agent (Cerebras Qwen) to convert user questions into REM query strings.
+        Auto-executes if confidence >= 0.7, otherwise returns query for review.
 
         Args:
             natural_query: Natural language question
             tenant_id: Tenant identifier
             llm_model: Optional LLM model override
+            plan_mode: If True, only shows generated query without executing
 
         Returns:
             Dict with:
-            - query_output: REMQueryOutput from agent
-            - results: Executed query results (if confidence >= 0.7)
-            - multi_step_results: Results for each step (if multi-step query)
+            - query: Generated REM query string (e.g., "LOOKUP sarah-chen")
+            - confidence: Confidence score (0.0-1.0)
+            - reasoning: Explanation (only if confidence < 0.7)
+            - results: Executed query results (if confidence >= 0.7 and not plan_mode)
+            - warning: Low confidence warning (if confidence < 0.7)
+
+        Example:
+            >>> result = await rem_service.ask_rem("Who is Sarah Chen?", tenant_id="acme")
+            >>> print(result["query"])
+            "LOOKUP sarah-chen"
+            >>> print(result["results"]["count"])
+            1
+
+            >>> # Plan mode - show query without executing
+            >>> result = await rem_service.ask_rem("Find Sarah", tenant_id="acme", plan_mode=True)
+            >>> print(result["query"])
+            "LOOKUP sarah"
+            >>> print("results" in result)
+            False
         """
         from ...agentic.agents import ask_rem as agent_ask_rem
+        from ...models.core import RemQuery
 
-        # Get query from REM Query Agent
+        # Get query string from REM Query Agent
         query_output = await agent_ask_rem(
             natural_query=natural_query,
             llm_model=llm_model,
         )
 
         result = {
-            "query_output": query_output.model_dump(),
+            "query": query_output.query,
+            "confidence": query_output.confidence,
+            "reasoning": query_output.reasoning or "",
             "natural_query": natural_query,
         }
 
-        # Execute query if confidence is high enough
-        if query_output.confidence >= 0.7:
-            if query_output.multi_step:
-                # Execute multi-step query plan
-                multi_step_results = []
-                for step in query_output.multi_step:
-                    step_query = RemQuery(
-                        query_type=QueryType(step["query_type"]),
-                        parameters=step["parameters"],
-                        tenant_id=tenant_id,
-                    )
-                    step_result = await self.execute_query(step_query)
-                    multi_step_results.append({
-                        "description": step.get("description"),
-                        "results": step_result,
-                    })
-                result["multi_step_results"] = multi_step_results
-            else:
-                # Execute single query
-                query = RemQuery(
-                    query_type=query_output.query_type,
-                    parameters=query_output.parameters,
+        # Execute query if confidence is high enough and not in plan mode
+        if query_output.confidence >= 0.7 and not plan_mode:
+            try:
+                # Parse query string
+                query_type, parameters = self._parse_query_string(query_output.query)
+
+                # Create RemQuery and execute
+                rem_query = RemQuery(
+                    query_type=query_type,
+                    parameters=parameters,
                     tenant_id=tenant_id,
                 )
-                result["results"] = await self.execute_query(query)
+
+                result["results"] = await self.execute_query(rem_query)
+
+            except Exception as e:
+                result["warning"] = f"Failed to parse or execute query: {str(e)}"
+                logger.error(f"Query execution failed: {e}", exc_info=True)
+
+        elif plan_mode:
+            result["plan_mode"] = True
         else:
             # Low confidence - don't auto-execute
-            result["warning"] = "Low confidence score. Review query_output.reasoning before executing."
+            result["warning"] = "Low confidence score. Review reasoning before executing."
 
         return result

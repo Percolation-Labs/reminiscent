@@ -47,7 +47,7 @@ REM Query Contract (MANDATORY for all providers):
 """
 
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -71,13 +71,16 @@ class LookupParameters(BaseModel):
     """
     LOOKUP query parameters.
 
-    Performance: O(1) - Single key lookup, not scan
+    Performance: O(1) per key
     Schema: Agnostic - No table name required
-    Multi-match: Returns entities from ALL tables with matching key
+    Multi-match: Returns entities from ALL tables with matching keys
     """
 
-    key: str = Field(
-        ..., description="Entity identifier (natural language label)"
+    key: Union[str, list[str]] = Field(
+        ..., description="Entity identifier(s) - single key or list of keys (natural language labels)"
+    )
+    user_id: Optional[str] = Field(
+        default=None, description="Optional user ID filter for multi-user tenants"
     )
 
 

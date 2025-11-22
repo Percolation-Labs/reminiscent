@@ -1,14 +1,22 @@
 """
 Pydantic AI agent factory with dynamic JsonSchema to Pydantic model conversion.
 
-Key Design Pattern 
+Known Issues
+1. Cerebras Qwen Strict Mode Incompatibility
+   - Cerebras qwen-3-32b requires additionalProperties=false for all object fields
+   - Cannot use dict[str, Any] for flexible parameters (breaks Qwen compatibility)
+   - Cannot use minimum/maximum constraints on number fields (Qwen rejects these)
+   - Workaround: Use cerebras:llama-3.3-70b instead (fully compatible)
+   - Future fix: Redesign REM agent to use discriminated union instead of dict
+
+Key Design Pattern
 1. JsonSchema → Pydantic Model (json-schema-to-pydantic library)
 2. Agent schema contains both system prompt AND output schema
 3. MCP tools loaded dynamically from schema metadata
 4. Result type can be stripped of description to avoid duplication with system prompt
 5. OTEL instrumentation conditional based on settings
 
-Unique Design 
+Unique Design
 - Agent schemas are JSON Schema with embedded metadata:
   - description: System prompt for agent
   - properties: Output schema fields
@@ -19,13 +27,21 @@ Unique Design
 - Tools and resources loaded from MCP servers via schema config
 - Stripped descriptions to avoid LLM schema bloat
 
+TODO: Model Cache Implementation
+- Implement lazy-loaded model cache for frequently used agents
+- Cache Pydantic AI Model instances (not just schemas) to avoid re-initialization
+- Key models to cache: REM Query Agent (Cerebras), default reasoning models
+- Benefits: Faster agent creation, reduced API overhead, connection pooling
+- Design: LRU cache with max size, TTL for stale models, thread-safe access
+- Example: _model_cache[model_name] = Model instance, reuse across agent creations
+
 Example Agent Schema:
 {
   "type": "object",
   "description": "Agent that answers REM queries...",
   "properties": {
     "answer": {"type": "string", "description": "Query answer"},
-    "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+    "confidence": {"type": "number"}
   },
   "required": ["answer", "confidence"],
   "json_schema_extra": {
@@ -115,6 +131,77 @@ def _create_model_from_schema(agent_schema: dict[str, Any]) -> type[BaseModel]:
     return model
 
 
+def _prepare_schema_for_qwen(schema: dict[str, Any]) -> dict[str, Any]:
+    """
+    Prepare JSON schema for Cerebras Qwen strict mode compatibility.
+
+    Cerebras Qwen strict mode requirements:
+    1. additionalProperties MUST be false (this is mandatory in strict mode)
+    2. All object types must have explicit properties field
+    3. Cannot use minimum/maximum constraints (Pydantic ge/le works fine)
+
+    This function transforms schemas to meet these requirements:
+    - Changes additionalProperties from true to false
+    - Adds empty properties {} to objects that don't have it
+    - Preserves all other schema features
+
+    IMPORTANT: This breaks dict[str, Any] flexibility!
+    - dict[str, Any] generates {"type": "object", "additionalProperties": true}
+    - Qwen requires additionalProperties: false
+    - Result: Empty dict {} becomes the only valid value
+
+    Recommendation: Don't use dict[str, Any] with Qwen. Use explicit Pydantic models instead.
+
+    Args:
+        schema: JSON schema dict (typically from model.model_json_schema())
+
+    Returns:
+        Modified schema compatible with Cerebras Qwen strict mode
+
+    Example:
+        # Pydantic generates for dict[str, Any]:
+        {"type": "object", "additionalProperties": true}
+
+        # Qwen requires:
+        {"type": "object", "properties": {}, "additionalProperties": false}
+
+        # This means dict can only be {}
+    """
+    def fix_object_properties(obj: dict[str, Any]) -> None:
+        """Recursively fix object schemas for Qwen strict mode."""
+        if isinstance(obj, dict):
+            # Fix current object if it's type=object
+            if obj.get("type") == "object":
+                # Add empty properties if missing
+                if "properties" not in obj and "anyOf" not in obj and "oneOf" not in obj:
+                    obj["properties"] = {}
+
+                # Force additionalProperties to false (required by Qwen strict mode)
+                if "additionalProperties" in obj:
+                    obj["additionalProperties"] = False
+
+            # Remove minimum/maximum from number fields (Qwen rejects these)
+            if obj.get("type") == "number":
+                obj.pop("minimum", None)
+                obj.pop("maximum", None)
+
+            # Recursively fix nested schemas
+            for key, value in obj.items():
+                if isinstance(value, dict):
+                    fix_object_properties(value)
+                elif isinstance(value, list):
+                    for item in value:
+                        if isinstance(item, dict):
+                            fix_object_properties(item)
+
+    # Work on a copy to avoid mutating original
+    import copy
+    schema_copy = copy.deepcopy(schema)
+    fix_object_properties(schema_copy)
+
+    return schema_copy
+
+
 def _create_schema_wrapper(
     result_type: type[BaseModel], strip_description: bool = True
 ) -> type[BaseModel]:
@@ -124,7 +211,7 @@ def _create_schema_wrapper(
     Prevents redundant descriptions in LLM schema while keeping
     docstrings in Python code for documentation.
 
-    Design Pattern 
+    Design Pattern
     - Agent schema.description contains full system prompt
     - Output model description would duplicate this
     - Stripping description reduces token usage without losing information
@@ -155,6 +242,8 @@ def _create_schema_wrapper(
             schema = super().model_json_schema(**kwargs)
             # Remove model-level description to avoid duplication with system prompt
             schema.pop("description", None)
+            # Prepare schema for Qwen compatibility
+            schema = _prepare_schema_for_qwen(schema)
             return schema
 
     # Preserve original model name for debugging

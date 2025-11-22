@@ -29,6 +29,7 @@ Usage:
 """
 
 from rem.services.fs.provider import FS
+from rem.services.fs.service import FileSystemService
 from rem.services.fs.s3_provider import S3Provider, generate_presigned_url
 from rem.services.fs.local_provider import LocalProvider
 from rem.services.fs.paths import (
@@ -45,6 +46,7 @@ from rem.services.fs.paths import (
 __all__ = [
     # Core providers
     "FS",
+    "FileSystemService",
     "S3Provider",
     "LocalProvider",
     "generate_presigned_url",

@@ -33,7 +33,25 @@ def register_commands(group: click.Group):
 )
 def process_uri(uri: str, output: str, save: str | None):
     """
-    Process a file URI and extract content.
+    Process a file URI and extract content (READ-ONLY, no storage).
+
+    **ARCHITECTURE NOTE - Code Path Comparison**:
+
+    This CLI command provides READ-ONLY file processing:
+    - Uses ContentService.process_uri() directly (no file storage, no DB writes)
+    - Returns extracted content to stdout or saves to local file
+    - No File entity created, no Resource chunks stored in database
+    - Useful for testing file parsing without side effects
+
+    Compare with MCP tool 'parse_and_ingest_file' (api/mcp_router/tools.py):
+    - WRITES file to internal storage (~/.rem/fs/ or S3)
+    - Creates File entity in database
+    - Creates Resource chunks via ContentService.process_and_save()
+    - Full ingestion pipeline for searchable content
+
+    **SHARED CODE**: Both use ContentService for file parsing:
+    - CLI: ContentService.process_uri() → extract only
+    - MCP: ContentService.process_and_save() → extract + store chunks
 
     URI can be:
     - S3 URI: s3://bucket/key

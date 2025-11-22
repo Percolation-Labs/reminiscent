@@ -104,9 +104,9 @@ class LLMSettings(BaseSettings):
         description="Model for LLM-as-judge evaluators (separate from generation model)",
     )
 
-    query_agent_model: str | None = Field(
-        default=None,
-        description="Model for REM Query Agent (natural language to REM query). If None, uses default_model. Recommend fast model like gpt-4o-mini or claude-sonnet-4.5",
+    query_agent_model: str = Field(
+        default="cerebras:qwen-3-32b",
+        description="Model for REM Query Agent (natural language to REM query). Cerebras Qwen 3-32B provides ultra-fast inference (1.2s reasoning, 2400 tok/s). Alternative: cerebras:llama-3.3-70b, gpt-4o-mini, or claude-sonnet-4.5",
     )
 
     openai_api_key: str | None = Field(
@@ -723,6 +723,50 @@ class SQSSettings(BaseSettings):
     )
 
 
+class ChatSettings(BaseSettings):
+    """
+    Chat and session context settings.
+
+    Environment variables:
+        CHAT__AUTO_INJECT_USER_CONTEXT - Automatically inject user profile into every request (default: false)
+
+    Design Philosophy:
+    - Session history is ALWAYS loaded (required for multi-turn conversations)
+    - Compression with REM LOOKUP hints keeps session history efficient
+    - User context is on-demand by default (agents receive REM LOOKUP hints)
+    - When auto_inject_user_context enabled, user profile is loaded and injected
+
+    Session History (always loaded with compression):
+    - Each chat request is a single message, so history MUST be recovered
+    - Long assistant responses stored as separate Message entities
+    - Compressed versions include REM LOOKUP hints: "... [REM LOOKUP session-{id}-msg-{index}] ..."
+    - Agent can retrieve full content on-demand using REM LOOKUP
+    - Prevents context window bloat while maintaining conversation continuity
+
+    User Context (on-demand by default):
+    - Agent system prompt includes: "User ID: {user_id}. To load user profile: Use REM LOOKUP users/{user_id}"
+    - Agent decides whether to load profile based on query
+    - More efficient for queries that don't need personalization
+
+    User Context (auto-inject when enabled):
+    - Set CHAT__AUTO_INJECT_USER_CONTEXT=true
+    - User profile automatically loaded and injected into system message
+    - Simpler for basic chatbots that always need context
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="CHAT__",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    auto_inject_user_context: bool = Field(
+        default=False,
+        description="Automatically inject user profile into every request (default: false, use REM LOOKUP hint instead)",
+    )
+
+
 class APISettings(BaseSettings):
     """
     API server settings.
@@ -951,6 +995,7 @@ class Settings(BaseSettings):
 
     # Nested settings groups
     api: APISettings = Field(default_factory=APISettings)
+    chat: ChatSettings = Field(default_factory=ChatSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
     mcp: MCPSettings = Field(default_factory=MCPSettings)
     otel: OTELSettings = Field(default_factory=OTELSettings)

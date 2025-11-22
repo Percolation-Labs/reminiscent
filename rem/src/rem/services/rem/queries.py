@@ -89,7 +89,7 @@ FROM rem_traverse($1, $2, $3, $4, $5)
 # $1: start_key (str)
 # $2: tenant_id (str)
 # $3: max_depth (int)
-# $4: rel_type (str | None)
+# $4: rel_types (list[str] | None)
 # $5: user_id (str | None)
 
 
@@ -178,8 +178,8 @@ def get_traverse_params(
     start_key: str,
     tenant_id: str,
     max_depth: int = 1,
-    rel_type: str | None = None,
+    rel_types: list[str] | None = None,
     user_id: str | None = None,
 ) -> tuple:
     """Get parameters for TRAVERSE query."""
-    return (start_key, tenant_id, max_depth, rel_type, user_id)
+    return (start_key, tenant_id, max_depth, rel_types, user_id)

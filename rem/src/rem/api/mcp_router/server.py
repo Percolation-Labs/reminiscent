@@ -122,7 +122,7 @@ def create_mcp_server(is_local: bool = False) -> FastMCP:
             "• rem_query - Execute REM queries (LOOKUP, FUZZY, SEARCH, SQL, TRAVERSE)\n"
             "• ask_rem - Natural language to REM query conversion\n"
             "  - plan_mode=True: Hints agent to use TRAVERSE with depth=0 for edge analysis\n"
-            "• ingest_file - Ingest files from local paths (local server only), s3://, or https://\n"
+            "• parse_and_ingest_file - Ingest files from local paths (local server only), s3://, or https://\n"
             "\n"
             "═══════════════════════════════════════════════════════════════════════════\n"
             "AVAILABLE RESOURCES (Read-Only)\n"
@@ -159,7 +159,7 @@ def create_mcp_server(is_local: bool = False) -> FastMCP:
     )
 
     # Register REM query tools
-    from .tools import ask_rem, ingest_file, rem_query
+    from .tools import ask_rem, parse_and_ingest_file, rem_query
 
     mcp.tool()(rem_query)
     mcp.tool()(ask_rem)
@@ -168,15 +168,15 @@ def create_mcp_server(is_local: bool = False) -> FastMCP:
     # Wrap to inject is_local parameter
     from functools import wraps
 
-    @wraps(ingest_file)
-    async def ingest_file_wrapper(
+    @wraps(parse_and_ingest_file)
+    async def parse_and_ingest_file_wrapper(
         file_uri: str,
         tenant_id: str,
         user_id: str | None = None,
         category: str | None = None,
         tags: list[str] | None = None,
     ):
-        return await ingest_file(
+        return await parse_and_ingest_file(
             file_uri=file_uri,
             tenant_id=tenant_id,
             user_id=user_id,
@@ -185,7 +185,7 @@ def create_mcp_server(is_local: bool = False) -> FastMCP:
             is_local_server=is_local,
         )
 
-    mcp.tool()(ingest_file_wrapper)
+    mcp.tool()(parse_and_ingest_file_wrapper)
 
     # Register prompts
     from .prompts import register_prompts

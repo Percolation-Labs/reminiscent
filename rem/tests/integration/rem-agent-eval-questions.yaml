@@ -1,0 +1,180 @@
+---
+# REM Query Agent Evaluation - 10 Realistic Questions
+# Based on actual seed data (resources.yaml)
+# Mix of difficulty levels and query types
+
+evaluation:
+  name: "REM Query Agent - Realistic Data Evaluation"
+  description: "10 questions testing agent's ability to generate correct REM queries for realistic scenarios"
+  dataset: "tests/data/seed/resources.yaml"
+  entities:
+    people: ["sarah-chen", "mike-johnson", "emily-santos"]
+    projects: ["project-alpha", "rem-deployment"]
+    documents: ["getting-started-guide", "database-architecture", "api-quickstart"]
+    concepts: ["multi-tenancy", "semantic-search", "pgvector", "kubernetes"]
+
+questions:
+  # ===== EASY: Simple lookups and basic queries =====
+
+  - id: "eval-001"
+    difficulty: "easy"
+    category: "LOOKUP"
+    question: "Show me the getting started guide"
+    expected_query:
+      query_type: "LOOKUP"
+      parameters:
+        key: "getting-started-guide"
+      confidence: ">= 0.9"
+    rationale: "Simple single entity lookup by known document name"
+    correct_answer: "LOOKUP query for 'getting-started-guide' resource"
+
+  - id: "eval-002"
+    difficulty: "easy"
+    category: "FUZZY"
+    question: "Find documents with 'database' in the name"
+    expected_query:
+      query_type: "FUZZY"
+      parameters:
+        query_text: "database"
+        threshold: ">= 0.3"
+        limit: "any"
+      confidence: ">= 0.8"
+    rationale: "Fuzzy match on partial document name"
+    correct_answer: "FUZZY search for 'database' should match 'database-architecture'"
+
+  - id: "eval-003"
+    difficulty: "easy"
+    category: "SQL"
+    question: "Show me all documentation files"
+    expected_query:
+      query_type: "SQL"
+      parameters:
+        table_name: "resources"
+        where_clause: "category = 'documentation'"
+      confidence: ">= 0.9"
+    rationale: "Simple category filter on resources table"
+    correct_answer: "SQL query filtering by category='documentation'"
+
+  # ===== MEDIUM: Temporal queries and hybrid searches =====
+
+  - id: "eval-004"
+    difficulty: "medium"
+    category: "SQL"
+    question: "Get resources created in January 2025"
+    expected_query:
+      query_type: "SQL"
+      parameters:
+        table_name: "resources"
+        where_clause: "contains timestamp >= '2025-01-01' AND < '2025-02-01' OR created_at"
+      confidence: ">= 0.8"
+    rationale: "Temporal filtering using timestamp or created_at"
+    correct_answer: "SQL query with date range filter on timestamp or created_at"
+    notes: "Agent should use timestamp (resource-specific) or created_at (system field)"
+
+  - id: "eval-005"
+    difficulty: "medium"
+    category: "SEARCH"
+    question: "Find documentation about semantic search"
+    expected_query:
+      query_type: "SEARCH"
+      parameters:
+        query_text: "semantic search"
+        table_name: "resources"
+      confidence: ">= 0.9"
+    rationale: "Semantic vector search for conceptual match"
+    correct_answer: "SEARCH query for 'semantic search' in resources table"
+    notes: "Should use SEARCH (semantic) not FUZZY (text similarity)"
+
+  - id: "eval-006"
+    difficulty: "medium"
+    category: "SEARCH"
+    question: "Search for documents about Kubernetes that are documentation category"
+    expected_query:
+      query_type: "SEARCH"
+      parameters:
+        query_text: "Kubernetes"
+        table_name: "resources"
+        where_clause: "category = 'documentation'"
+      confidence: ">= 0.85"
+    rationale: "Hybrid search: semantic (Kubernetes) + structured filter (category)"
+    correct_answer: "SEARCH with WHERE clause combining semantic and categorical filter"
+    notes: "Tests hybrid query capability - semantic + structured"
+
+  # ===== HARD: Graph queries and complex filtering =====
+
+  - id: "eval-007"
+    difficulty: "hard"
+    category: "TRAVERSE"
+    question: "What documents does the getting started guide reference?"
+    expected_query:
+      query_type: "TRAVERSE"
+      parameters:
+        initial_query: "getting-started-guide"
+        edge_types: ["references"]
+        max_depth: 1
+      confidence: ">= 0.75"
+    rationale: "Graph traversal following 'references' edges from known document"
+    correct_answer: "TRAVERSE query with edge_types=['references'] from getting-started-guide"
+    notes: "Tests understanding of graph relationships and TRAVERSE syntax"
+
+  - id: "eval-008"
+    difficulty: "hard"
+    category: "SQL"
+    question: "Show me resources created by Sarah Chen in the last 30 days, with their graph edges"
+    expected_query:
+      query_type: "SQL"
+      parameters:
+        table_name: "resources"
+        where_clause: "contains user_id = 'sarah-chen' AND created_at >= NOW() - INTERVAL '30 days'"
+        # Note: Should SELECT graph_edges but not filter by it
+      confidence: ">= 0.7"
+    rationale: "Complex query with user filter, temporal filter, and graph_edges in SELECT"
+    correct_answer: "SQL with user_id and temporal filter, SELECT includes graph_edges"
+    notes: "Tests understanding that graph_edges should be in SELECT, not WHERE"
+    critical_check: "Must NOT filter by graph_edges in WHERE clause"
+
+  - id: "eval-009"
+    difficulty: "hard"
+    category: "LOOKUP"
+    question: "Get info about Sarah Chen, Mike Johnson, and the getting started guide"
+    expected_query:
+      query_type: "LOOKUP"
+      parameters:
+        key: ["Sarah Chen", "Mike Johnson", "getting started guide"]
+        # Should be list for multiple entities
+      confidence: ">= 0.8"
+    rationale: "Multi-entity lookup requiring list parameter"
+    correct_answer: "LOOKUP with key as list of 3 entity names"
+    notes: "Tests understanding of Union[str, list[str]] - multiple entities = list"
+    critical_check: "key parameter MUST be a list, not string"
+
+  # ===== VERY HARD: Edge cases and advanced patterns =====
+
+  - id: "eval-010"
+    difficulty: "very_hard"
+    category: "SQL"
+    question: "Find resources with 'high' importance entities, created after 2025-01-01, include graph connections"
+    expected_query:
+      query_type: "SQL"
+      parameters:
+        table_name: "resources"
+        where_clause: "contains related_entities JSONB query with metadata importance AND created_at"
+        # Should use JSONB operators on related_entities
+      confidence: ">= 0.6"
+    rationale: "Advanced JSONB querying on nested metadata within related_entities array"
+    correct_answer: "SQL with JSONB query on related_entities, temporal filter, SELECT graph_edges"
+    notes: "Tests PostgreSQL JSONB expertise and complex nested queries"
+    critical_check: "Must use JSONB operators (@>, jsonb_array_elements, etc.)"
+    example_where: "created_at >= '2025-01-01' AND EXISTS (SELECT 1 FROM jsonb_array_elements(related_entities) e WHERE e->'metadata'->>'importance' = 'high')"
+
+# Evaluation Rubric:
+# - Correctness (40%): Does query type match expected?
+# - Parameters (30%): Are required parameters present and correct type?
+# - Confidence (10%): Is confidence score appropriate?
+# - Critical Checks (20%): Does it pass specific validation rules?
+#
+# Difficulty Levels:
+# - Easy (001-003): Basic queries, single table, simple filters
+# - Medium (004-006): Temporal queries, hybrid searches, multiple conditions
+# - Hard (007-009): Graph queries, complex filters, multi-entity
+# - Very Hard (010): Advanced JSONB, nested queries, multiple constraints

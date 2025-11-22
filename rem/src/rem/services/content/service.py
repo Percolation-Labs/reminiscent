@@ -176,7 +176,27 @@ class ContentService:
                 raise RuntimeError(f"S3 error: {e}") from e
 
     def _process_local_file(self, path: str) -> dict[str, Any]:
-        """Process local file path."""
+        """
+        Process local file path.
+
+        **PATH HANDLING FIX**: This method correctly handles both file:// URIs
+        and plain paths. Previously, file:// URIs from tools.py were NOT stripped,
+        causing FileNotFoundError because Path() treated "file:///Users/..." as a
+        literal filename instead of a URI.
+
+        The fix ensures consistent path handling:
+        - MCP tool creates: file:///Users/.../file.pdf
+        - This method strips: file:// → /Users/.../file.pdf
+        - Path() works correctly with absolute path
+
+        Related files:
+        - tools.py line 636: Creates file:// URIs
+        - FileSystemService line 58: Also strips file:// URIs
+        """
+        # Handle file:// URI scheme
+        if path.startswith("file://"):
+            path = path.replace("file://", "")
+
         file_path = Path(path)
 
         if not file_path.exists():
@@ -233,9 +253,194 @@ class ContentService:
             self.providers[ext_lower] = provider
             logger.debug(f"Registered provider '{provider.name}' for {ext_lower}")
 
+    async def ingest_file(
+        self,
+        file_uri: str,
+        tenant_id: str,
+        user_id: str | None = None,
+        category: str | None = None,
+        tags: list[str] | None = None,
+        is_local_server: bool = False,
+    ) -> dict[str, Any]:
+        """
+        Complete file ingestion pipeline: read → store → parse → chunk → embed.
+
+        **CENTRALIZED INGESTION**: This is the single entry point for all file ingestion
+        in REM. It handles:
+
+        1. **File Reading**: From local/S3/HTTP sources via FileSystemService
+        2. **Storage**: Writes to tenant-scoped internal storage (~/.rem/fs/ or S3)
+        3. **Parsing**: Extracts content, metadata, tables, images (parsing state)
+        4. **Chunking**: Splits content into semantic chunks for embedding
+        5. **Database**: Creates File entity + Resource chunks with embeddings
+
+        **PARSING STATE - The Innovation**:
+        Files (PDF, WAV, DOCX, etc.) are converted to rich parsing state:
+        - **Content**: Markdown-formatted text (preserves structure)
+        - **Metadata**: File info, extraction details, timestamps
+        - **Tables**: Structured data extracted from documents (CSV format)
+        - **Images**: Extracted images saved to storage (for multimodal RAG)
+        - **Provider Info**: Which parser was used, version, settings
+
+        This parsing state enables agents to deeply understand documents:
+        - Query tables directly (structured data)
+        - Reference images (multimodal context)
+        - Understand document structure (markdown hierarchy)
+        - Track provenance (metadata lineage)
+
+        **CLIENT ABSTRACTION**: Clients (MCP tools, CLI, workers) don't worry about:
+        - Where files are stored (S3 vs local) - automatically selected
+        - How files are parsed (PDF vs DOCX) - provider auto-selected
+        - How chunks are created - semantic chunking with tiktoken
+        - How embeddings work - async worker with batching
+
+        Clients just call `ingest_file()` and get searchable resources.
+
+        **PERMISSION CHECK**: Remote MCP servers cannot read local files (security).
+        Only local/stdio MCP servers can access local filesystem paths.
+
+        Args:
+            file_uri: Source file location (local path, s3://, or https://)
+            tenant_id: Tenant identifier for data isolation
+            user_id: Optional user ownership
+            category: Optional category tag (document, code, audio, etc.)
+            tags: Optional list of tags
+            is_local_server: True if running as local/stdio MCP server
+
+        Returns:
+            dict with:
+                - file_id: UUID of created File entity
+                - file_name: Original filename
+                - storage_uri: Internal storage location
+                - internal_key: S3 key or local path
+                - size_bytes: File size
+                - content_type: MIME type
+                - processing_status: "completed" or "failed"
+                - resources_created: Number of Resource chunks created
+                - parsing_metadata: Rich parsing state (content, tables, images)
+
+        Raises:
+            PermissionError: If remote server tries to read local file
+            FileNotFoundError: If source file doesn't exist
+            RuntimeError: If storage or processing fails
+
+        Example:
+            >>> service = ContentService()
+            >>> result = await service.ingest_file(
+            ...     file_uri="s3://bucket/contract.pdf",
+            ...     tenant_id="acme-corp",
+            ...     category="legal"
+            ... )
+            >>> print(f"Created {result['resources_created']} searchable chunks")
+        """
+        from pathlib import Path
+        from uuid import uuid4
+        import mimetypes
+
+        from ...models.entities import File
+        from ...services.fs import FileSystemService
+        from ...services.postgres import PostgresService
+
+        # Step 1: Read file from source using FileSystemService
+        fs_service = FileSystemService()
+        file_content, file_name, source_type = await fs_service.read_uri(
+            file_uri, is_local_server=is_local_server
+        )
+        file_size = len(file_content)
+        logger.info(f"Read {file_size} bytes from {file_uri} (source: {source_type})")
+
+        # Step 2: Write to internal storage (tenant-scoped)
+        file_id = str(uuid4())
+        storage_uri, internal_key, content_type, _ = await fs_service.write_to_internal_storage(
+            content=file_content,
+            tenant_id=tenant_id,
+            file_name=file_name,
+            file_id=file_id,
+        )
+        logger.info(f"Stored to internal storage: {storage_uri}")
+
+        # Step 3: Create File entity
+        file_entity = File(
+            id=file_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            name=file_name,
+            uri=storage_uri,
+            s3_key=internal_key,
+            s3_bucket=(
+                storage_uri.split("/")[2] if storage_uri.startswith("s3://") else "local"
+            ),
+            content_type=content_type,
+            size_bytes=file_size,
+            metadata={
+                "source_uri": file_uri,
+                "source_type": source_type,
+                "category": category,
+                "storage_uri": storage_uri,
+            },
+            tags=tags or [],
+        )
+
+        # Step 4: Save File entity to database
+        postgres_service = PostgresService()
+        await postgres_service.connect()
+        try:
+            await postgres_service.batch_upsert(
+                records=[file_entity],
+                model=File,
+                table_name="files",
+                entity_key_field="name",
+                generate_embeddings=False,
+            )
+        finally:
+            await postgres_service.disconnect()
+
+        # Step 5: Process file to create Resource chunks
+        try:
+            processing_result = await self.process_and_save(
+                uri=storage_uri,
+                user_id=user_id,
+            )
+            processing_status = processing_result.get("status", "completed")
+            resources_created = processing_result.get("chunk_count", 0)
+            parsing_metadata = {
+                "content_extracted": bool(processing_result.get("content")),
+                "markdown_generated": bool(processing_result.get("markdown")),
+                "chunks_created": resources_created,
+            }
+        except Exception as e:
+            logger.error(f"File processing failed: {e}", exc_info=True)
+            processing_status = "failed"
+            resources_created = 0
+            parsing_metadata = {"error": str(e)}
+
+        logger.info(
+            f"File ingestion complete: {file_name} "
+            f"(tenant: {tenant_id}, status: {processing_status}, "
+            f"resources: {resources_created})"
+        )
+
+        return {
+            "file_id": file_id,
+            "file_name": file_name,
+            "storage_uri": storage_uri,
+            "internal_key": internal_key,
+            "size_bytes": file_size,
+            "content_type": content_type,
+            "source_uri": file_uri,
+            "source_type": source_type,
+            "processing_status": processing_status,
+            "resources_created": resources_created,
+            "parsing_metadata": parsing_metadata,
+            "message": f"File ingested and {processing_status}. Created {resources_created} resources.",
+        }
+
     async def process_and_save(self, uri: str, user_id: str | None = None) -> dict[str, Any]:
         """
         Process file end-to-end: extract → markdown → chunk → save.
+
+        **INTERNAL METHOD**: This is called by ingest_file() after storage.
+        Clients should use ingest_file() instead for the full pipeline.
 
         Args:
             uri: File URI (s3://bucket/key or local path)

@@ -20,7 +20,7 @@ from datetime import datetime
 
 from rem.models.entities import Resource
 from rem.services.postgres import PostgresService
-from rem.services.rem_query import REMQueryService
+from rem.services.rem.query import REMQueryService
 
 
 @pytest.fixture
@@ -41,8 +41,9 @@ def resources_seed_data(seed_data_path: Path) -> list[dict]:
 @pytest.fixture
 async def postgres_service() -> PostgresService:
     """Create PostgresService instance."""
-    connection_string = "postgresql://rem:rem@localhost:5050/rem"
-    pg = PostgresService(connection_string=connection_string)
+    # Connection string is now read from settings
+    # settings.postgres.connection_string defaults to localhost:5050 in test/dev
+    pg = PostgresService()
     await pg.connect()
     yield pg
     await pg.disconnect()

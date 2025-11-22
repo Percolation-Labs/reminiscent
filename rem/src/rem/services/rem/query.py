@@ -22,7 +22,8 @@ from typing import Any, Optional
 from loguru import logger
 from pydantic import BaseModel
 
-from .embeddings import generate_embedding_async
+from ...settings import settings
+from ...utils.embeddings import generate_embeddings
 
 
 class REMQueryResult(BaseModel):
@@ -142,7 +143,8 @@ class REMQueryService:
         )
 
         # Generate embedding for search query
-        query_embedding = await generate_embedding_async(search_text)
+        provider_str = f"{settings.llm.embedding_provider}:{settings.llm.embedding_model}"
+        query_embedding = generate_embeddings(provider_str, [search_text])[0]
         embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
 
         sql = """
@@ -330,6 +332,9 @@ class REMQueryService:
                     },
                 )
 
+        # Convert single edge_type to list for new SQL signature
+        edge_types = [edge_type] if edge_type else None
+
         sql = """
             SELECT depth, entity_key, entity_type, entity_id,
                    rel_type AS edge_type, rel_weight, path
@@ -337,7 +342,7 @@ class REMQueryService:
         """
 
         results = await self.pg.execute(
-            sql, (entity_key, tenant_id, depth, edge_type)
+            sql, (entity_key, tenant_id, depth, edge_types)
         )
 
         return REMQueryResult(

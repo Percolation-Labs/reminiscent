@@ -21,7 +21,7 @@ from datetime import datetime
 
 from rem.models.entities import Resource
 from rem.services.postgres import PostgresService
-from rem.services.rem_query import REMQueryService
+from rem.services.rem.query import REMQueryService
 from rem.services.embeddings import EmbeddingWorker
 
 

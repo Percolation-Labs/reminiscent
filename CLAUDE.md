@@ -154,7 +154,11 @@ REM is a bio-inspired memory architecture mirroring human memory systems:
 **REM Query Language**: Custom dialect for flexible retrieval
 - `LOOKUP`: O(1) lookup by entity label
 - `SEARCH`: Semantic search across entity types (vector-based)
-- `TRAVERSE`: Graph traversal with depth control (follows InlineEdge relationships)
+- `TRAVERSE`: Recursive graph traversal following `graph_edges`
+  - **Polymorphic**: Seamlessly traverses `resources`, `moments`, `users` via `all_graph_edges` view
+  - **Filtering**: Supports filtering by one or multiple edge types (e.g., `TYPE "references"`)
+  - **Depth Control**: Configurable recursion depth
+  - **Data Model**: Requires `InlineEdge` JSON structure in `graph_edges` column (`dst`, `rel_type`, `weight`)
 - `SQL`: Direct SQL queries for temporal/structured queries
 - Supports predicate-based filtering and complex queries
 

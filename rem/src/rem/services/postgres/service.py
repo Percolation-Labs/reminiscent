@@ -50,22 +50,22 @@ class PostgresService:
 
     def __init__(
         self,
-        connection_string: str,
-        pool_size: int = 10,
         embedding_worker: Optional[Any] = ...,  # Sentinel for "not provided"
     ):
         """
         Initialize PostgreSQL service.
 
         Args:
-            connection_string: PostgreSQL connection string
-            pool_size: Connection pool size
             embedding_worker: Optional EmbeddingWorker for background embedding generation.
                             If not provided (default), auto-creates one.
                             Pass None to explicitly disable.
         """
-        self.connection_string = connection_string
-        self.pool_size = pool_size
+        from ...settings import settings
+        if not settings.postgres.enabled:
+            raise RuntimeError("PostgreSQL is not enabled in the settings.")
+
+        self.connection_string = settings.postgres.connection_string
+        self.pool_size = settings.postgres.pool_size
         self.pool: Optional[asyncpg.Pool] = None
 
         # Auto-create embedding worker if not provided (using sentinel value)
@@ -74,6 +74,33 @@ class PostgresService:
             self.embedding_worker = EmbeddingWorker(postgres_service=self)
         else:
             self.embedding_worker = embedding_worker
+
+    async def execute_ddl(self, query: str) -> None:
+        """
+        Execute SQL DDL query (e.g., CREATE, ALTER, DROP) without returning results.
+
+        Args:
+            query: SQL query string
+        """
+        if not self.pool:
+            raise RuntimeError("PostgreSQL pool not connected. Call connect() first.")
+
+        async with self.pool.acquire() as conn:
+            await conn.execute(query)
+
+    def get_repository(self, model_class: Type[BaseModel], table_name: str) -> "Repository":
+        """
+        Get a repository instance for a given model and table.
+
+        Args:
+            model_class: The Pydantic model class for the repository.
+            table_name: The name of the database table.
+
+        Returns:
+            An instance of the Repository class.
+        """
+        from .repository import Repository
+        return Repository(model_class=model_class, table_name=table_name, db=self)
 
     async def _init_connection(self, conn: asyncpg.Connection) -> None:
         """

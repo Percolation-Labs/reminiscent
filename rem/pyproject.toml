@@ -56,8 +56,10 @@ dependencies = [
     # Schema Tools
     "json-schema-to-pydantic>=0.2.0",
     # Document Processing
-    "kreuzberg>=3.21.0",
+    "kreuzberg[gmft]>=3.21.0",
+    "gmft",
     "semchunk>=2.2.0",
+    "tiktoken>=0.5.0",
     "gitpython>=3.1.45",
 ]
 

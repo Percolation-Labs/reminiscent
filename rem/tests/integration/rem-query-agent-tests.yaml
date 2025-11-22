@@ -1,0 +1,393 @@
+---
+# REM Query Agent Test Suite
+# Tests natural language to REM query conversion with evaluation
+
+test_suite:
+  name: "REM Query Agent Validation"
+  description: "Validates that the REM Query Agent correctly converts natural language to structured REM queries"
+  agent_schema: "rem-query-agent.yaml"
+
+tests:
+  # ========================================
+  # LOOKUP Tests
+  # ========================================
+
+  - id: "lookup-001"
+    category: "LOOKUP"
+    question: "Show me Sarah Chen"
+    expected_response:
+      query_type: "LOOKUP"
+      parameters:
+        key: "Sarah Chen"  # Single string (not list) for single entity
+      confidence: 1.0
+      reasoning: null
+    evaluation:
+      correctness: "PASS"
+      notes: "Simple entity lookup by natural name. Single entity = string, not list."
+
+  - id: "lookup-002"
+    category: "LOOKUP"
+    question: "Get information about Sarah, Mike, and Emily"
+    expected_response:
+      query_type: "LOOKUP"
+      parameters:
+        key: ["Sarah", "Mike", "Emily"]  # Multiple entities = list
+      confidence: 0.9  # Slightly lower - needs to normalize multiple names
+      reasoning: null
+    evaluation:
+      correctness: "PASS"
+      notes: "Multi-entity lookup. Agent should recognize multiple entity names and use list format. CRITICAL: Multiple entities require list, not string."
+
+  - id: "lookup-003"
+    category: "LOOKUP"
+    question: "Find Project Alpha"
+    expected_response:
+      query_type: "LOOKUP"
+      parameters:
+        key: "Project Alpha"  # Single string
+      confidence: 1.0
+      reasoning: null
+    evaluation:
+      correctness: "PASS"
+      notes: "Project entity lookup. Natural language label, not internal ID. Single entity = string."
+
+  # ========================================
+  # FUZZY Tests
+  # ========================================
+
+  - id: "fuzzy-001"
+    category: "FUZZY"
+    question: "Find people named Sara"
+    expected_response:
+      query_type: "FUZZY"
+      parameters:
+        query_text: "Sara"
+        threshold: 0.5
+        limit: 10
+      confidence: 0.9
+      reasoning: null
+    evaluation:
+      correctness: "PASS"
+      notes: "Fuzzy match for partial/misspelled name. Should use FUZZY, not LOOKUP."
+
+  - id: "fuzzy-002"
+    category: "FUZZY"
+    question: "Search for documents with 'afternoon' in the name"
+    expected_response:
+      query_type: "FUZZY"
+      parameters:
+        query_text: "afternoon"
+        threshold: 0.5
+        limit: 10
+      confidence: 0.8
+      reasoning: null
+    evaluation:
+      correctness: "PASS"
+      notes: "Fuzzy text search for partial match. FUZZY is appropriate for substring matching."
+
+  # ========================================
+  # SEARCH Tests (Semantic + Hybrid)
+  # ========================================
+
+  - id: "search-001"
+    category: "SEARCH"
+    question: "Find documents about database migration"
+    expected_response:
+      query_type: "SEARCH"
+      parameters:
+        query_text: "database migration"
+        table_name: "resources"
+        limit: 10
+      confidence: 0.95
+      reasoning: null
+    evaluation:
+      correctness: "PASS"
+      notes: "Semantic search for conceptual match. SEARCH uses vector embeddings."
+      available_stage: "Stage 3+"
+
+  - id: "search-002"
+    category: "SEARCH"
+    question: "Show me team discussions that were meetings"
+    expected_response:
+      query_type: "SEARCH"
+      parameters:
+        query_text: "team discussion"
+        table_name: "moments"
+        where_clause: "moment_type='meeting'"
+        limit: 10
+      confidence: 0.9
+      reasoning: null
+    evaluation:
+      correctness: "PASS"
+      notes: "Hybrid search: semantic (team discussion) + structured filter (moment_type). WHERE clause uses entity-specific field."
+      available_stage: "Stage 3+"
+
+  - id: "search-003"
+    category: "SEARCH"
+    question: "Find recent project updates from 2024"
+    expected_response:
+      query_type: "SEARCH"
+      parameters:
+        query_text: "project updates"
+        table_name: "resources"
+        where_clause: "created_at >= '2024-01-01'"
+        limit: 20
+      confidence: 0.85
+      reasoning: null
+    evaluation:
+      correctness: "PASS"
+      notes: "Hybrid search with system field filter (created_at). Combines semantic + temporal."
+      available_stage: "Stage 3+"
+
+  - id: "search-004"
+    category: "SEARCH"
+    question: "Search for AI research tagged with machine-learning"
+    expected_response:
+      query_type: "SEARCH"
+      parameters:
+        query_text: "AI research"
+        table_name: "resources"
+        where_clause: "tags @> ARRAY['machine-learning']"
+        limit: 10
+      confidence: 0.9
+      reasoning: null
+    evaluation:
+      correctness: "PASS"
+      notes: "Hybrid search with PostgreSQL array operator. Uses system field 'tags' with @> operator."
+      available_stage: "Stage 3+"
+
+  # ========================================
+  # SQL Tests (PostgreSQL Dialect)
+  # ========================================
+
+  - id: "sql-001"
+    category: "SQL"
+    question: "Show me meetings from Q4 2024"
+    expected_response:
+      query_type: "SQL"
+      parameters:
+        table_name: "moments"
+        where_clause: "moment_type='meeting' AND starts_timestamp >= '2024-10-01' AND starts_timestamp < '2025-01-01'"
+        order_by: "starts_timestamp DESC"
+        limit: 100
+      confidence: 0.9
+      reasoning: null
+    evaluation:
+      correctness: "PASS"
+      notes: "Temporal filter on moments. Uses entity-specific field (moment_type) and timestamp field."
+      available_stage: "Stage 2+"
+
+  - id: "sql-002"
+    category: "SQL"
+    question: "Get published resources"
+    expected_response:
+      query_type: "SQL"
+      parameters:
+        table_name: "resources"
+        where_clause: "metadata->>'status' = 'published'"
+        limit: 20
+      confidence: 0.85
+      reasoning: null
+    evaluation:
+      correctness: "PASS"
+      notes: "JSONB operator (->>  ) on metadata field. PostgreSQL-specific syntax."
+      available_stage: "Stage 1+"
+
+  - id: "sql-003"
+    category: "SQL"
+    question: "Find urgent or bug-related moments"
+    expected_response:
+      query_type: "SQL"
+      parameters:
+        table_name: "moments"
+        where_clause: "tags && ARRAY['urgent', 'bug']"
+        order_by: "created_at DESC"
+        limit: 50
+      confidence: 0.9
+      reasoning: null
+    evaluation:
+      correctness: "PASS"
+      notes: "Array overlap operator (&&) on system field 'tags'. PostgreSQL array syntax."
+      available_stage: "Stage 2+"
+
+  - id: "sql-004"
+    category: "SQL"
+    question: "Show resources created by user-123 last week"
+    expected_response:
+      query_type: "SQL"
+      parameters:
+        table_name: "resources"
+        where_clause: "user_id = 'user-123' AND created_at >= NOW() - INTERVAL '7 days'"
+        order_by: "created_at DESC"
+        limit: 50
+      confidence: 0.9
+      reasoning: null
+    evaluation:
+      correctness: "PASS"
+      notes: "System field filtering (user_id, created_at). Uses PostgreSQL INTERVAL syntax."
+      available_stage: "Stage 1+"
+
+  # ========================================
+  # TRAVERSE Tests (Graph Queries)
+  # ========================================
+
+  - id: "traverse-001"
+    category: "TRAVERSE"
+    question: "What does Sarah manage?"
+    expected_response:
+      query_type: "TRAVERSE"
+      parameters:
+        initial_query: "Sarah"
+        edge_types: ["manages"]
+        max_depth: 1
+        limit: 9
+      confidence: 0.85
+      reasoning: "TRAVERSE query to find entities Sarah manages via graph edges"
+    evaluation:
+      correctness: "PASS"
+      notes: "Single-hop traversal with edge type filter. DEPTH 1 for direct connections."
+      available_stage: "Stage 3+"
+
+  - id: "traverse-002"
+    category: "TRAVERSE"
+    question: "Who reports to Sally?"
+    expected_response:
+      query_type: "TRAVERSE"
+      parameters:
+        initial_query: "Sally"
+        edge_types: ["reports-to"]
+        max_depth: 2
+        limit: 9
+      confidence: 0.85
+      reasoning: null
+    evaluation:
+      correctness: "PASS"
+      notes: "Multi-hop traversal to find reporting hierarchy. DEPTH 2 for full tree."
+      available_stage: "Stage 3+"
+
+  - id: "traverse-003"
+    category: "TRAVERSE"
+    question: "Show me Sally's team structure"
+    expected_response:
+      query_type: "TRAVERSE"
+      parameters:
+        initial_query: "Sally"
+        edge_types: ["manages", "reports-to"]
+        max_depth: 0
+        limit: 9
+      confidence: 0.75
+      reasoning: "Using PLAN mode (DEPTH 0) to analyze edges before full traversal"
+    evaluation:
+      correctness: "PASS"
+      notes: "PLAN mode (DEPTH 0) for edge analysis. Agent should understand this returns edge summary without traversal."
+      available_stage: "Stage 3+"
+
+  - id: "traverse-004"
+    category: "TRAVERSE"
+    question: "What's connected to the TiDB migration spec?"
+    expected_response:
+      query_type: "TRAVERSE"
+      parameters:
+        initial_query: "TiDB migration spec"
+        edge_types: []  # All edges
+        max_depth: 1
+        limit: 9
+      confidence: 0.8
+      reasoning: null
+    evaluation:
+      correctness: "PASS"
+      notes: "Traversal with no edge type filter (follows all edges). Broad exploration."
+      available_stage: "Stage 3+"
+
+  # ========================================
+  # Multi-Step / Complex Tests
+  # ========================================
+
+  - id: "complex-001"
+    category: "MULTI_STEP"
+    question: "Who worked on database migration projects?"
+    expected_response:
+      query_type: "SEARCH"  # Could also be multi-step
+      parameters:
+        query_text: "database migration projects"
+        table_name: "resources"
+        limit: 10
+      confidence: 0.7
+      reasoning: "Semantic search for relevant resources. Could follow with entity extraction in multi-step."
+      multi_step:
+        - query_type: "SEARCH"
+          parameters:
+            query_text: "database migration projects"
+            table_name: "resources"
+          description: "Find relevant resources"
+        - query_type: "TRAVERSE"
+          parameters:
+            initial_query: "migration-spec"
+            edge_types: ["authored_by", "contributed_by"]
+            max_depth: 1
+          description: "Find people connected to resources"
+    evaluation:
+      correctness: "ACCEPTABLE"
+      notes: "Complex query may benefit from multi-step approach. Agent should explain reasoning if confidence < 0.7."
+      available_stage: "Stage 3+"
+
+  - id: "complex-002"
+    category: "EDGE_CASE"
+    question: "Get the latest coding sessions where Sarah was frustrated"
+    expected_response:
+      query_type: "SQL"
+      parameters:
+        table_name: "moments"
+        where_clause: "moment_type='coding-session' AND 'frustrated' = ANY(emotion_tags) AND 'Sarah' = ANY(SELECT (p->>'name') FROM jsonb_array_elements(present_persons) p)"
+        order_by: "starts_timestamp DESC"
+        limit: 10
+      confidence: 0.7
+      reasoning: "Complex query combining moment type, emotion tags, and person filtering"
+    evaluation:
+      correctness: "ACCEPTABLE"
+      notes: "Advanced PostgreSQL query with JSONB operations and array filtering. Agent should demonstrate PostgreSQL dialect knowledge."
+      available_stage: "Stage 2+"
+
+  # ========================================
+  # Negative Tests / Edge Cases
+  # ========================================
+
+  - id: "edge-001"
+    category: "AMBIGUOUS"
+    question: "Find stuff about the project"
+    expected_response:
+      query_type: "SEARCH"
+      parameters:
+        query_text: "project"
+        table_name: "resources"
+        limit: 10
+      confidence: 0.6
+      reasoning: "Ambiguous query - 'stuff' and 'the project' are vague. Using SEARCH with low confidence."
+    evaluation:
+      correctness: "ACCEPTABLE"
+      notes: "Agent should recognize ambiguity and provide low confidence with reasoning."
+
+  - id: "edge-002"
+    category: "SCHEMA_KNOWLEDGE"
+    question: "Show me resources with processing status complete"
+    expected_response:
+      query_type: "SQL"
+      parameters:
+        table_name: "resources"
+        where_clause: "metadata->>'processing_status' = 'complete'"
+        limit: 20
+      confidence: 0.8
+      reasoning: null
+    evaluation:
+      correctness: "PASS"
+      notes: "Agent should know to use metadata JSONB field for custom attributes not in core schema."
+      available_stage: "Stage 1+"
+
+# Evaluation Criteria:
+# - PASS: Agent response matches expected structure and query type
+# - ACCEPTABLE: Minor variations but semantically equivalent
+# - FAIL: Wrong query type or missing critical parameters
+# - System field awareness: Uses created_at, updated_at, tenant_id, user_id, tags, metadata correctly
+# - PostgreSQL dialect: Uses JSONB operators (->>, ->), array operators (&&, @>), etc.
+# - Hybrid SEARCH: Combines semantic text with WHERE clause when appropriate
+# - Stage awareness: Knows which queries are available at each evolution stage

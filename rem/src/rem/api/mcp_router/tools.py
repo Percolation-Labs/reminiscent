@@ -16,8 +16,38 @@ Available Tools:
 - create_resource: Create new resource with content
 - create_moment: Create temporal narrative
 - update_graph_edges: Add/update entity graph edges
-- upload_file: Upload file to S3 (tenant-scoped)
-- download_file: Download file from S3
+- parse_and_ingest_file: Full ingestion pipeline (read + store + process)
+
+**ARCHITECTURE - File Ingestion Code Paths**:
+
+Three different entry points for file processing:
+
+1. **CLI: `rem process uri <file>`** (cli/commands/process.py)
+   - READ-ONLY: No file storage, no database writes
+   - Uses: ContentService.process_uri() directly
+   - Returns: Extracted content to stdout
+   - Use case: Testing file parsing, one-off content extraction
+
+2. **MCP: `parse_and_ingest_file`** (this file, line 455)
+   - FULL PIPELINE: Read → Store → Process → Create Resources
+   - Uses: Inline file I/O (DUPLICATED from FileSystemService)
+   - Creates: File entity + Resource chunks in database
+   - Storage: ~/.rem/fs/{tenant_id}/files/{id}/{name} or S3
+   - Use case: LLM-driven file ingestion via MCP protocol
+
+3. **Worker: SQS File Processor** (workers/sqs_file_processor.py)
+   - BACKGROUND: Processes files from S3 event queue
+   - Uses: FileSystemService + ContentService
+   - Creates: Resource chunks from existing File entities
+   - Use case: Async processing of uploaded files
+
+**SHARED CODE**:
+- ContentService: File parsing (PDF, Markdown, etc.) - SHARED by all paths
+- FileSystemService: File I/O (read/write S3, local) - SHOULD be shared
+
+**CODE DUPLICATION WARNING**:
+parse_and_ingest_file (line 455) duplicates FileSystemService logic.
+See inline TODO comments for refactoring plan.
 """
 
 from typing import Any, Literal
@@ -452,7 +482,7 @@ async def update_graph_edges(
     }
 
 
-async def ingest_file(
+async def parse_and_ingest_file(
     file_uri: str,
     tenant_id: str,
     user_id: str | None = None,
@@ -461,21 +491,46 @@ async def ingest_file(
     is_local_server: bool = False,
 ) -> dict[str, Any]:
     """
-    Ingest a file into REM system with synchronous processing.
+    Parse and ingest file into REM, creating searchable resources.
 
-    This is a transactional operation:
-    1. Copy file from source to REM's internal storage (respecting tenant paths)
-    2. Process file synchronously via ContentService
-    3. Return processing results
+    **ARCHITECTURE - CENTRALIZED INGESTION**:
+    This MCP tool delegates to ContentService.ingest_file() which provides the
+    complete ingestion pipeline:
 
-    Supports:
-    - Local file paths (local MCP servers only)
-    - S3 URIs (s3://bucket/key)
-    - HTTP/HTTPS URLs (https://example.com/file.pdf)
+    1. **Read**: File from local/S3/HTTP (via FileSystemService)
+    2. **Store**: To tenant-scoped internal storage (~/.rem/fs/ or S3)
+    3. **Parse**: Extract content, metadata, tables, images (parsing state)
+    4. **Chunk**: Semantic chunking with tiktoken for embeddings
+    5. **Embed**: Create Resource chunks with vector embeddings
+
+    **PARSING STATE - The Innovation**:
+    Files (PDF, WAV, DOCX) → Rich parsing state:
+    - **Markdown**: Structured text with hierarchy preserved
+    - **Tables**: Extracted as CSV for structured queries
+    - **Images**: Saved for multimodal RAG
+    - **Metadata**: Provenance tracking (parser used, settings, timestamps)
+
+    This enables agents to deeply understand documents beyond simple text.
+
+    **CLIENT ABSTRACTION**: Clients don't worry about:
+    - Storage backend selection (S3 vs local)
+    - File parser selection (PDF vs DOCX)
+    - Chunking strategy (semantic vs fixed-size)
+    - Embedding generation (batching, retry logic)
+
+    Just call this tool and get searchable resources.
+
+    **PERMISSION CHECK**: Remote MCP servers cannot read local files (security).
+    The `is_local_server` parameter is checked by ContentService.ingest_file().
+
+    **DEDUPLICATION NOTE**: This is the ONLY place file ingestion logic exists.
+    CLI commands use ContentService.process_uri() for read-only extraction.
+    Workers use ContentService.process_and_save() for existing files.
+    This tool uses ContentService.ingest_file() for full pipeline.
 
     Args:
         file_uri: File location - local path, s3:// URI, or http(s):// URL
-        tenant_id: Tenant identifier
+        tenant_id: Tenant identifier for data isolation
         user_id: Optional user ownership
         category: Optional category (document, code, agent, etc.)
         tags: Optional tags for file
@@ -486,219 +541,60 @@ async def ingest_file(
         - file_id: Created file UUID
         - file_name: Original filename
         - storage_uri: Internal storage URI (s3:// or file://)
+        - internal_key: S3 key or filesystem path
         - size_bytes: File size
-        - processing_status: Processing result
-        - resources_created: Number of resources created (if processed)
-        - schema_stored: True if agent schema was stored
+        - content_type: MIME type
+        - source_uri: Original file location
+        - source_type: "local", "s3", or "url"
+        - processing_status: "completed" or "failed"
+        - resources_created: Number of Resource chunks created
+        - parsing_metadata: Rich parsing state details
+        - message: Human-readable status message
+
+    Raises:
+        PermissionError: If remote server tries to read local file
+        FileNotFoundError: If source file doesn't exist
+        RuntimeError: If storage or processing fails
 
     Example:
         >>> # Local file (local server only)
-        >>> result = await ingest_file(
-        ...     file_uri="/Users/me/my-agent.yaml",
-        ...     tenant_id="acme",
-        ...     category="agent",
+        >>> result = await parse_and_ingest_file(
+        ...     file_uri="/Users/me/contract.pdf",
+        ...     tenant_id="acme-corp",
+        ...     category="legal",
         ...     is_local_server=True
         ... )
-        >>> # Returns: {"file_id": "...", "schema_stored": True, ...}
+        >>> print(f"Created {result['resources_created']} searchable chunks")
 
         >>> # S3 URI (all servers)
-        >>> result = await ingest_file(
-        ...     file_uri="s3://my-bucket/documents/file.pdf",
-        ...     tenant_id="acme"
+        >>> result = await parse_and_ingest_file(
+        ...     file_uri="s3://bucket/docs/report.pdf",
+        ...     tenant_id="acme-corp"
         ... )
 
         >>> # HTTP URL (all servers)
-        >>> result = await ingest_file(
-        ...     file_uri="https://example.com/document.pdf",
-        ...     tenant_id="acme"
+        >>> result = await parse_and_ingest_file(
+        ...     file_uri="https://example.com/whitepaper.pdf",
+        ...     tenant_id="acme-corp"
         ... )
     """
-    if not _postgres_service:
-        raise RuntimeError(
-            "PostgresService not initialized. Call init_services() first."
-        )
-
-    from pathlib import Path
-    from urllib.parse import urlparse
-    from uuid import uuid4
-
-    from ...models.entities import File
     from ...services.content import ContentService
-    from ...settings import settings
 
-    # Parse URI to determine source type
-    parsed = urlparse(file_uri)
-
-    # Determine source type and validate permissions
-    if parsed.scheme in ("http", "https"):
-        source_type = "url"
-        file_name = Path(parsed.path).name or "downloaded_file"
-    elif parsed.scheme == "s3":
-        source_type = "s3"
-        s3_bucket = parsed.netloc
-        s3_source_key = parsed.path.lstrip("/")
-        file_name = Path(s3_source_key).name
-    elif parsed.scheme == "" or parsed.scheme == "file":
-        # Local file path
-        if not is_local_server:
-            raise PermissionError(
-                "Local file paths are only allowed for local MCP servers. "
-                "Use s3:// URIs or https:// URLs for remote servers."
-            )
-        source_type = "local"
-        file_path_obj = Path(file_uri.replace("file://", ""))
-        if not file_path_obj.exists():
-            raise FileNotFoundError(f"File not found: {file_uri}")
-        if not file_path_obj.is_file():
-            raise ValueError(f"Path is not a file: {file_uri}")
-        file_name = file_path_obj.name
-    else:
-        raise ValueError(
-            f"Unsupported URI scheme: {parsed.scheme}. "
-            "Supported: local paths (local server only), s3://, http://, https://"
-        )
-
-    # Step 1: Read source file content
-    if source_type == "local":
-        file_content = file_path_obj.read_bytes()
-    elif source_type == "url":
-        import aiohttp
-
-        async with aiohttp.ClientSession() as session:
-            async with session.get(file_uri) as response:
-                response.raise_for_status()
-                file_content = await response.read()
-    elif source_type == "s3":
-        import aioboto3
-        from botocore.exceptions import ClientError
-
-        session = aioboto3.Session()
-        async with session.client(
-            "s3",
-            endpoint_url=settings.s3.endpoint_url,
-            aws_access_key_id=settings.s3.access_key_id,
-            aws_secret_access_key=settings.s3.secret_access_key,
-            region_name=settings.s3.region,
-        ) as s3_client:
-            try:
-                response = await s3_client.get_object(
-                    Bucket=s3_bucket,
-                    Key=s3_source_key,
-                )
-                file_content = await response["Body"].read()
-            except ClientError as e:
-                logger.error(f"S3 download failed: {e}")
-                raise RuntimeError(f"S3 download failed: {e}")
-
-    file_size = len(file_content)
-    file_id = uuid4()
-
-    # Step 2: Store in REM's internal storage with tenant-scoped path
-    # Format: {tenant_id}/files/{file_id}/{file_name}
-    internal_key = f"{tenant_id}/files/{file_id}/{file_name}"
-
-    # Determine storage backend (S3 or local filesystem)
-    if settings.s3.bucket_name:
-        # Production: Use S3
-        import aioboto3
-        from botocore.exceptions import ClientError
-
-        session = aioboto3.Session()
-        async with session.client(
-            "s3",
-            endpoint_url=settings.s3.endpoint_url,
-            aws_access_key_id=settings.s3.access_key_id,
-            aws_secret_access_key=settings.s3.secret_access_key,
-            region_name=settings.s3.region,
-        ) as s3_client:
-            try:
-                await s3_client.put_object(
-                    Bucket=settings.s3.bucket_name,
-                    Key=internal_key,
-                    Body=file_content,
-                )
-                storage_uri = f"s3://{settings.s3.bucket_name}/{internal_key}"
-            except ClientError as e:
-                logger.error(f"S3 upload failed: {e}")
-                raise RuntimeError(f"S3 upload failed: {e}")
-    else:
-        # Local development: Use ~/.rem/fs/
-        from pathlib import Path
-
-        fs_root = Path.home() / ".rem" / "fs"
-        fs_root.mkdir(parents=True, exist_ok=True)
-
-        file_path = fs_root / internal_key
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_bytes(file_content)
-
-        storage_uri = f"file://{file_path}"
-
-    # Detect content type
-    import mimetypes
-
-    content_type, _ = mimetypes.guess_type(file_name)
-    content_type = content_type or "application/octet-stream"
-
-    # Create File entity
-    file_entity = File(
-        id=file_id,
+    # Delegate to ContentService for centralized ingestion
+    content_service = ContentService()
+    result = await content_service.ingest_file(
+        file_uri=file_uri,
         tenant_id=tenant_id,
         user_id=user_id,
-        name=file_name,
-        s3_key=internal_key,
-        s3_bucket=settings.s3.bucket_name or "local",
-        content_type=content_type,
-        size_bytes=file_size,
-        metadata={
-            "source_uri": file_uri,
-            "source_type": source_type,
-            "category": category,
-            "storage_uri": storage_uri,
-        },
-        tags=tags or [],
+        category=category,
+        tags=tags,
+        is_local_server=is_local_server,
     )
-
-    # Step 3: Process file synchronously via ContentService
-    content_service = ContentService(
-        file_repo=_postgres_service.get_repository(File, "files"),
-        resource_repo=_postgres_service.get_repository(None, "resources"),
-    )
-
-    try:
-        processing_result = content_service.process_uri(storage_uri)
-        processing_status = "completed"
-        resources_created = len(processing_result.get("resources", []))
-    except Exception as e:
-        logger.error(f"File processing failed: {e}", exc_info=True)
-        processing_status = "failed"
-        resources_created = 0
-        processing_result = {"error": str(e)}
-
-    # Check if agent schema was stored
-    schema_stored = False
-    if category == "agent" or file_name.endswith((".yaml", ".yml", ".json")):
-        # TODO: Detect and store agent schemas
-        # For now, just flag it for manual processing
-        schema_stored = False
 
     logger.info(
-        f"File ingested and processed: {file_name} "
-        f"(source: {source_type}, tenant: {tenant_id}, "
-        f"size: {file_size} bytes, resources: {resources_created})"
+        f"MCP ingestion complete: {result['file_name']} "
+        f"(status: {result['processing_status']}, "
+        f"resources: {result['resources_created']})"
     )
 
-    return {
-        "file_id": str(file_id),
-        "file_name": file_name,
-        "storage_uri": storage_uri,
-        "internal_key": internal_key,
-        "size_bytes": file_size,
-        "content_type": content_type,
-        "source_uri": file_uri,
-        "source_type": source_type,
-        "processing_status": processing_status,
-        "resources_created": resources_created,
-        "schema_stored": schema_stored,
-        "message": f"File ingested and {processing_status}. Created {resources_created} resources.",
-    }
+    return result

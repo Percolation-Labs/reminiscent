@@ -1,15 +1,38 @@
-# ContentService - File Processing System
+# ContentService - File Ingestion & Processing System
 
-Event-driven file processing service with pluggable providers for different file formats.
+Centralized file ingestion pipeline with rich parsing state and pluggable content providers.
 
 ## Overview
 
-ContentService provides a unified interface for processing various file types with support for:
-- S3 URI support (`s3://bucket/key`)
-- Local file support (`./path/to/file`)
-- Provider plugins for different file types
-- Extensible via `register_provider()`
-- Integration with event-driven processing pipeline
+ContentService provides **three distinct entry points** for file operations:
+
+1. **`ingest_file()`** - Complete ingestion pipeline (MCP tools, full workflow)
+   - Read from source (local/S3/HTTP)
+   - Store to internal tenant-scoped storage
+   - Parse and extract rich content (parsing state)
+   - Chunk and embed into searchable resources
+   - Create File entity + Resource chunks in database
+
+2. **`process_uri()`** - Read-only content extraction (CLI, testing)
+   - Extract content from any URI
+   - No storage, no database writes
+   - Returns: extracted text + metadata
+
+3. **`process_and_save()`** - Process existing stored files (workers)
+   - Process files already in internal storage
+   - Chunk and create Resource entities
+   - Used by SQS worker for async processing
+
+### Parsing State - The Innovation
+
+Files (PDF, WAV, DOCX, etc.) are converted to **rich parsing state**:
+- **Content**: Markdown-formatted text (preserves structure)
+- **Metadata**: File info, extraction details, timestamps
+- **Tables**: Structured data extracted as CSV
+- **Images**: Extracted images for multimodal RAG
+- **Provider Info**: Which parser was used, version, settings
+
+This enables agents to deeply understand documents beyond simple text.
 
 ## File Processing Conventions
 
@@ -258,38 +281,75 @@ Link to User, File entities
 
 ## Quick Start
 
-### Basic Usage
+### 1. Complete Ingestion (MCP Tool Pattern)
 
 ```python
 from rem.services.content import ContentService
 
 service = ContentService()
 
-# Process local file
-result = service.process_uri("./README.md")
+# Full pipeline: read → store → parse → chunk → embed
+result = await service.ingest_file(
+    file_uri="/path/to/contract.pdf",  # or s3://, https://
+    tenant_id="acme-corp",
+    user_id="user-123",
+    category="legal",
+    tags=["contract", "q1-2025"],
+    is_local_server=True  # Security: only local servers can read local files
+)
 
-# Process S3 file
-result = service.process_uri("s3://rem/uploads/doc.md")
+print(f"File ID: {result['file_id']}")
+print(f"Storage: {result['storage_uri']}")
+print(f"Resources created: {result['resources_created']}")
+print(f"Status: {result['processing_status']}")
+print(f"Parsing metadata: {result['parsing_metadata']}")
+```
+
+### 2. Read-Only Extraction (CLI Pattern)
+
+```python
+service = ContentService()
+
+# Extract content only (no storage, no database)
+result = service.process_uri("./README.md")
 
 print(result["content"])  # Extracted text
 print(result["metadata"])  # File metadata
 print(result["provider"])  # "markdown"
 ```
 
+### 3. Process Existing Files (Worker Pattern)
+
+```python
+service = ContentService()
+
+# Process file already in internal storage
+result = await service.process_and_save(
+    uri="file:///Users/.../.rem/fs/acme-corp/files/abc123/doc.pdf",
+    user_id="user-123"
+)
+
+print(f"Chunks created: {result['chunk_count']}")
+```
+
 ### CLI Usage
 
 ```bash
-# Process local file
+# Read-only extraction (no storage)
 rem process uri ./README.md
+rem process uri s3://bucket/doc.md -o json
+rem process uri https://example.com/paper.pdf -s output.json
+```
 
-# Process S3 file
-rem process uri s3://rem/uploads/document.md
+### MCP Tool Usage
 
-# Save to file
-rem process uri s3://rem/uploads/doc.md -s output.json
-
-# Text-only output
-rem process uri ./file.md -o text
+```python
+# Via MCP protocol (uses ingest_file internally)
+result = await parse_and_ingest_file(
+    file_uri="s3://bucket/report.pdf",
+    tenant_id="acme-corp",
+    is_local_server=False  # Remote server = no local file access
+)
 ```
 
 ## Supported File Formats

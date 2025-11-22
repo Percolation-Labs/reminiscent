@@ -3,11 +3,25 @@ OpenAI-compatible chat completions router for REM.
 
 Design Pattern:
 - Headers map to AgentContext (X-User-Id, X-Tenant-Id, X-Session-Id, X-Model-Name, X-Agent-Schema)
+- ContextBuilder centralizes message construction with user profile + session history
 - Body.model is the LLM model for Pydantic AI
 - X-Model-Name header can override body.model
 - X-Agent-Schema header specifies which agent schema to use (defaults to 'rem')
 - Support for streaming (SSE) and non-streaming modes
 - Response format control (text vs json_object)
+
+Context Building Flow:
+1. ContextBuilder.build_from_headers() extracts user_id, session_id from headers
+2. Session history ALWAYS loaded with compression (if session_id provided)
+   - Uses SessionMessageStore with compression to keep context efficient
+   - Long messages include REM LOOKUP hints: "... [REM LOOKUP session-{id}-msg-{index}] ..."
+   - Agent can retrieve full content on-demand using REM LOOKUP
+3. User profile provided as REM LOOKUP hint (on-demand by default)
+   - Agent receives: "User ID: {user_id}. To load user profile: Use REM LOOKUP users/{user_id}"
+   - Agent decides whether to load profile based on query
+4. If CHAT__AUTO_INJECT_USER_CONTEXT=true: User profile auto-loaded and injected
+5. Combines: system context + compressed session history + new messages
+6. Agent receives complete message list ready for execution
 
 Headers Mapping
     X-User-Id        → AgentContext.user_id
@@ -51,6 +65,7 @@ from fastapi.responses import StreamingResponse
 from loguru import logger
 
 from ....agentic.context import AgentContext
+from ....agentic.context_builder import ContextBuilder
 from ....agentic.providers.pydantic_ai import create_pydantic_ai_agent
 from ....services.session import SessionMessageStore, reload_session
 from ....settings import settings
@@ -134,18 +149,17 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
     - Structured output with answer, confidence, and references
 
     Session Management:
-    - If X-Session-Id is provided, conversation history is reloaded from database
-    - New messages are saved to database for session continuity
+    - Session history ALWAYS loaded with compression when X-Session-Id provided
+    - Uses SessionMessageStore with REM LOOKUP hints for long messages
+    - User profile provided as REM LOOKUP hint (on-demand by default)
+    - If CHAT__AUTO_INJECT_USER_CONTEXT=true: User profile auto-loaded and injected
+    - New messages saved to database with compression for session continuity
     - When Postgres is disabled, session management is skipped
     """
-    # Create context from headers (maps headers to AgentContext fields)
-    context = AgentContext.from_headers(dict(request.headers))
-
-    # Check if we should use database for session management
-    use_db = settings.postgres.enabled and context.session_id
-
-    # Load agent schema: use header value if provided, otherwise use default
-    schema_name = context.agent_schema_uri or DEFAULT_AGENT_SCHEMA
+    # Load agent schema: use header value from context or default
+    # Extract AgentContext first to get schema name
+    temp_context = AgentContext.from_headers(dict(request.headers))
+    schema_name = temp_context.agent_schema_uri or DEFAULT_AGENT_SCHEMA
     agent_schema = load_agent_schema(schema_name)
 
     if agent_schema is None:
@@ -165,16 +179,20 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
 
     logger.info(f"Using agent schema: {schema_name}, model: {body.model}")
 
-    # Reload session history if session_id provided
-    history = []
-    if use_db:
-        history = await reload_session(
-            session_id=context.session_id,
-            tenant_id=context.tenant_id or "default",
-            user_id=context.user_id,
-            decompress_messages=False,  # Use compressed versions for efficiency
-        )
-        logger.info(f"Loaded {len(history)} historical messages for session {context.session_id}")
+    # Build complete context from headers (includes user profile + session history + date)
+    # This replaces manual session reloading and message construction
+    new_messages = [msg.model_dump() for msg in body.messages]
+
+    # Use ContextBuilder to construct complete message list with:
+    # 1. System context hint (date + user profile)
+    # 2. Session history (if session_id provided)
+    # 3. New messages from request body
+    context, messages = await ContextBuilder.build_from_headers(
+        headers=dict(request.headers),
+        new_messages=new_messages,
+    )
+
+    logger.info(f"Built context with {len(messages)} total messages (includes history + user context)")
 
     # Create agent with schema and model override
     agent = await create_pydantic_ai_agent(
@@ -183,17 +201,9 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
         model_override=body.model,
     )
 
-    # Combine system and user messages into single prompt
-    prompt = "\n".join(
-        msg.content or "" for msg in body.messages if msg.role in ("system", "user")
-    )
-
-    # Create current user message for storage
-    user_message = {
-        "role": "user",
-        "content": prompt,
-        "timestamp": datetime.utcnow().isoformat(),
-    }
+    # Combine all messages into single prompt for agent
+    # ContextBuilder already assembled: system context + history + new messages
+    prompt = "\n".join(msg.content for msg in messages)
 
     # Generate OpenAI-compatible request ID
     request_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
@@ -225,8 +235,15 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
     prompt_tokens = usage.input_tokens if usage else 0
     completion_tokens = usage.output_tokens if usage else 0
 
-    # Save conversation messages to database
-    if use_db:
+    # Save conversation messages to database (if session_id and postgres enabled)
+    if settings.postgres.enabled and context.session_id:
+        # Extract just the new user message (last message from body)
+        user_message = {
+            "role": "user",
+            "content": body.messages[-1].content if body.messages else "",
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
         assistant_message = {
             "role": "assistant",
             "content": content,

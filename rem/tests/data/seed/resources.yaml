@@ -26,13 +26,11 @@ resources:
     timestamp: "2025-01-15T10:00:00Z"
     category: "documentation"
     graph_edges:
-      - type: "references"
-        source: "docs://getting-started.md"
-        target: "docs://architecture/database.md"
+      - rel_type: "references"
+        dst: "docs://architecture/database.md"
         metadata: {"context": "Mentions database architecture"}
-      - type: "references"
-        source: "docs://getting-started.md"
-        target: "docs://tutorials/api-quickstart.md"
+      - rel_type: "references"
+        dst: "docs://tutorials/api-quickstart.md"
         metadata: {"context": "Links to API tutorial"}
     related_entities:
       - type: "concept"

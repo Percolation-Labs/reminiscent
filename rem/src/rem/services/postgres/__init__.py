@@ -8,7 +8,7 @@ from .service import PostgresService
 
 def get_postgres_service() -> PostgresService | None:
     """
-    Get PostgresService instance with connection string from settings.
+    Get PostgresService instance.
 
     Returns None if Postgres is disabled.
     """
@@ -17,10 +17,7 @@ def get_postgres_service() -> PostgresService | None:
     if not settings.postgres.enabled:
         return None
 
-    return PostgresService(
-        connection_string=settings.postgres.connection_string,
-        pool_size=settings.postgres.pool_size,
-    )
+    return PostgresService()
 
 
 __all__ = ["PostgresService", "get_postgres_service", "Repository"]
