@@ -1,22 +1,70 @@
-"""Ontology entity for storing domain-specific extracted knowledge.
+"""Ontology entity for tenant-specific knowledge extensions.
 
-Ontologies represent structured knowledge extracted from files using custom agent schemas.
-Examples:
-- CV/Resume data (candidate skills, experience, education)
-- Contract terms (parties, obligations, dates, amounts)
-- Medical records (diagnoses, medications, treatments)
-- Financial reports (metrics, trends, risks)
+**What is Ontology Extraction?**
 
-Design:
-- Each ontology is linked to a File via file_id
-- Agent schema that extracted it is tracked via agent_schema_id
-- Structured data stored in `extracted_data` (arbitrary JSON)
-- Embeddings generated for semantic search
-- Multiple ontologies can be extracted from same file using different agents
+Ontologies are **domain-specific structured knowledge** extracted from files using custom
+agent schemas. They extend REM's normal file processing pipeline with tenant-specific
+parsers that extract structured data the standard chunking pipeline would miss.
+
+**Normal File Processing:**
+File → extract text → chunk → embed → resources (semantic search ready)
+
+**Ontology Processing (Tenant Knowledge Extensions):**
+File → custom agent → structured JSON → ontology (domain knowledge)
+
+**Why Ontologies?**
+- Standard chunking gives you semantic search over raw content
+- Ontologies give you **structured queryable fields** from domain logic
+- Example: A contract PDF becomes both searchable chunks AND a structured record with
+  parties, dates, payment terms, obligations as queryable fields
+
+**Architecture:**
+- Runs as part of dreaming worker (background knowledge extraction)
+- OntologyConfig defines which files trigger which extractors (MIME type, URI pattern, tags)
+- Multiple ontologies per file (apply different domain lenses)
+- Tenant-scoped: Each tenant can define their own extractors
+
+**Use Cases:**
+
+1. **Recruitment (CV Parsing)**
+   - Standard pipeline: Chunks for "find me candidates with Python experience"
+   - Ontology: Structured fields for filtering/sorting (years_experience, seniority_level, skills[])
+
+2. **Legal (Contract Analysis)**
+   - Standard pipeline: Semantic search over contract text
+   - Ontology: Queryable fields (parties, effective_date, payment_amount, key_obligations[])
+
+3. **Medical (Health Records)**
+   - Standard pipeline: Find mentions of conditions
+   - Ontology: Structured diagnoses, medications, dosages, treatment plans
+
+4. **Finance (Report Analysis)**
+   - Standard pipeline: Search for financial terms
+   - Ontology: Extracted metrics, risk_flags, trends, forecasts
+
+**Example Flow:**
+1. Tenant creates OntologyConfig: "Run cv-parser-v1 on files with mime_type='application/pdf' and tags=['resume']"
+2. File uploaded with tags=["resume"]
+3. Normal processing: File → chunks → resources
+4. Dreaming worker detects matching OntologyConfig
+5. Loads cv-parser-v1 agent schema from database
+6. Runs agent on file content → extracts structured data
+7. Stores Ontology with extracted_data = {candidate_name, skills, experience, education, ...}
+8. Ontology is now queryable via LOOKUP, SEARCH, or direct SQL
+
+**Design:**
+- Each ontology links to a File via file_id
+- Agent schema tracked via agent_schema_id (human-readable label, not UUID)
+- Structured data in `extracted_data` (arbitrary JSON, schema defined by agent)
+- Embeddings generated for semantic search (configurable fields via agent schema)
+- Multiple ontologies per file using different schemas
+- Tenant-isolated: OntologyConfigs are tenant-scoped
 """
 
 from typing import Any, Optional
 from uuid import UUID
+
+from pydantic import ConfigDict
 
 from ..core.core_model import CoreModel
 
@@ -120,8 +168,8 @@ class Ontology(CoreModel):
     # Semantic search support
     embedding_text: Optional[str] = None  # Text for embedding generation
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "description": "Domain-specific knowledge extracted from files using custom agents",
             "examples": [
                 {
@@ -140,3 +188,4 @@ class Ontology(CoreModel):
                 }
             ]
         }
+    )

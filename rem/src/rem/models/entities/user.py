@@ -45,6 +45,7 @@ class User(CoreModel):
     name: str = Field(
         ...,
         description="User name (human-readable, used as graph label)",
+        json_schema_extra={"entity_key": True},  # Primary business key for KV lookups
     )
     email: Optional[str] = Field(
         default=None,

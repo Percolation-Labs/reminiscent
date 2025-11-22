@@ -22,7 +22,7 @@ Key Fields:
 from datetime import datetime
 from typing import Optional
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from ..core import CoreModel
 
@@ -36,14 +36,14 @@ class Resource(CoreModel):
     via CoreModel.tenant_id field.
     """
 
-    name: str = Field(
-        ...,
-        description="Human-readable resource name (used as graph label)",
+    name: Optional[str] = Field(
+        default=None,
+        description="Human-readable resource name (used as graph label). Auto-generated from uri+ordinal if not provided.",
+        json_schema_extra={"entity_key": True},  # Primary business key for KV lookups
     )
     uri: Optional[str] = Field(
         default=None,
         description="Content URI or identifier (file path, URL, etc.)",
-        json_schema_extra={"entity_key": True},  # Primary business key
     )
     ordinal: int = Field(
         default=0,
@@ -66,3 +66,30 @@ class Resource(CoreModel):
         default_factory=list,
         description="Extracted entities (people, projects, concepts) with metadata",
     )
+
+    @model_validator(mode='after')
+    def generate_name_if_missing(self) -> 'Resource':
+        """Auto-generate name from uri+ordinal if not provided."""
+        if not self.name:
+            if self.uri:
+                # Extract filename from URI if possible
+                uri_parts = self.uri.rstrip('/').split('/')
+                filename = uri_parts[-1]
+
+                # Remove file extension for cleaner names
+                if '.' in filename:
+                    filename = filename.rsplit('.', 1)[0]
+
+                # Generate name with ordinal
+                if self.ordinal > 0:
+                    self.name = f"{filename}-chunk-{self.ordinal}"
+                else:
+                    self.name = filename
+            else:
+                # Fallback: use ID or generic name
+                if self.id:
+                    self.name = f"resource-{str(self.id)[:8]}"
+                else:
+                    self.name = "unnamed-resource"
+
+        return self

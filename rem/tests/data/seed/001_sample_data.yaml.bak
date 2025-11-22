@@ -1,0 +1,544 @@
+# REM Sample Seed Data
+# Test data for development and testing
+# All data uses tenant_id: acme-corp
+
+# Metadata for versioning and tracking
+_metadata:
+  version: "1.0.0"
+  schema_version: "1.0.0"
+  created_at: "2024-12-20"
+  updated_at: "2025-11-20"
+  description: "Sample seed data for acme-corp tenant with users, resources, moments, messages, files, and schemas"
+  tenant_id: "acme-corp"
+  entity_counts:
+    users: 3
+    resources: 3
+    moments: 3
+    messages: 4
+    files: 3
+    schemas: 3
+
+users:
+  - id: usr_sarah_chen
+    tenant_id: acme-corp
+    name: Sarah Chen
+    email: sarah.chen@acme.com
+    role: engineer
+    tags:
+      - backend
+      - python
+    metadata:
+      department: engineering
+      location: San Francisco
+
+  - id: usr_mike_johnson
+    tenant_id: acme-corp
+    name: Mike Johnson
+    email: mike.johnson@acme.com
+    role: designer
+    tags:
+      - ui-ux
+      - frontend
+    metadata:
+      department: design
+      location: New York
+
+  - id: usr_alex_kim
+    tenant_id: acme-corp
+    name: Alex Kim
+    email: alex.kim@acme.com
+    role: engineer
+    tags:
+      - frontend
+      - react
+    metadata:
+      department: engineering
+      location: Austin
+
+resources:
+  - id: res_api_design_v2
+    tenant_id: acme-corp
+    user_id: usr_sarah_chen
+    name: API Design Document v2
+    uri: s3://acme-docs/api-design-v2.md
+    content: |
+      RESTful API design for the REM query system. Supports LOOKUP, FUZZY, SEARCH, SQL, and TRAVERSE query types.
+
+      ## Query Types
+
+      - LOOKUP: O(1) exact match by ID or label
+      - FUZZY: Indexed fuzzy text matching
+      - SEARCH: Vector similarity search with pgvector
+      - SQL: Direct SQL queries for complex filters
+      - TRAVERSE: Graph traversal with multi-hop relationships
+
+      ## Authentication
+
+      OAuth 2.0 with support for Google, Microsoft Entra ID, and custom providers.
+
+      ## Rate Limiting
+
+      Token bucket algorithm with per-tenant limits.
+    category: document
+    tags:
+      - api
+      - architecture
+      - design
+    metadata:
+      version: "2.0"
+      status: approved
+    graph_edges:
+      - dst: usr_sarah_chen
+        rel_type: authored_by
+        weight: 1.0
+        properties: {}
+      - dst: usr_mike_johnson
+        rel_type: reviewed_by
+        weight: 0.8
+        properties: {}
+      - dst: res_api_design_v1
+        rel_type: supersedes
+        weight: 0.9
+        properties: {}
+
+  - id: res_q4_retrospective
+    tenant_id: acme-corp
+    user_id: usr_sarah_chen
+    name: Q4 2024 Retrospective Notes
+    uri: s3://acme-docs/q4-retro-2024.md
+    content: |
+      Team reflection on Q4 achievements and challenges.
+
+      ## Key Wins
+      - Shipped REM query system with all 5 query types
+      - Improved API latency by 40% through connection pooling
+      - Migrated to PostgreSQL 18 with pgvector
+      - Achieved 99.9% uptime in production
+
+      ## Challenges
+      - Initial performance issues with TRAVERSE queries
+      - Learning curve for team on graph concepts
+      - OAuth integration complexity
+
+      ## Action Items for Q1
+      - Implement query result caching
+      - Add more comprehensive integration tests
+      - Document best practices for graph modeling
+    category: conversation
+    tags:
+      - retrospective
+      - team
+      - planning
+    metadata:
+      quarter: Q4
+      year: 2024
+    graph_edges:
+      - dst: usr_sarah_chen
+        rel_type: facilitator
+        weight: 1.0
+        properties: {}
+      - dst: moment_q4_retro_meeting
+        rel_type: derived_from
+        weight: 1.0
+        properties: {}
+
+  - id: res_coding_session_notes
+    tenant_id: acme-corp
+    user_id: usr_alex_kim
+    name: Frontend Component Refactor
+    uri: s3://acme-docs/frontend-refactor-notes.md
+    content: |
+      Refactored authentication components to use new context API.
+
+      ## Changes
+      - Moved auth state from Redux to React Context
+      - Simplified token refresh logic
+      - Removed 3 unused dependencies
+      - Reduced bundle size by 15%
+
+      ## Performance Improvements
+      - Initial load time: 2.3s → 1.9s (-17%)
+      - Re-render count: 45 → 12 (-73%)
+
+      ## Next Steps
+      - Add unit tests for new context hooks
+      - Update documentation
+      - Roll out to other components
+    category: artifact
+    tags:
+      - frontend
+      - refactoring
+      - react
+    metadata:
+      type: code-notes
+      language: javascript
+    graph_edges:
+      - dst: usr_alex_kim
+        rel_type: authored_by
+        weight: 1.0
+        properties: {}
+      - dst: usr_mike_johnson
+        rel_type: paired_with
+        weight: 0.9
+        properties: {}
+
+moments:
+  - id: moment_q4_retro_meeting
+    tenant_id: acme-corp
+    name: Q4 2024 Team Retrospective
+    moment_type: meeting
+    category: team-event
+    starts_timestamp: "2024-12-20T14:00:00"
+    ends_timestamp: "2024-12-20T16:00:00"
+    present_persons:
+      - id: usr_sarah_chen
+        name: Sarah Chen
+        role: facilitator
+      - id: usr_mike_johnson
+        name: Mike Johnson
+        role: participant
+      - id: usr_alex_kim
+        name: Alex Kim
+        role: participant
+    emotion_tags:
+      - focused
+      - collaborative
+      - optimistic
+    topic_tags:
+      - retrospective
+      - planning
+      - team-building
+    summary: |
+      Team reflected on Q4 achievements including shipping the REM query system and
+      improving API performance. Discussed plans for Q1 2025 focusing on caching,
+      testing, and documentation.
+    source_resource_ids:
+      - res_q4_retrospective
+
+  - id: moment_api_design_review
+    tenant_id: acme-corp
+    name: API Design Review Session
+    moment_type: meeting
+    category: design-review
+    starts_timestamp: "2024-11-15T10:00:00"
+    ends_timestamp: "2024-11-15T11:30:00"
+    present_persons:
+      - id: usr_sarah_chen
+        name: Sarah Chen
+        role: presenter
+      - id: usr_mike_johnson
+        name: Mike Johnson
+        role: reviewer
+    emotion_tags:
+      - productive
+      - technical
+    topic_tags:
+      - api
+      - design
+      - architecture
+    summary: |
+      Reviewed and approved API Design Document v2 with minor revisions to error
+      handling. Discussed rate limiting strategy and authentication flow.
+    source_resource_ids:
+      - res_api_design_v2
+
+  - id: moment_frontend_pairing
+    tenant_id: acme-corp
+    name: Frontend Pairing Session
+    moment_type: coding-session
+    category: development
+    starts_timestamp: "2024-12-10T13:00:00"
+    ends_timestamp: "2024-12-10T17:00:00"
+    present_persons:
+      - id: usr_alex_kim
+        name: Alex Kim
+        role: driver
+      - id: usr_mike_johnson
+        name: Mike Johnson
+        role: navigator
+    emotion_tags:
+      - focused
+      - collaborative
+    topic_tags:
+      - frontend
+      - react
+      - refactoring
+    summary: |
+      Pair programming session focused on refactoring authentication components and
+      improving bundle size. Successfully migrated to Context API and removed unused
+      dependencies.
+    source_resource_ids:
+      - res_coding_session_notes
+
+messages:
+  - id: msg_001
+    tenant_id: acme-corp
+    user_id: usr_sarah_chen
+    content: Hey team, I just pushed the API design doc v2. Can someone review?
+    message_type: user
+    session_id: session_team_chat_001
+    tags:
+      - request
+      - review
+
+  - id: msg_002
+    tenant_id: acme-corp
+    user_id: usr_mike_johnson
+    content: On it! Will take a look this afternoon.
+    message_type: user
+    session_id: session_team_chat_001
+    tags:
+      - response
+      - acknowledgment
+
+  - id: msg_003
+    tenant_id: acme-corp
+    user_id: usr_alex_kim
+    content: Looks good Sarah! Just one question about the error handling strategy.
+    message_type: user
+    session_id: session_team_chat_001
+    tags:
+      - response
+      - question
+
+  - id: msg_004
+    tenant_id: acme-corp
+    user_id: null
+    content: |
+      I found 3 documents authored by Sarah Chen: API Design Document v2,
+      Q4 2024 Retrospective Notes, and Frontend Architecture Guide.
+    message_type: assistant
+    session_id: session_user_query_001
+    tags:
+      - query-result
+      - search
+
+files:
+  - id: file_api_diagram
+    tenant_id: acme-corp
+    user_id: usr_sarah_chen
+    name: api-architecture-diagram.png
+    uri: s3://acme-files/diagrams/api-architecture-diagram.png
+    mime_type: image/png
+    size_bytes: 245632
+    processing_status: completed
+    tags:
+      - diagram
+      - architecture
+
+  - id: file_retro_recording
+    tenant_id: acme-corp
+    user_id: usr_sarah_chen
+    name: q4-retro-recording.mp4
+    uri: s3://acme-files/recordings/q4-retro-2024.mp4
+    mime_type: video/mp4
+    size_bytes: 52428800
+    processing_status: completed
+    tags:
+      - recording
+      - retrospective
+
+  - id: file_pending_upload
+    tenant_id: acme-corp
+    user_id: usr_alex_kim
+    name: design-mockups.pdf
+    uri: s3://acme-files/uploads/design-mockups.pdf
+    mime_type: application/pdf
+    size_bytes: 1048576
+    processing_status: pending
+    tags:
+      - design
+      - mockups
+
+schemas:
+  - id: schema_rem_assistant
+    tenant_id: acme-corp
+    name: REM Query Assistant
+    content: |
+      # REM Query Assistant
+
+      This agent helps users query the REM system using natural language.
+      It translates user questions into REM queries (LOOKUP, FUZZY, SEARCH, TRAVERSE)
+      and formats the results in a human-friendly way.
+
+      ## Capabilities
+      - Natural language to REM query translation
+      - Multi-turn iterative retrieval
+      - Contextual follow-up questions
+      - Result summarization
+
+      ## Example Queries
+      - "What documents did Sarah write?"
+      - "Find meetings about API design"
+      - "Show me coding sessions from last week"
+      - "What are the connections between project X and person Y?"
+    spec:
+      type: object
+      description: Agent that assists users with REM queries and information retrieval
+      properties:
+        answer:
+          type: string
+          description: Natural language answer to user question
+        query_used:
+          type: string
+          description: REM query type used (LOOKUP, FUZZY, SEARCH, TRAVERSE)
+        results_summary:
+          type: object
+          description: Summary of retrieved results
+          properties:
+            count:
+              type: integer
+            entity_types:
+              type: array
+              items:
+                type: string
+      required:
+        - answer
+      json_schema_extra:
+        tools:
+          - rem_query
+          - ask_rem
+        resources:
+          - rem://schema/entities
+          - rem://status
+    category: assistant
+    tags:
+      - query
+      - retrieval
+      - conversational
+
+  - id: schema_document_analyzer
+    tenant_id: acme-corp
+    name: Document Analyzer
+    content: |
+      # Document Analyzer
+
+      Analyzes documents and extracts structured information including:
+      - Key entities (people, projects, technologies)
+      - Main topics and themes
+      - Action items and decisions
+      - Relationships between entities
+
+      ## Use Cases
+      - Meeting notes analysis
+      - Design document review
+      - Code documentation extraction
+
+      ## Output Format
+      Returns structured JSON with entities, topics, action items, and a summary.
+    spec:
+      type: object
+      description: Agent that analyzes documents and extracts structured information
+      properties:
+        entities:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              type:
+                type: string
+              mentions:
+                type: integer
+        topics:
+          type: array
+          items:
+            type: string
+        action_items:
+          type: array
+          items:
+            type: object
+            properties:
+              description:
+                type: string
+              assignee:
+                type: string
+              priority:
+                type: string
+        summary:
+          type: string
+          description: Brief summary of the document
+      required:
+        - entities
+        - topics
+        - summary
+      json_schema_extra:
+        tools:
+          - create_resource
+          - create_moment
+        resources: []
+    category: analyzer
+    tags:
+      - document
+      - extraction
+      - nlp
+
+  - id: schema_code_reviewer
+    tenant_id: acme-corp
+    name: Code Review Assistant
+    content: |
+      # Code Review Assistant
+
+      Assists with code reviews by analyzing code changes and providing feedback on:
+      - Code quality and best practices
+      - Potential bugs and edge cases
+      - Security vulnerabilities
+      - Performance considerations
+      - Documentation completeness
+
+      ## Review Process
+      1. Analyze code structure and patterns
+      2. Check for common issues
+      3. Provide actionable feedback
+      4. Suggest improvements
+
+      ## Severity Levels
+      - **critical**: Must be fixed before merge
+      - **warning**: Should be addressed
+      - **info**: Suggestions for improvement
+    spec:
+      type: object
+      description: Agent that assists with code reviews and provides technical feedback
+      properties:
+        overall_assessment:
+          type: string
+          enum:
+            - approve
+            - request_changes
+            - comment
+        issues:
+          type: array
+          items:
+            type: object
+            properties:
+              severity:
+                type: string
+                enum:
+                  - critical
+                  - warning
+                  - info
+              line:
+                type: integer
+              description:
+                type: string
+              suggestion:
+                type: string
+        strengths:
+          type: array
+          items:
+            type: string
+        summary:
+          type: string
+      required:
+        - overall_assessment
+        - issues
+        - summary
+      json_schema_extra:
+        tools: []
+        resources: []
+    category: reviewer
+    tags:
+      - code
+      - review
+      - quality

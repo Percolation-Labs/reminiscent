@@ -23,8 +23,9 @@ Prerequisites:
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 import yaml
@@ -39,6 +40,26 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 # Seed Data Helpers
 # ============================================================================
+
+def inject_tenant_id(data: dict, tenant_id: str) -> dict:
+    """
+    Inject tenant_id into all records in seed data.
+
+    Mutates the input dict in place for efficiency.
+
+    Args:
+        data: Seed data dict with entity arrays
+        tenant_id: Tenant ID to inject
+
+    Returns:
+        Modified data dict
+    """
+    for entity_type in ["users", "resources", "moments", "messages", "files", "schemas"]:
+        if entity_type in data:
+            for record in data[entity_type]:
+                record["tenant_id"] = tenant_id
+    return data
+
 
 def parse_seed_data_timestamps(data: dict) -> dict:
     """
@@ -106,47 +127,33 @@ async def postgres_service() -> PostgresService:
 
 
 @pytest.fixture
-async def fresh_database(postgres_service: PostgresService):
+def test_tenant() -> str:
     """
-    Fresh database - clear all test data before running tests.
+    Generate unique tenant ID for test isolation.
 
-    WARNING: This deletes all data in the database!
-    Only run against test database (localhost:5050).
+    Uses timestamp-based UUID to ensure idempotent tests without deletion.
+    Each test run gets a fresh tenant_id, avoiding conflicts with existing data.
+
+    Benefits:
+    - Safe: Never deletes data (can't accidentally hit production)
+    - Idempotent: Can run tests multiple times without conflicts
+    - Debuggable: Data persists after test for inspection
+    - Parallel-safe: Multiple test runs don't interfere
     """
-    tenant_id = "acme-corp"
+    # Use timestamp + random UUID for uniqueness and debuggability
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    test_id = str(uuid4())[:8]
+    tenant_id = f"test-{timestamp}-{test_id}"
 
-    # Allowlist of tables that can be safely cleared
-    # This prevents SQL injection via dynamic table names
-    ALLOWED_TABLES = frozenset([
-        "messages", "files", "schemas", "moments",
-        "resources", "users", "persons"
-    ])
-
-    # Clear all entity tables for tenant (wrapped in transaction)
-    async with postgres_service.transaction():
-        for table in ALLOWED_TABLES:
-            # Delete from parent tables only - CASCADE handles embeddings
-            await postgres_service.execute(
-                f"DELETE FROM {table} WHERE tenant_id = $1",
-                (tenant_id,),
-            )
-
-        # Clear UNLOGGED kv_store (not cascaded)
-        await postgres_service.execute(
-            "DELETE FROM kv_store WHERE tenant_id = $1",
-            (tenant_id,),
-        )
-
-    logger.info("Database cleared - fresh state ready")
-    yield
-    logger.info("Test complete")
+    logger.info(f"Test tenant ID: {tenant_id}")
+    return tenant_id
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_load_standard_seed_data(
     postgres_service: PostgresService,
-    fresh_database,
+    test_tenant: str,
     seed_data_dir: Path,
 ):
     """
@@ -161,12 +168,15 @@ async def test_load_standard_seed_data(
     - Schemas created
     - KV store populated
     """
-    tenant_id = "acme-corp"
+    tenant_id = test_tenant
 
     # Load seed data
     seed_file = seed_data_dir / "001_sample_data.yaml"
     with open(seed_file) as f:
         data = yaml.safe_load(f)
+
+    # Inject test tenant ID into all records (safe, idempotent)
+    data = inject_tenant_id(data, tenant_id)
 
     # Parse timestamps in seed data
     data = parse_seed_data_timestamps(data)
@@ -262,7 +272,7 @@ async def test_load_standard_seed_data(
 @pytest.mark.asyncio
 async def test_process_engram_files(
     postgres_service: PostgresService,
-    fresh_database,
+    test_tenant: str,
     engram_files_dir: Path,
 ):
     """
@@ -275,8 +285,8 @@ async def test_process_engram_files(
     - Graph edges created
     - KV store populated
     """
-    tenant_id = "acme-corp"
-    user_id = "sarah-chen"
+    tenant_id = test_tenant
+    user_id = "test-user"
 
     # Initialize engram processor
     processor = EngramProcessor(postgres_service)
@@ -311,13 +321,13 @@ async def test_process_engram_files(
 
     logger.info(f"✓ Processed {total_resources} engrams with {total_moments} total moments")
 
-    # Verify resources exist in database
+    # Verify resources exist in database (engrams can have any category: meeting, reflection, etc.)
     resources_result = await fetch_one(
         postgres_service,
-        "SELECT COUNT(*) as count FROM resources WHERE tenant_id = $1 AND category = $2",
+        "SELECT COUNT(*) as count FROM resources WHERE tenant_id = $1",
         tenant_id,
-        "engram",
     )
+    # We should have AT LEAST the engram resources (plus any from seed data)
     assert resources_result.get("count", 0) >= total_resources
 
     # Verify moments exist in database
@@ -360,7 +370,7 @@ async def test_process_engram_files(
 @pytest.mark.asyncio
 async def test_data_diagnostics(
     postgres_service: PostgresService,
-    fresh_database,
+    test_tenant: str,
     seed_data_dir: Path,
     engram_files_dir: Path,
 ):
@@ -375,7 +385,7 @@ async def test_data_diagnostics(
 
     This is the MASTER test for data population validation.
     """
-    tenant_id = "acme-corp"
+    tenant_id = test_tenant
 
     # Step 1: Load standard seed data
     logger.info("=" * 60)
@@ -385,6 +395,9 @@ async def test_data_diagnostics(
     seed_file = seed_data_dir / "001_sample_data.yaml"
     with open(seed_file) as f:
         data = yaml.safe_load(f)
+
+    # Inject test tenant ID into all records (safe, idempotent)
+    data = inject_tenant_id(data, tenant_id)
 
     # Parse timestamps in seed data (centralized)
     data = parse_seed_data_timestamps(data)
@@ -424,7 +437,7 @@ async def test_data_diagnostics(
         result = await processor.process_file(
             file_path=engram_file,
             tenant_id=tenant_id,
-            user_id="sarah-chen",
+            user_id="test-user",
         )
         logger.info(
             f"✓ {engram_file.name}: "

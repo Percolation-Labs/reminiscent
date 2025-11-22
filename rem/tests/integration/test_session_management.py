@@ -14,8 +14,7 @@ from datetime import datetime
 
 import pytest
 from rem.models.entities import Message
-from rem.services.postgres import PostgresService
-from rem.services.repositories.message_repository import MessageRepository
+from rem.services.postgres import get_postgres_service, Repository
 from rem.services.session import MessageCompressor, SessionMessageStore, reload_session
 from rem.settings import settings
 
@@ -58,18 +57,12 @@ SAMPLE_LONG_RESPONSE = {
 
 
 @pytest.fixture
-async def db():
-    """Get database service."""
+def message_repo():
+    """Create message repository."""
     if not settings.postgres.enabled:
         pytest.skip("Postgres is disabled, skipping database tests")
 
-    return PostgresService()
-
-
-@pytest.fixture
-async def message_repo(db):
-    """Create message repository."""
-    return MessageRepository(db)
+    return Repository(Message)
 
 
 @pytest.fixture
@@ -186,9 +179,12 @@ async def test_message_compressor():
 
 
 @pytest.mark.asyncio
-async def test_session_message_store(db, tenant_id, session_id, user_id):
+async def test_session_message_store(tenant_id, session_id, user_id):
     """Test storing and retrieving session messages."""
-    store = SessionMessageStore(db=db, tenant_id=tenant_id)
+    if not settings.postgres.enabled:
+        pytest.skip("Postgres is disabled, skipping database tests")
+
+    store = SessionMessageStore(tenant_id=tenant_id)
 
     # Store conversation with compression
     compressed = await store.store_session_messages(
@@ -214,9 +210,12 @@ async def test_session_message_store(db, tenant_id, session_id, user_id):
 
 
 @pytest.mark.asyncio
-async def test_long_message_compression(db, tenant_id, session_id, user_id):
+async def test_long_message_compression(tenant_id, session_id, user_id):
     """Test compression and REM LOOKUP for very long messages."""
-    store = SessionMessageStore(db=db, tenant_id=tenant_id)
+    if not settings.postgres.enabled:
+        pytest.skip("Postgres is disabled, skipping database tests")
+
+    store = SessionMessageStore(tenant_id=tenant_id)
 
     # Create conversation with very long assistant response
     conversation = [
@@ -250,9 +249,12 @@ async def test_long_message_compression(db, tenant_id, session_id, user_id):
 
 
 @pytest.mark.asyncio
-async def test_reload_session(db, tenant_id, session_id, user_id):
+async def test_reload_session(tenant_id, session_id, user_id):
     """Test session reloading functionality."""
-    store = SessionMessageStore(db=db, tenant_id=tenant_id)
+    if not settings.postgres.enabled:
+        pytest.skip("Postgres is disabled, skipping database tests")
+
+    store = SessionMessageStore(tenant_id=tenant_id)
 
     # Store initial conversation
     await store.store_session_messages(
@@ -264,7 +266,6 @@ async def test_reload_session(db, tenant_id, session_id, user_id):
 
     # Reload session
     history = await reload_session(
-        db=db,
         session_id=session_id,
         tenant_id=tenant_id,
         user_id=user_id,
@@ -277,9 +278,12 @@ async def test_reload_session(db, tenant_id, session_id, user_id):
 
 
 @pytest.mark.asyncio
-async def test_reload_session_with_decompression(db, tenant_id, session_id, user_id):
+async def test_reload_session_with_decompression(tenant_id, session_id, user_id):
     """Test session reloading with message decompression."""
-    store = SessionMessageStore(db=db, tenant_id=tenant_id)
+    if not settings.postgres.enabled:
+        pytest.skip("Postgres is disabled, skipping database tests")
+
+    store = SessionMessageStore(tenant_id=tenant_id)
 
     # Store conversation with long message
     conversation = [
@@ -296,7 +300,6 @@ async def test_reload_session_with_decompression(db, tenant_id, session_id, user
 
     # Reload with decompression
     history = await reload_session(
-        db=db,
         session_id=session_id,
         tenant_id=tenant_id,
         user_id=user_id,
@@ -311,9 +314,12 @@ async def test_reload_session_with_decompression(db, tenant_id, session_id, user
 
 
 @pytest.mark.asyncio
-async def test_multi_turn_conversation(db, tenant_id, session_id, user_id):
+async def test_multi_turn_conversation(tenant_id, session_id, user_id):
     """Test realistic multi-turn conversation flow."""
-    store = SessionMessageStore(db=db, tenant_id=tenant_id)
+    if not settings.postgres.enabled:
+        pytest.skip("Postgres is disabled, skipping database tests")
+
+    store = SessionMessageStore(tenant_id=tenant_id)
 
     # Turn 1: User asks, assistant responds
     turn1 = [
@@ -330,7 +336,7 @@ async def test_multi_turn_conversation(db, tenant_id, session_id, user_id):
 
     # Reload and verify
     history = await reload_session(
-        db=db, session_id=session_id, tenant_id=tenant_id, user_id=user_id
+        session_id=session_id, tenant_id=tenant_id, user_id=user_id
     )
     assert len(history) == 2
 
@@ -346,7 +352,7 @@ async def test_multi_turn_conversation(db, tenant_id, session_id, user_id):
 
     # Reload full conversation
     full_history = await reload_session(
-        db=db, session_id=session_id, tenant_id=tenant_id, user_id=user_id
+        session_id=session_id, tenant_id=tenant_id, user_id=user_id
     )
     assert len(full_history) == 4
     assert full_history[0]["content"] == "What is REM?"
@@ -359,22 +365,21 @@ async def test_postgres_disabled_graceful_degradation(tenant_id, session_id, use
     # This test works even when Postgres is enabled
     # It tests the code paths that handle disabled database
 
-    # Mock disabled database by passing None
-    from unittest.mock import MagicMock
+    # When Postgres is disabled, reload_session should return empty list
+    from unittest.mock import patch
 
-    mock_db = MagicMock()
-    mock_db.enabled = False
+    with patch('rem.services.session.reload.settings') as mock_settings:
+        mock_settings.postgres.enabled = False
 
-    # Reload should return empty list
-    history = await reload_session(
-        db=mock_db,
-        session_id=session_id,
-        tenant_id=tenant_id,
-        user_id=user_id,
-    )
+        # Reload should return empty list
+        history = await reload_session(
+            session_id=session_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
 
-    # Should not fail, just return empty
-    assert history == []
+        # Should not fail, just return empty
+        assert history == []
 
 
 @pytest.mark.asyncio

@@ -26,41 +26,43 @@ async def load_schema_from_file(file_path: Path) -> dict[str, Any]:
     """
     Load agent schema from YAML file.
 
+    Searches in order:
+    1. Exact path if it exists
+    2. Packaged schemas (src/rem/schemas/)
+    3. Current directory + path
+
     Args:
         file_path: Path to YAML file containing agent schema
 
     Returns:
         Agent schema as dictionary
-
-    Example YAML:
-        type: object
-        description: "Agent that answers queries about documents"
-        properties:
-          answer:
-            type: string
-            description: "The answer to the query"
-          confidence:
-            type: number
-            minimum: 0
-            maximum: 1
-        required:
-          - answer
-          - confidence
-        json_schema_extra:
-          fully_qualified_name: "rem.agents.QueryAgent"
-          tools: []
-          resources: []
     """
     import yaml
+    import importlib.resources
 
-    if not file_path.exists():
-        raise FileNotFoundError(f"Schema file not found: {file_path}")
+    # Try exact path first
+    if file_path.exists():
+        with open(file_path, "r") as f:
+            schema = yaml.safe_load(f)
+        logger.debug(f"Loaded schema from {file_path}: {list(schema.keys())}")
+        return schema
 
-    with open(file_path, "r") as f:
-        schema = yaml.safe_load(f)
+    # Try packaged schemas
+    try:
+        schemas_ref = importlib.resources.files("rem") / "schemas" / str(file_path)
+        schemas_path = Path(str(schemas_ref))
+        if schemas_path.exists():
+            with open(schemas_path, "r") as f:
+                schema = yaml.safe_load(f)
+            logger.debug(f"Loaded schema from package {schemas_path}: {list(schema.keys())}")
+            return schema
+    except Exception as e:
+        logger.debug(f"Could not load from package schemas: {e}")
 
-    logger.debug(f"Loaded schema from {file_path}: {list(schema.keys())}")
-    return schema
+    raise FileNotFoundError(
+        f"Schema file not found: {file_path}\n"
+        f"Searched: {file_path}, rem/schemas/{file_path}"
+    )
 
 
 async def load_schema_from_registry(

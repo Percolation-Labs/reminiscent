@@ -15,8 +15,7 @@ from typing import Any
 from loguru import logger
 
 from rem.models.entities import Message
-from rem.services.postgres import PostgresService
-from rem.services.repositories.message_repository import MessageRepository
+from rem.services.postgres import PostgresService, Repository
 from rem.settings import settings
 
 
@@ -114,7 +113,6 @@ class SessionMessageStore:
 
     def __init__(
         self,
-        db: PostgresService,
         tenant_id: str,
         compressor: MessageCompressor | None = None,
     ):
@@ -122,14 +120,12 @@ class SessionMessageStore:
         Initialize session message store.
 
         Args:
-            db: Postgres service instance
             tenant_id: Tenant identifier
             compressor: Optional message compressor (creates default if None)
         """
-        self.db = db
         self.tenant_id = tenant_id
         self.compressor = compressor or MessageCompressor()
-        self.repo = MessageRepository(db)
+        self.repo = Repository(Message)
 
     async def store_message(
         self,
@@ -203,7 +199,7 @@ class SessionMessageStore:
                 LIMIT 1
             """
 
-            row = await self.db.fetchrow(query, entity_key, self.tenant_id)
+            row = await self.repo.db.fetchrow(query, entity_key, self.tenant_id)
 
             if row:
                 msg = Message.model_validate(dict(row))
@@ -303,9 +299,11 @@ class SessionMessageStore:
 
         try:
             # Load messages from repository
-            messages = await self.repo.get_by_session(
-                session_id=session_id, tenant_id=self.tenant_id, user_id=user_id
-            )
+            filters = {"session_id": session_id, "tenant_id": self.tenant_id}
+            if user_id:
+                filters["user_id"] = user_id
+
+            messages = await self.repo.find(filters, order_by="created_at ASC")
 
             # Convert Message entities to dict format
             message_dicts = []

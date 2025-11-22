@@ -52,7 +52,7 @@ class PostgresService:
         self,
         connection_string: str,
         pool_size: int = 10,
-        embedding_worker: Optional[Any] = None,
+        embedding_worker: Optional[Any] = ...,  # Sentinel for "not provided"
     ):
         """
         Initialize PostgreSQL service.
@@ -60,18 +60,37 @@ class PostgresService:
         Args:
             connection_string: PostgreSQL connection string
             pool_size: Connection pool size
-            embedding_worker: Optional EmbeddingWorker for background embedding generation
+            embedding_worker: Optional EmbeddingWorker for background embedding generation.
+                            If not provided (default), auto-creates one.
+                            Pass None to explicitly disable.
         """
         self.connection_string = connection_string
         self.pool_size = pool_size
         self.pool: Optional[asyncpg.Pool] = None
 
-        # Auto-create embedding worker if not provided
-        if embedding_worker is None:
+        # Auto-create embedding worker if not provided (using sentinel value)
+        if embedding_worker is ...:
             from ..embeddings import EmbeddingWorker
             self.embedding_worker = EmbeddingWorker(postgres_service=self)
         else:
             self.embedding_worker = embedding_worker
+
+    async def _init_connection(self, conn: asyncpg.Connection) -> None:
+        """
+        Initialize connection with custom type codecs.
+
+        Sets up automatic JSONB conversion to/from Python objects.
+        """
+        import json
+
+        # Set up JSONB codec for automatic conversion
+        await conn.set_type_codec(
+            'jsonb',
+            encoder=json.dumps,
+            decoder=json.loads,
+            schema='pg_catalog',
+            format='text',
+        )
 
     async def connect(self) -> None:
         """Establish database connection pool."""
@@ -80,6 +99,7 @@ class PostgresService:
             self.connection_string,
             min_size=1,
             max_size=self.pool_size,
+            init=self._init_connection,  # Configure JSONB codec on each connection
         )
         logger.info("PostgreSQL connection pool established")
 
@@ -125,6 +145,119 @@ class PostgresService:
 
             return [dict(row) for row in rows]
 
+    async def fetch(self, query: str, *params) -> list[asyncpg.Record]:
+        """
+        Fetch multiple rows from database.
+
+        Args:
+            query: SQL query string
+            *params: Query parameters
+
+        Returns:
+            List of asyncpg.Record objects
+        """
+        if not self.pool:
+            raise RuntimeError("PostgreSQL pool not connected. Call connect() first.")
+
+        async with self.pool.acquire() as conn:
+            return await conn.fetch(query, *params)
+
+    async def fetchrow(self, query: str, *params) -> Optional[asyncpg.Record]:
+        """
+        Fetch single row from database.
+
+        Args:
+            query: SQL query string
+            *params: Query parameters
+
+        Returns:
+            asyncpg.Record or None if no rows found
+        """
+        if not self.pool:
+            raise RuntimeError("PostgreSQL pool not connected. Call connect() first.")
+
+        async with self.pool.acquire() as conn:
+            return await conn.fetchrow(query, *params)
+
+    async def fetchval(self, query: str, *params) -> Any:
+        """
+        Fetch single value from database.
+
+        Args:
+            query: SQL query string
+            *params: Query parameters
+
+        Returns:
+            Single value or None if no rows found
+        """
+        if not self.pool:
+            raise RuntimeError("PostgreSQL pool not connected. Call connect() first.")
+
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval(query, *params)
+
+    def transaction(self):
+        """
+        Create a database transaction context manager.
+
+        Returns:
+            Transaction context manager that binds connection to service
+
+        Usage:
+            async with postgres_service.transaction():
+                await postgres_service.execute("INSERT ...")
+                await postgres_service.execute("UPDATE ...")
+        """
+        if not self.pool:
+            raise RuntimeError("PostgreSQL pool not connected. Call connect() first.")
+
+        # Return a context manager that acquires a connection and starts a transaction
+        from contextlib import asynccontextmanager
+
+        @asynccontextmanager
+        async def _transaction_context():
+            async with self.pool.acquire() as conn:
+                async with conn.transaction():
+                    # Temporarily bind this connection to the service
+                    # Store original execute/fetch methods
+                    original_execute = self.execute
+                    original_fetch = self.fetch
+                    original_fetchrow = self.fetchrow
+                    original_fetchval = self.fetchval
+
+                    # Override with connection-bound versions
+                    async def _execute(query, params=None):
+                        if params:
+                            results = await conn.fetch(query, *params)
+                        else:
+                            results = await conn.fetch(query)
+                        return [dict(row) for row in results]
+
+                    async def _fetch(query, *params):
+                        return await conn.fetch(query, *params)
+
+                    async def _fetchrow(query, *params):
+                        return await conn.fetchrow(query, *params)
+
+                    async def _fetchval(query, *params):
+                        return await conn.fetchval(query, *params)
+
+                    self.execute = _execute
+                    self.fetch = _fetch
+                    self.fetchrow = _fetchrow
+                    self.fetchval = _fetchval
+
+                    try:
+                        yield
+                    finally:
+                        # Restore original methods
+                        self.execute = original_execute
+                        self.fetch = original_fetch
+                        self.fetchrow = original_fetchrow
+                        self.fetchval = original_fetchval
+
+        return _transaction_context()
+
     async def execute_many(
         self, query: str, params_list: list[tuple]
     ) -> None:
@@ -141,9 +274,99 @@ class PostgresService:
         async with self.pool.acquire() as conn:
             await conn.executemany(query, params_list)
 
+    async def upsert(
+        self,
+        record: BaseModel,
+        model: Type[BaseModel],
+        table_name: str,
+        entity_key_field: str = "name",
+        embeddable_fields: list[str] | None = None,
+        generate_embeddings: bool = False,
+    ) -> BaseModel:
+        """
+        Upsert a single record.
+
+        Convenience wrapper around batch_upsert for single records.
+
+        Args:
+            record: Pydantic model instance
+            model: Pydantic model class
+            table_name: Database table name
+            entity_key_field: Field name to use as KV store key (default: "name")
+            embeddable_fields: List of fields to generate embeddings for
+            generate_embeddings: Whether to generate embeddings (default: False)
+
+        Returns:
+            The upserted record
+
+        Example:
+            >>> from rem.models.entities import Message
+            >>> message = Message(content="Hello", session_id="abc", tenant_id="acme")
+            >>> result = await pg.upsert(
+            ...     record=message,
+            ...     model=Message,
+            ...     table_name="messages"
+            ... )
+        """
+        await self.batch_upsert(
+            records=[record],
+            model=model,
+            table_name=table_name,
+            entity_key_field=entity_key_field,
+            embeddable_fields=embeddable_fields,
+            generate_embeddings=generate_embeddings,
+        )
+        return record
+
+    async def upsert_entity(
+        self,
+        entity: BaseModel,
+        entity_key: str,
+        tenant_id: str,
+        embeddable_fields: list[str] | None = None,
+        generate_embeddings: bool = False,
+    ) -> BaseModel:
+        """
+        Upsert an entity using explicit entity_key.
+
+        This is a convenience method that auto-detects table name from model.
+
+        Args:
+            entity: Pydantic model instance
+            entity_key: Value to use for KV store key (not field name)
+            tenant_id: Tenant identifier
+            embeddable_fields: List of fields to generate embeddings for
+            generate_embeddings: Whether to generate embeddings (default: False)
+
+        Returns:
+            The upserted entity
+
+        Example:
+            >>> from rem.models.entities import Ontology
+            >>> ontology = Ontology(name="cv-parser", tenant_id="acme", ...)
+            >>> result = await pg.upsert_entity(
+            ...     entity=ontology,
+            ...     entity_key=ontology.name,
+            ...     tenant_id=ontology.tenant_id
+            ... )
+        """
+        # Auto-detect table name from model class
+        model_class = type(entity)
+        table_name = f"{model_class.__name__.lower()}s"
+
+        await self.batch_upsert(
+            records=[entity],
+            model=model_class,
+            table_name=table_name,
+            entity_key_field="name",  # Default field name for entity key
+            embeddable_fields=embeddable_fields,
+            generate_embeddings=generate_embeddings,
+        )
+        return entity
+
     async def batch_upsert(
         self,
-        records: list[BaseModel],
+        records: list[BaseModel | dict],
         model: Type[BaseModel],
         table_name: str,
         entity_key_field: str = "name",
@@ -166,7 +389,7 @@ class PostgresService:
         - Returns immediately without waiting for embeddings (async processing)
 
         Args:
-            records: List of Pydantic model instances
+            records: List of Pydantic model instances or dicts (will be validated against model)
             model: Pydantic model class
             table_name: Database table name
             entity_key_field: Field name to use as KV store key (default: "name")
@@ -184,6 +407,8 @@ class PostgresService:
         Example:
             >>> from rem.models.entities import Resource
             >>> resources = [Resource(name="doc1", content="...", tenant_id="acme")]
+            >>> # Or with dicts
+            >>> resources = [{"name": "doc1", "content": "...", "tenant_id": "acme"}]
             >>> result = await pg.batch_upsert(
             ...     records=resources,
             ...     model=Resource,
@@ -205,6 +430,7 @@ class PostgresService:
                 "kv_store_populated": 0,
                 "embeddings_generated": 0,
                 "batches_processed": 0,
+                "ids": [],
             }
 
         logger.info(
@@ -212,16 +438,24 @@ class PostgresService:
             f"(entity_key: {entity_key_field}, embeddings: {generate_embeddings})"
         )
 
-        # Validate records for KV store requirements
+        # Convert dict records to Pydantic models
+        pydantic_records = []
         for record in records:
+            if isinstance(record, dict):
+                pydantic_records.append(model.model_validate(record))
+            else:
+                pydantic_records.append(record)
+
+        # Validate records for KV store requirements
+        for record in pydantic_records:
             valid, error = validate_record_for_kv_store(record, entity_key_field)
             if not valid:
                 logger.warning(f"Record validation failed: {error} - {record}")
 
-        # Prepare records
+        # Prepare records (using pydantic_records after conversion)
         field_names = list(model.model_fields.keys())
         prepared_records = [
-            prepare_record_for_upsert(r, model, entity_key_field) for r in records
+            prepare_record_for_upsert(r, model, entity_key_field) for r in pydantic_records
         ]
 
         # Build upsert statement (use actual field names from prepared records)
@@ -237,12 +471,14 @@ class PostgresService:
                 "kv_store_populated": 0,
                 "embeddings_generated": 0,
                 "batches_processed": 0,
+                "ids": [],
             }
 
         # Process in batches
         total_upserted = 0
         total_embeddings = 0
         batch_count = 0
+        upserted_ids = []  # Track IDs of upserted records
 
         if not self.pool:
             raise RuntimeError("PostgreSQL pool not connected. Call connect() first.")
@@ -260,6 +496,9 @@ class PostgresService:
                     try:
                         await conn.execute(upsert_sql, *values)
                         total_upserted += 1
+                        # Track the ID
+                        if "id" in record:
+                            upserted_ids.append(record["id"])
                     except Exception as e:
                         logger.error(f"Failed to upsert record: {e}")
                         logger.debug(f"Record: {record}")
@@ -314,6 +553,7 @@ class PostgresService:
             "kv_store_populated": total_upserted,  # Triggers populate 1:1
             "embeddings_generated": total_embeddings,
             "batches_processed": batch_count,
+            "ids": upserted_ids,  # List of IDs for upserted records
         }
 
     async def vector_search(

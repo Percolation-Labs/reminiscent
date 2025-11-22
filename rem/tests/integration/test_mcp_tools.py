@@ -13,9 +13,17 @@ Run with:
 
 import sys
 from pathlib import Path
+import pytest
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
+
+
+@pytest.fixture
+def mcp():
+    """Fixture that creates MCP server for tests."""
+    from rem.api.mcp_router.server import create_mcp_server
+    return create_mcp_server()
 
 
 def test_mcp_server_creation():
@@ -30,7 +38,7 @@ def test_mcp_server_creation():
     print(f"  Version: 0.1.0")
     print()
 
-    return mcp
+    assert mcp is not None
 
 
 def test_mcp_tools_registered(mcp):
@@ -61,7 +69,7 @@ def test_mcp_tools_registered(mcp):
     print(f"\nRegistered {registered_count}/{len(expected_tools)} tools")
     print()
 
-    return registered_count == len(expected_tools)
+    assert registered_count == len(expected_tools)
 
 
 def test_mcp_resources_registered(mcp):
@@ -92,7 +100,7 @@ def test_mcp_resources_registered(mcp):
 
     print()
 
-    return has_schema_resources and has_status_resources
+    assert has_schema_resources and has_status_resources
 
 
 def test_mcp_http_app():
@@ -110,7 +118,7 @@ def test_mcp_http_app():
     print(f"  ✓ Can be mounted at /api/v1/mcp")
     print()
 
-    return mcp_app is not None
+    assert mcp_app is not None
 
 
 def test_tool_parameters():
@@ -183,12 +191,12 @@ def test_tool_imports():
         print("  ✓ Embeddings API imported")
 
         print()
-        return True
+        assert True  # All imports successful
 
     except ImportError as e:
         print(f"  ✗ Import error: {e}")
         print()
-        return False
+        assert False, f"Import failed: {e}"
 
 
 def main():

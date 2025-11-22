@@ -115,8 +115,10 @@ Compressed messages use entity keys for retrieval:
 
 ```python
 from rem.services.session import SessionMessageStore
+from rem.services.postgres import get_postgres_service
 
-store = SessionMessageStore(db=db, tenant_id="acme-corp")
+db = get_postgres_service()
+store = SessionMessageStore(tenant_id="acme-corp")
 
 # Entity key format: session-{session_id}-msg-{index}
 entity_key = "session-abc-123-msg-5"
@@ -365,7 +367,7 @@ related_sessions = await find_related_sessions(
 ## Related Documentation
 
 - [Message Entity Model](../../models/entities/message.py)
-- [MessageRepository](../repositories/message_repository.py)
+- [Repository Pattern](../postgres/repository.py)
 - [AgentContext](../../agentic/context.py)
 - [Chat Completions API](../../api/routers/chat/completions.py)
 - [REM Query System](../../models/core/rem_query.py)

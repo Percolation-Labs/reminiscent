@@ -33,7 +33,7 @@ Data Model:
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from ..core import CoreModel
 
@@ -56,9 +56,10 @@ class Moment(CoreModel):
     Tenant isolation is provided via CoreModel.tenant_id field.
     """
 
-    name: str = Field(
-        ...,
-        description="Human-readable moment name (used as graph label)",
+    name: Optional[str] = Field(
+        default=None,
+        description="Human-readable moment name (used as graph label). Auto-generated from starts_timestamp+moment_type if not provided.",
+        json_schema_extra={"entity_key": True},  # Primary business key for KV lookups
     )
     moment_type: Optional[str] = Field(
         default=None,
@@ -97,3 +98,26 @@ class Moment(CoreModel):
         default_factory=list,
         description="Resource IDs used to construct this moment",
     )
+
+    @model_validator(mode='after')
+    def generate_name_if_missing(self) -> 'Moment':
+        """Auto-generate name from starts_timestamp+moment_type if not provided."""
+        if not self.name:
+            # Format: "Meeting on 2024-12-20" or "Coding Session on 2024-12-20 14:30"
+            if self.starts_timestamp:
+                date_str = self.starts_timestamp.strftime("%Y-%m-%d")
+                time_str = self.starts_timestamp.strftime("%H:%M")
+
+                if self.moment_type:
+                    moment_label = self.moment_type.replace('-', ' ').replace('_', ' ').title()
+                    self.name = f"{moment_label} on {date_str}"
+                else:
+                    self.name = f"Moment on {date_str} {time_str}"
+            else:
+                # Fallback: use ID or generic name
+                if self.id:
+                    self.name = f"moment-{str(self.id)[:8]}"
+                else:
+                    self.name = "unnamed-moment"
+
+        return self

@@ -15,7 +15,7 @@ Usage:
     schema = generator.generate_from_directory("src/rem/models/entities")
 
     # Write to file
-    with open("sql/schema.sql", "w") as f:
+    with open("src/rem/sql/schema.sql", "w") as f:
         f.write(schema)
 """
 
@@ -27,6 +27,7 @@ from typing import Type
 from loguru import logger
 from pydantic import BaseModel
 
+from ...settings import settings
 from .register_type import register_type
 
 
@@ -46,9 +47,9 @@ class SchemaGenerator:
         Initialize schema generator.
 
         Args:
-            output_dir: Optional directory for output files (defaults to sql/)
+            output_dir: Optional directory for output files (defaults to settings.sql_dir)
         """
-        self.output_dir = output_dir or Path("sql")
+        self.output_dir = output_dir or Path(settings.sql_dir)
         self.schemas: dict[str, dict] = {}
 
     def discover_models(self, directory: str | Path) -> dict[str, Type[BaseModel]]:
@@ -180,20 +181,13 @@ class SchemaGenerator:
                 if json_extra.get("entity_key"):
                     return field_name
 
-        # Check for common key field names
-        for candidate in ["name", "key", "label", "title"]:
+        # Check for key fields in priority order: id -> uri -> key -> name
+        # (matching sql_builder.get_entity_key convention)
+        for candidate in ["id", "uri", "key", "name"]:
             if candidate in model.model_fields:
                 return candidate
 
-        # Fall back to first string field
-        for field_name, field_info in model.model_fields.items():
-            if field_info.annotation is str:
-                logger.warning(
-                    f"No explicit entity_key for {model.__name__}, using {field_name}"
-                )
-                return field_name
-
-        # Ultimate fallback
+        # Should never reach here for CoreModel subclasses (they all have id)
         logger.error(f"No suitable entity_key field found for {model.__name__}, using 'id'")
         return "id"
 
@@ -261,7 +255,7 @@ class SchemaGenerator:
             f"-- Source directory: {directory}",
             "-- Generated at: " + __import__("datetime").datetime.now().isoformat(),
             "--",
-            "-- DO NOT EDIT MANUALLY - Regenerate with: rem schema generate",
+            "-- DO NOT EDIT MANUALLY - Regenerate with: rem db schema generate",
             "--",
             "-- This script creates:",
             "-- 1. Primary entity tables",
@@ -277,11 +271,11 @@ class SchemaGenerator:
             "BEGIN",
             "    -- Check that install.sql has been run",
             "    IF NOT EXISTS (SELECT 1 FROM pg_tables WHERE tablename = 'kv_store') THEN",
-            "        RAISE EXCEPTION 'KV_STORE table not found. Run sql/install.sql first.';",
+            "        RAISE EXCEPTION 'KV_STORE table not found. Run migrations/001_install.sql first.';",
             "    END IF;",
             "",
             "    IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') THEN",
-            "        RAISE EXCEPTION 'pgvector extension not found. Run sql/install.sql first.';",
+            "        RAISE EXCEPTION 'pgvector extension not found. Run migrations/001_install.sql first.';",
             "    END IF;",
             "",
             "    RAISE NOTICE 'Prerequisites check passed';",

@@ -10,14 +10,13 @@ which provides:
 - Graph connectivity (graph_edges)
 - Flexible metadata (metadata dict)
 - Tagging (tags list)
-- Column metadata (column dict for database schema information)
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Union
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class CoreModel(BaseModel):
@@ -31,7 +30,6 @@ class CoreModel(BaseModel):
     - Ownership tracking (user_id)
     - Graph connectivity (graph_edges)
     - Flexible metadata storage (metadata, tags)
-    - Database schema metadata (column)
 
     Note: ID generation is handled per model type, not by CoreModel.
     Each entity model should generate IDs with appropriate prefixes or labels.
@@ -42,10 +40,10 @@ class CoreModel(BaseModel):
         description="Unique identifier (UUID or string, generated per model type). Generated automatically if not provided."
     )
     created_at: datetime = Field(
-        default_factory=datetime.utcnow, description="Entity creation timestamp"
+        default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None), description="Entity creation timestamp"
     )
     updated_at: datetime = Field(
-        default_factory=datetime.utcnow, description="Last update timestamp"
+        default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None), description="Last update timestamp"
     )
     deleted_at: Optional[datetime] = Field(
         default=None, description="Soft deletion timestamp"
@@ -64,10 +62,3 @@ class CoreModel(BaseModel):
         default_factory=dict, description="Flexible metadata storage"
     )
     tags: list[str] = Field(default_factory=list, description="Entity tags")
-    column: dict = Field(
-        default_factory=dict,
-        description="Column metadata for database schema information",
-    )
-
-    class Config:
-        json_encoders = {datetime: lambda v: v.isoformat()}

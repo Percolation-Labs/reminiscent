@@ -19,12 +19,12 @@ from botocore.exceptions import ClientError
 from loguru import logger
 
 from rem.models.entities import File, Resource
-from rem.services.repositories import FileRepository, ResourceRepository
+from rem.services.postgres import Repository
 from rem.settings import settings
 from rem.utils.chunking import chunk_text
 from rem.utils.markdown import to_markdown
 
-from .providers import AudioProvider, ContentProvider, DocProvider, TextProvider
+from .providers import AudioProvider, ContentProvider, DocProvider, SchemaProvider, TextProvider
 
 
 class ContentService:
@@ -38,7 +38,7 @@ class ContentService:
     """
 
     def __init__(
-        self, file_repo: FileRepository | None = None, resource_repo: ResourceRepository | None = None
+        self, file_repo: Repository | None = None, resource_repo: Repository | None = None
     ):
         self.s3_client = self._create_s3_client()
         self.providers: dict[str, ContentProvider] = {}
@@ -50,10 +50,19 @@ class ContentService:
 
     def _register_default_providers(self):
         """Register default content providers from settings."""
+        # Schema provider for agent/evaluator schemas (YAML/JSON)
+        # Register first so it takes priority for .yaml/.json files
+        schema_provider = SchemaProvider()
+        self.providers[".yaml"] = schema_provider
+        self.providers[".yml"] = schema_provider
+        self.providers[".json"] = schema_provider
+
         # Text provider for plain text, code, data files
         text_provider = TextProvider()
         for ext in settings.content.supported_text_types:
-            self.providers[ext.lower()] = text_provider
+            # Don't override schema provider for yaml/json
+            if ext.lower() not in [".yaml", ".yml", ".json"]:
+                self.providers[ext.lower()] = text_provider
 
         # Doc provider for PDFs, Office docs, images (via Kreuzberg)
         doc_provider = DocProvider()
@@ -67,6 +76,7 @@ class ContentService:
 
         logger.debug(
             f"Registered {len(self.providers)} file extensions across "
+            f"schema (yaml/json), "
             f"{len(settings.content.supported_text_types)} text, "
             f"{len(settings.content.supported_doc_types)} doc, "
             f"{len(settings.content.supported_audio_types)} audio types"

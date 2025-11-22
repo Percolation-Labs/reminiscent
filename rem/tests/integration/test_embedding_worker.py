@@ -41,9 +41,9 @@ def resources_seed_data(seed_data_path: Path) -> list[dict]:
 
 @pytest.fixture
 async def postgres_service() -> PostgresService:
-    """Create PostgresService instance."""
+    """Create PostgresService instance without embedding worker."""
     connection_string = "postgresql://rem:rem@localhost:5050/rem"
-    pg = PostgresService(connection_string=connection_string)
+    pg = PostgresService(connection_string=connection_string, embedding_worker=None)
     await pg.connect()
     yield pg
     await pg.disconnect()

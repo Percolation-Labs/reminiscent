@@ -87,10 +87,10 @@ class TestBatchUpsertIntegration:
             resources.append(resource)
 
         # Get entity key field and embeddable fields
-        entity_key_field = get_entity_key_field(Resource)  # Should be "uri"
+        entity_key_field = get_entity_key_field(Resource)  # Should be "name"
         embeddable_fields = get_embeddable_fields(Resource)  # Should include "content"
 
-        assert entity_key_field == "uri"
+        assert entity_key_field == "name"
         assert "content" in embeddable_fields
 
         # Batch upsert

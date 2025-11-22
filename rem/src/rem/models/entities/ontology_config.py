@@ -19,6 +19,8 @@ Design:
 
 from typing import Optional
 
+from pydantic import ConfigDict
+
 from ..core.core_model import CoreModel
 
 
@@ -109,8 +111,8 @@ class OntologyConfig(CoreModel):
     provider_name: Optional[str] = None  # Override default provider
     model_name: Optional[str] = None  # Override default model
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "description": "Configuration for automatic ontology extraction from files",
             "examples": [
                 {
@@ -126,3 +128,4 @@ class OntologyConfig(CoreModel):
                 }
             ]
         }
+    )

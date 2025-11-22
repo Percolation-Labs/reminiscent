@@ -31,6 +31,15 @@ pip install remdb[all]
 
 # Verify installation
 rem --help
+
+# Configure REM (interactive wizard)
+rem configure
+
+# Configure and install database tables
+rem configure --install
+
+# Configure + install + register with Claude Desktop
+rem configure --install --claude-desktop
 ```
 
 ### Three Deployment Options
@@ -279,6 +288,443 @@ GET /health
 # {"status": "healthy", "version": "0.1.0"}
 ```
 
+## CLI Reference
+
+REM provides a comprehensive command-line interface for all operations.
+
+### Configuration & Server
+
+#### `rem configure` - Interactive Setup Wizard
+
+Set up REM with PostgreSQL, LLM providers, and S3 storage.
+
+```bash
+# Interactive wizard (creates ~/.rem/config.yaml)
+rem configure
+
+# Run wizard + install database tables
+rem configure --install
+
+# Show current configuration
+rem configure --show
+
+# Edit configuration in $EDITOR
+rem configure --edit
+
+# Register with Claude Desktop
+rem configure --claude-desktop
+```
+
+#### `rem mcp` - Run MCP Server
+
+Run the FastMCP server for Claude Desktop integration.
+
+```bash
+# Stdio mode (for Claude Desktop)
+rem mcp
+
+# HTTP mode (for testing)
+rem mcp --http --port 8001
+```
+
+**Configuration File:** `~/.rem/config.yaml`
+
+```yaml
+postgres:
+  connection_string: postgresql://rem:rem@localhost:5432/rem
+  pool_min_size: 5
+  pool_max_size: 20
+
+llm:
+  default_model: anthropic:claude-sonnet-4-5-20250929
+  openai_api_key: sk-...
+  anthropic_api_key: sk-ant-...
+
+s3:
+  bucket_name: rem-storage
+  region: us-east-1
+```
+
+**Precedence:** Environment variables > Config file > Defaults
+
+#### `rem serve` - Start API Server
+
+Start the FastAPI server with uvicorn.
+
+```bash
+# Use settings from config
+rem serve
+
+# Development mode (auto-reload)
+rem serve --reload
+
+# Production mode (4 workers)
+rem serve --workers 4
+
+# Bind to all interfaces
+rem serve --host 0.0.0.0 --port 8080
+
+# Override log level
+rem serve --log-level debug
+```
+
+### Database Management
+
+#### `rem db migrate` - Run Migrations
+
+Apply database migrations (install.sql and install_models.sql).
+
+```bash
+# Apply all migrations
+rem db migrate
+
+# Core infrastructure only (extensions, functions)
+rem db migrate --install
+
+# Entity tables only (Resource, Message, etc.)
+rem db migrate --models
+
+# Background indexes (HNSW for vectors)
+rem db migrate --background-indexes
+
+# Custom connection string
+rem db migrate --connection "postgresql://user:pass@host:5432/db"
+
+# Custom SQL directory
+rem db migrate --sql-dir /path/to/sql
+```
+
+#### `rem db status` - Migration Status
+
+Show applied migrations and execution times.
+
+```bash
+rem db status
+```
+
+#### `rem db rebuild-cache` - Rebuild KV Cache
+
+Rebuild KV_STORE cache from entity tables (after database restart or bulk imports).
+
+```bash
+rem db rebuild-cache
+```
+
+### Schema Management
+
+#### `rem db schema generate` - Generate SQL Schema
+
+Generate database schema from Pydantic models.
+
+```bash
+# Generate install_models.sql from entity models
+rem db schema generate \
+  --models src/rem/models/entities \
+  --output rem/src/rem/sql/install_models.sql
+
+# Generate migration file
+rem db schema generate \
+  --models src/rem/models/entities \
+  --output rem/src/rem/sql/migrations/003_add_fields.sql
+```
+
+#### `rem db schema indexes` - Generate Background Indexes
+
+Generate SQL for background index creation (HNSW for vectors).
+
+```bash
+# Generate background_indexes.sql
+rem db schema indexes \
+  --models src/rem/models/entities \
+  --output rem/src/rem/sql/background_indexes.sql
+```
+
+#### `rem db schema validate` - Validate Models
+
+Validate Pydantic models for schema generation.
+
+```bash
+rem db schema validate --models src/rem/models/entities
+```
+
+### File Processing
+
+#### `rem process files` - Process Files
+
+Process files with optional custom extractor (ontology extraction).
+
+```bash
+# Process all completed files for tenant
+rem process files \
+  --tenant-id acme-corp \
+  --status completed \
+  --limit 10
+
+# Process with custom extractor
+rem process files \
+  --tenant-id acme-corp \
+  --extractor cv-parser-v1 \
+  --limit 50
+
+# Process files from the last 7 days
+rem process files \
+  --tenant-id acme-corp \
+  --lookback-hours 168
+```
+
+#### `rem process uri` - Process Single URI
+
+Process a single file URI and extract content.
+
+```bash
+# Process local file
+rem process uri \
+  --uri file:///path/to/document.pdf \
+  --user-id user-123 \
+  --tenant-id acme-corp
+
+# Process S3 file
+rem process uri \
+  --uri s3://bucket/key.docx \
+  --user-id user-123 \
+  --tenant-id acme-corp
+```
+
+### Memory & Knowledge Extraction (Dreaming)
+
+#### `rem dreaming full` - Complete Workflow
+
+Run full dreaming workflow: extractors → moments → affinity → user model.
+
+```bash
+# Full workflow for user
+rem dreaming full \
+  --user-id user-123 \
+  --tenant-id acme-corp
+
+# Skip ontology extractors
+rem dreaming full \
+  --user-id user-123 \
+  --tenant-id acme-corp \
+  --skip-extractors
+
+# Process last 24 hours only
+rem dreaming full \
+  --user-id user-123 \
+  --tenant-id acme-corp \
+  --lookback-hours 24
+
+# Limit resources processed
+rem dreaming full \
+  --user-id user-123 \
+  --tenant-id acme-corp \
+  --limit 100
+```
+
+#### `rem dreaming custom` - Custom Extractor
+
+Run specific ontology extractor on user's data.
+
+```bash
+# Run CV parser on user's files
+rem dreaming custom \
+  --user-id user-123 \
+  --tenant-id acme-corp \
+  --extractor cv-parser-v1
+
+# Process last week's files
+rem dreaming custom \
+  --user-id user-123 \
+  --tenant-id acme-corp \
+  --extractor contract-analyzer-v1 \
+  --lookback-hours 168 \
+  --limit 50
+```
+
+#### `rem dreaming moments` - Extract Moments
+
+Extract temporal narratives from resources.
+
+```bash
+# Generate moments for user
+rem dreaming moments \
+  --user-id user-123 \
+  --tenant-id acme-corp \
+  --limit 50
+
+# Process last 7 days
+rem dreaming moments \
+  --user-id user-123 \
+  --tenant-id acme-corp \
+  --lookback-hours 168
+```
+
+#### `rem dreaming affinity` - Build Relationships
+
+Build semantic relationships between resources using embeddings.
+
+```bash
+# Build affinity graph for user
+rem dreaming affinity \
+  --user-id user-123 \
+  --tenant-id acme-corp \
+  --limit 100
+
+# Process recent resources only
+rem dreaming affinity \
+  --user-id user-123 \
+  --tenant-id acme-corp \
+  --lookback-hours 24
+```
+
+#### `rem dreaming user-model` - Update User Model
+
+Update user model from recent activity (preferences, interests, patterns).
+
+```bash
+# Update user model
+rem dreaming user-model \
+  --user-id user-123 \
+  --tenant-id acme-corp
+```
+
+### Evaluation & Experiments
+
+#### `rem eval dataset` - Dataset Management
+
+Manage Phoenix evaluation datasets (golden sets).
+
+```bash
+# Create dataset from CSV
+rem eval dataset create rem-lookup-golden \
+  --from-csv golden.csv \
+  --input-keys query \
+  --output-keys expected_label,expected_type
+
+# Upload to Phoenix
+rem eval dataset upload rem-lookup-golden \
+  --file dataset.jsonl
+
+# List datasets
+rem eval dataset list
+```
+
+#### `rem eval experiment` - Run Experiments
+
+Execute evaluation experiments with agents and evaluators.
+
+```bash
+# Run experiment on golden set
+rem eval experiment run rem-lookup-golden \
+  --experiment rem-v1 \
+  --agent ask_rem \
+  --evaluator rem-lookup-correctness
+
+# Run with custom Phoenix endpoint
+rem eval experiment run rem-search-golden \
+  --experiment rem-v2 \
+  --agent ask_rem \
+  --evaluator rem-search-correctness \
+  --phoenix-url http://localhost:6006
+```
+
+#### `rem eval trace` - Trace Retrieval
+
+Retrieve traces from Phoenix for analysis.
+
+```bash
+# Get trace by ID
+rem eval trace get trace-abc-123
+
+# List recent traces
+rem eval trace list --limit 10
+```
+
+#### `rem experiments` - Experiment Config
+
+Manage experiment configurations (A/B testing, parameter sweeps).
+
+```bash
+# Create experiment config
+rem experiments create \
+  --name cv-parser-test \
+  --description "Test CV parser with different models"
+
+# List experiments
+rem experiments list
+
+# Show experiment details
+rem experiments show cv-parser-test
+
+# Run experiment
+rem experiments run cv-parser-test
+```
+
+### Interactive Agent
+
+#### `rem ask` - Test Agent
+
+Test Pydantic AI agent with natural language queries.
+
+```bash
+# Ask a question
+rem ask "What documents did Sarah Chen author?"
+
+# With context headers
+rem ask "Find all resources about API design" \
+  --user-id user-123 \
+  --tenant-id acme-corp
+
+# Use specific agent schema
+rem ask "Analyze this contract" \
+  --agent-schema contract-analyzer-v1
+```
+
+### Global Options
+
+All commands support:
+
+```bash
+# Verbose logging
+rem --verbose <command>
+rem -v <command>
+
+# Version
+rem --version
+
+# Help
+rem --help
+rem <command> --help
+rem <command> <subcommand> --help
+```
+
+### Environment Variables
+
+Override any setting via environment variables:
+
+```bash
+# Database
+export POSTGRES__CONNECTION_STRING=postgresql://rem:rem@localhost:5432/rem
+export POSTGRES__POOL_MIN_SIZE=5
+
+# LLM
+export LLM__DEFAULT_MODEL=openai:gpt-4o
+export LLM__OPENAI_API_KEY=sk-...
+export LLM__ANTHROPIC_API_KEY=sk-ant-...
+
+# S3
+export S3__BUCKET_NAME=rem-storage
+export S3__REGION=us-east-1
+
+# Server
+export API__HOST=0.0.0.0
+export API__PORT=8000
+export API__RELOAD=true
+
+# Run command with overrides
+rem serve
+```
+
 ## Development
 
 ### Docker Compose
@@ -306,11 +752,11 @@ psql -h localhost -p 5050 -U rem -d rem
 
 ### Database Migrations
 
-Migrations are automatically applied on container startup from `sql/migrations/*.sql`:
+Migrations are automatically applied on container startup from `src/rem/sql/migrations/*.sql`:
 - `001_init_schema.sql` - Core schema with all entity tables and indexes
 
 To add new migrations:
-1. Create `sql/migrations/002_your_migration.sql`
+1. Create `src/rem/sql/migrations/002_your_migration.sql`
 2. Restart PostgreSQL container: `docker compose restart postgres`
 
 ### Test Data

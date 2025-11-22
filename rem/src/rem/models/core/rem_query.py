@@ -60,11 +60,11 @@ class QueryType(str, Enum):
     defined in the REM contract.
     """
 
-    LOOKUP = "lookup"
-    FUZZY = "fuzzy"
-    SEARCH = "search"
-    SQL = "sql"
-    TRAVERSE = "traverse"
+    LOOKUP = "LOOKUP"
+    FUZZY = "FUZZY"
+    SEARCH = "SEARCH"
+    SQL = "SQL"
+    TRAVERSE = "TRAVERSE"
 
 
 class LookupParameters(BaseModel):

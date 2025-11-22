@@ -2,6 +2,7 @@
 PostgreSQL service for CloudNativePG database operations.
 """
 
+from .repository import Repository
 from .service import PostgresService
 
 
@@ -16,14 +17,10 @@ def get_postgres_service() -> PostgresService | None:
     if not settings.postgres.enabled:
         return None
 
-    connection_string = (
-        f"postgresql://{settings.postgres.user}:{settings.postgres.password}@"
-        f"{settings.postgres.host}:{settings.postgres.port}/{settings.postgres.database}"
-    )
-
     return PostgresService(
-        connection_string=connection_string, pool_size=settings.postgres.pool_size or 10
+        connection_string=settings.postgres.connection_string,
+        pool_size=settings.postgres.pool_size,
     )
 
 
-__all__ = ["PostgresService", "get_postgres_service"]
+__all__ = ["PostgresService", "get_postgres_service", "Repository"]

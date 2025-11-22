@@ -389,6 +389,155 @@ class AudioProvider(ContentProvider):
                 logger.warning(f"Cleanup failed: {e}")
 
 
+class SchemaProvider(ContentProvider):
+    """
+    Schema content provider for agent/evaluator schemas.
+
+    Detects and processes YAML/JSON files containing:
+    - Agent schemas (type: object with json_schema_extra.fully_qualified_name: rem.agents.*)
+    - Evaluator schemas (type: object with json_schema_extra.fully_qualified_name: rem.evaluators.*)
+
+    Stores schemas in the schemas table with deterministic IDs for upsert by name.
+
+    Pattern from p8fs:
+    - Checks for schema markers (type: object + fully_qualified_name)
+    - Generates deterministic ID for upsert (tenant+schema_name)
+    - Stores full schema JSON in schemas table
+    - Extracts metadata (version, tags, provider_configs, embedding_fields)
+    """
+
+    @property
+    def name(self) -> str:
+        return "schema"
+
+    def extract(self, content: bytes, metadata: dict[str, Any]) -> dict[str, Any]:
+        """
+        Extract and validate agent/evaluator schema.
+
+        Args:
+            content: YAML or JSON file bytes
+            metadata: File metadata
+
+        Returns:
+            dict with:
+                - text: Human-readable schema summary
+                - metadata: Schema metadata
+                - schema_data: Full schema dict for storage
+                - is_schema: True if valid schema detected
+
+        Raises:
+            ValueError: If schema is invalid
+        """
+        import json
+        import yaml
+        from uuid import uuid5, NAMESPACE_DNS
+
+        # Decode content
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError:
+            text = content.decode("latin-1")
+
+        # Try to parse as YAML/JSON
+        if metadata.get("content_type") == "application/json":
+            schema_data = json.loads(text)  # Raises JSONDecodeError on invalid JSON
+        else:
+            # Try YAML first (supports both YAML and JSON)
+            schema_data = yaml.safe_load(text)  # Raises yaml.YAMLError on invalid YAML
+
+        # Check if it's a schema (type: object + json_schema_extra.fully_qualified_name)
+        if not isinstance(schema_data, dict):
+            return {
+                "text": text,
+                "metadata": {"parser": "schema_fallback"},
+                "is_schema": False,
+            }
+
+        # Check for schema markers
+        is_object_type = schema_data.get("type") == "object"
+        json_schema_extra = schema_data.get("json_schema_extra", {})
+        fully_qualified_name = json_schema_extra.get("fully_qualified_name", "")
+
+        # Must have type: object and fully_qualified_name starting with rem.agents or rem.evaluators
+        is_agent_schema = is_object_type and fully_qualified_name.startswith("rem.agents.")
+        is_evaluator_schema = is_object_type and fully_qualified_name.startswith("rem.evaluators.")
+
+        if not (is_agent_schema or is_evaluator_schema):
+            return {
+                "text": text,
+                "metadata": {"parser": "schema_fallback"},
+                "is_schema": False,
+            }
+
+        # Extract schema metadata
+        schema_type = "agent" if is_agent_schema else "evaluator"
+        version = json_schema_extra.get("version", "1.0.0")
+        tags = json_schema_extra.get("tags", [])
+
+        # Infer short_name from fully_qualified_name (rem.agents.MyAgent -> my-agent)
+        name_parts = fully_qualified_name.split(".")
+        camel_name = name_parts[-1]  # e.g., "MyAgent"
+        # Convert CamelCase to kebab-case
+        # Handle sequences of capitals (CV -> cv, not c-v)
+        import re
+        # Insert hyphens before capital letters that are followed by lowercase
+        short_name = re.sub(r'(?<!^)(?=[A-Z][a-z])', '-', camel_name)
+        # Also handle transitions from lowercase to uppercase
+        short_name = re.sub(r'(?<=[a-z])(?=[A-Z])', '-', short_name)
+        short_name = short_name.lower()
+
+        # Build human-readable summary
+        description = schema_data.get("description", "No description provided")
+        description_preview = description[:200] + "..." if len(description) > 200 else description
+
+        properties = schema_data.get("properties", {})
+        required_fields = schema_data.get("required", [])
+
+        summary_parts = [
+            f"# {schema_type.title()} Schema: {short_name}",
+            f"**Version:** {version}",
+            f"**Fully Qualified Name:** {fully_qualified_name}",
+            "",
+            "## Description",
+            description_preview,
+            "",
+            "## Output Fields",
+        ]
+
+        for field_name, field_spec in list(properties.items())[:10]:  # Limit to 10 fields
+            field_type = field_spec.get("type", "unknown")
+            field_desc = field_spec.get("description", "")
+            required = " (required)" if field_name in required_fields else ""
+            summary_parts.append(f"- **{field_name}**: {field_type}{required} - {field_desc[:50]}")
+
+        if len(properties) > 10:
+            summary_parts.append(f"- ... and {len(properties) - 10} more fields")
+
+        text_summary = "\n".join(summary_parts)
+
+        # Extract additional metadata
+        extraction_metadata = {
+            "parser": "schema",
+            "schema_type": schema_type,
+            "short_name": short_name,
+            "version": version,
+            "fully_qualified_name": fully_qualified_name,
+            "tags": tags,
+            "field_count": len(properties),
+            "required_field_count": len(required_fields),
+            "provider_configs": json_schema_extra.get("provider_configs", []),
+            "embedding_fields": json_schema_extra.get("embedding_fields", []),
+            "category": json_schema_extra.get("category"),
+        }
+
+        return {
+            "text": text_summary,
+            "metadata": extraction_metadata,
+            "schema_data": schema_data,
+            "is_schema": True,
+        }
+
+
 class ImageProvider(ContentProvider):
     """
     Image content provider with vision LLM analysis and CLIP embeddings.

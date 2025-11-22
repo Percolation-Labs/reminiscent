@@ -1,0 +1,72 @@
+---
+# Observation engram with rich graph connections
+kind: engram
+name: vector-search-performance-observation
+category: observation
+summary: Noticed significant performance degradation in vector search with large result sets
+content: |
+  During testing of the semantic search functionality, observed that query performance
+  degrades significantly when result sets exceed 1000 vectors.
+
+  Metrics:
+  - 100 results: ~50ms
+  - 500 results: ~150ms
+  - 1000 results: ~400ms
+  - 2000 results: ~1200ms (unacceptable)
+
+  Hypothesis: Missing index on embedding column or inefficient distance calculation.
+
+  Potential solutions:
+  1. Add HNSW index for faster approximate nearest neighbor search
+  2. Implement result pagination to limit batch sizes
+  3. Consider pre-filtering strategies to reduce search space
+
+  Need to investigate pgvector configuration and index types.
+
+uri: null
+timestamp: 2025-01-15T14:45:00Z
+
+metadata:
+  severity: medium
+  component: vector-search
+  environment: development
+  reproducible: true
+
+tags:
+  - performance
+  - vector-search
+  - pgvector
+  - optimization
+
+graph_edges:
+  - dst: vector-search-service
+    rel: observes
+    weight: 1.0
+    properties:
+      component: backend
+
+  - dst: pgvector-extension
+    rel: relates_to
+    weight: 0.9
+    properties:
+      aspect: performance
+
+  - dst: hnsw-indexing
+    rel: proposes
+    weight: 0.8
+    properties:
+      type: solution
+
+  - dst: alex-rodriguez
+    rel: assigned_to
+    weight: 0.9
+    properties:
+      role: investigator
+
+  - dst: performance-sprint
+    rel: blocks
+    weight: 0.7
+    properties:
+      impact: medium
+
+moments: []

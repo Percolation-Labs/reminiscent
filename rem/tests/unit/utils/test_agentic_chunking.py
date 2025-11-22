@@ -539,11 +539,11 @@ class TestEndToEndScenario:
 
         large_document = "\n".join(sections)
 
-        # Chunk the document
-        limits = get_model_limits("gpt-4o")
+        # Chunk the document with smaller chunks to force splitting
+        # Document is ~12K tokens, use 5K token chunks to get multiple chunks
         chunks = chunk_text(
             large_document,
-            max_tokens=int(limits.max_input * 0.5),  # Conservative
+            max_tokens=5000,  # Force multiple chunks
             model="gpt-4o"
         )
 

@@ -21,10 +21,10 @@ Entity Type Convention (in properties.dst_entity_type):
 - Examples: person/employee, document/rfc, system/api, project/internal
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class InlineEdge(BaseModel):
@@ -54,11 +54,8 @@ class InlineEdge(BaseModel):
         description="Rich metadata (dst_name, dst_entity_type, confidence, context, etc.)",
     )
     created_at: datetime = Field(
-        default_factory=datetime.utcnow, description="Edge creation timestamp"
+        default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None), description="Edge creation timestamp"
     )
-
-    class Config:
-        json_encoders = {datetime: lambda v: v.isoformat()}
 
 
 class InlineEdges(BaseModel):

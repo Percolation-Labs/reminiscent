@@ -2,9 +2,9 @@
 Schema generation commands.
 
 Usage:
-    rem schema generate --models src/rem/models/entities --output sql/schema.sql
-    rem schema validate
-    rem schema indexes --background
+    rem db schema generate --models src/rem/models/entities
+    rem db schema validate
+    rem db schema indexes --background
 """
 
 import asyncio
@@ -13,6 +13,7 @@ from pathlib import Path
 import click
 from loguru import logger
 
+from ...settings import settings
 from ...services.postgres.schema_generator import SchemaGenerator
 
 
@@ -34,10 +35,10 @@ from ...services.postgres.schema_generator import SchemaGenerator
 @click.option(
     "--output-dir",
     type=click.Path(path_type=Path),
-    default="sql",
-    help="Base output directory",
+    default=None,
+    help=f"Base output directory (default: {settings.sql_dir})",
 )
-def generate(models: Path, output: Path, output_dir: Path):
+def generate(models: Path, output: Path, output_dir: Path | None):
     """
     Generate database schema from Pydantic models.
 
@@ -47,33 +48,35 @@ def generate(models: Path, output: Path, output_dir: Path):
     - KV_STORE triggers for cache maintenance
     - Indexes (foreground only)
 
-    Output is written to sql/install_models.sql by default.
+    Output is written to src/rem/sql/install_models.sql by default.
 
     Example:
-        rem schema generate --models src/rem/models/entities
+        rem db schema generate --models src/rem/models/entities
 
     This creates:
-    - sql/install_models.sql - Entity tables and triggers
-    - sql/background_indexes.sql - HNSW indexes (apply after data load)
+    - src/rem/sql/install_models.sql - Entity tables and triggers
+    - src/rem/sql/background_indexes.sql - HNSW indexes (apply after data load)
 
     After generation, apply with:
         rem db migrate
     """
     click.echo(f"Discovering models in {models}")
 
-    generator = SchemaGenerator(output_dir=output_dir)
+    # Use settings.sql_dir if not provided
+    actual_output_dir = output_dir or Path(settings.sql_dir)
+    generator = SchemaGenerator(output_dir=actual_output_dir)
 
     # Generate schema
     try:
         schema_sql = asyncio.run(generator.generate_from_directory(models, output_file=output.name))
 
         click.echo(f"✓ Schema generated: {len(generator.schemas)} tables")
-        click.echo(f"✓ Written to: {output_dir / output.name}")
+        click.echo(f"✓ Written to: {actual_output_dir / output.name}")
 
         # Generate background indexes
         background_indexes = generator.generate_background_indexes()
         if background_indexes:
-            bg_file = output_dir / "background_indexes.sql"
+            bg_file = actual_output_dir / "background_indexes.sql"
             bg_file.write_text(background_indexes)
             click.echo(f"✓ Background indexes: {bg_file}")
 
@@ -157,8 +160,8 @@ def validate(models: Path):
     "--output",
     "-o",
     type=click.Path(path_type=Path),
-    default="sql/background_indexes.sql",
-    help="Output file for background indexes",
+    default=None,
+    help=f"Output file for background indexes (default: {settings.sql_dir}/background_indexes.sql)",
 )
 def indexes(output: Path):
     """
@@ -173,7 +176,7 @@ def indexes(output: Path):
 
     # Load existing schemas (would need to be persisted or regenerated)
     click.echo("⚠ Note: This requires schemas to be generated first", fg="yellow")
-    click.echo("⚠ Run 'rem schema generate' before 'rem schema indexes'", fg="yellow")
+    click.echo("⚠ Run 'rem db schema generate' before 'rem db schema indexes'", fg="yellow")
 
 
 def register_commands(schema_group):

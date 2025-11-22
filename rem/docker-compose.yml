@@ -11,7 +11,7 @@ services:
       - "5050:5432"
     volumes:
       # Mount migrations for automatic execution
-      - ./sql/migrations:/docker-entrypoint-initdb.d:ro
+      - ./src/rem/sql/migrations:/docker-entrypoint-initdb.d:ro
       # Persistent data volume (PostgreSQL 18 format)
       - postgres_data:/var/lib/postgresql
     healthcheck:

@@ -269,6 +269,161 @@ TRAVERSE start_key="Sarah Chen" rel_type="manages" max_depth=2
 """
 
 
+def register_agent_resources(mcp: FastMCP):
+    """
+    Register agent schema resources.
+
+    Args:
+        mcp: FastMCP server instance
+    """
+
+    @mcp.resource("rem://agents")
+    def list_available_agents() -> str:
+        """
+        List all available agent schemas.
+
+        Returns a list of agent schemas packaged with REM, including:
+        - Agent name
+        - Description
+        - Available tools
+        - Version information
+
+        TODO: Add pagination support if agent count grows large (not needed for now)
+        """
+        import importlib.resources
+        import yaml
+        from pathlib import Path
+
+        try:
+            # Find packaged agent schemas
+            agents_ref = importlib.resources.files("rem") / "schemas" / "agents"
+            agents_dir = Path(str(agents_ref))
+
+            if not agents_dir.exists():
+                return "# Available Agents\n\nNo agent schemas found in package."
+
+            # Discover all agent schemas recursively
+            agent_files = sorted(agents_dir.rglob("*.yaml")) + sorted(agents_dir.rglob("*.yml")) + sorted(agents_dir.rglob("*.json"))
+
+            if not agent_files:
+                return "# Available Agents\n\nNo agent schemas found."
+
+            output = ["# Available Agent Schemas\n"]
+            output.append("Packaged agent schemas available for use:\n")
+
+            for agent_file in agent_files:
+                try:
+                    with open(agent_file, "r") as f:
+                        schema = yaml.safe_load(f)
+
+                    agent_name = agent_file.stem
+                    description = schema.get("description", "No description")
+                    # Get first 200 characters of description
+                    desc_snippet = description[:200] + "..." if len(description) > 200 else description
+
+                    # Get additional metadata
+                    extra = schema.get("json_schema_extra", {})
+                    version = extra.get("version", "unknown")
+                    tools = extra.get("tools", [])
+
+                    output.append(f"\n## {agent_name}")
+                    output.append(f"**Path:** `agents/{agent_file.name}`")
+                    output.append(f"**Version:** {version}")
+                    output.append(f"**Description:** {desc_snippet}")
+                    if tools:
+                        output.append(f"**Tools:** {', '.join(tools[:5])}" + (" ..." if len(tools) > 5 else ""))
+
+                    # Usage example
+                    output.append(f"\n**Usage:**")
+                    output.append(f"```python")
+                    output.append(f'rem ask agents/{agent_file.name} "Your query here"')
+                    output.append(f"```")
+
+                except Exception as e:
+                    output.append(f"\n## {agent_file.stem}")
+                    output.append(f"⚠️  Error loading schema: {e}")
+
+            return "\n".join(output)
+
+        except Exception as e:
+            return f"# Available Agents\n\nError listing agents: {e}"
+
+
+def register_file_resources(mcp: FastMCP):
+    """
+    Register file operation resources.
+
+    Args:
+        mcp: FastMCP server instance
+    """
+
+    @mcp.resource("rem://files/presigned-url/{s3_key}")
+    def get_presigned_url(s3_key: str, expiration: int = 3600) -> str:
+        """
+        Generate presigned URL for S3 object download.
+
+        Args:
+            s3_key: S3 object key (e.g., "tenant/files/uuid/file.pdf")
+            expiration: URL expiration time in seconds (default: 3600 = 1 hour)
+
+        Returns:
+            Presigned URL for downloading the file
+
+        Raises:
+            RuntimeError: If S3 is not configured
+
+        Example:
+            >>> url = get_presigned_url("acme/files/123/document.pdf")
+            >>> # Returns: https://s3.amazonaws.com/bucket/acme/files/123/document.pdf?signature=...
+        """
+        from ...settings import settings
+
+        # Check if S3 is configured
+        if not settings.s3.bucket_name:
+            raise RuntimeError(
+                "S3 is not configured. Cannot generate presigned URLs.\n"
+                "Configure S3 settings in ~/.rem/config.yaml or environment variables."
+            )
+
+        import aioboto3
+        import asyncio
+        from botocore.exceptions import ClientError
+
+        async def _generate_url():
+            session = aioboto3.Session()
+            async with session.client(
+                "s3",
+                endpoint_url=settings.s3.endpoint_url,
+                aws_access_key_id=settings.s3.access_key_id,
+                aws_secret_access_key=settings.s3.secret_access_key,
+                region_name=settings.s3.region,
+            ) as s3_client:
+                try:
+                    url = await s3_client.generate_presigned_url(
+                        "get_object",
+                        Params={
+                            "Bucket": settings.s3.bucket_name,
+                            "Key": s3_key,
+                        },
+                        ExpiresIn=expiration,
+                    )
+                    return url
+                except ClientError as e:
+                    raise RuntimeError(f"Failed to generate presigned URL: {e}")
+
+        # Run async function
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # If already in async context, create new loop
+            import nest_asyncio
+            nest_asyncio.apply()
+            url = loop.run_until_complete(_generate_url())
+        else:
+            url = asyncio.run(_generate_url())
+
+        return url
+
+
 def register_status_resources(mcp: FastMCP):
     """
     Register system status resources.

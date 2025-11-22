@@ -149,13 +149,9 @@ def prepare_record_for_upsert(
     if "id" in data and isinstance(data["id"], UUID):
         data["id"] = str(data["id"])
 
-    # Convert JSONB fields (lists, dicts) to JSON strings for asyncpg
-    JSONB_FIELDS = {"graph_edges", "metadata", "related_entities"}
-    for field_name in JSONB_FIELDS:
-        if field_name in data:
-            value = data[field_name]
-            if isinstance(value, (list, dict)):
-                data[field_name] = json.dumps(value)
+    # JSONB fields: asyncpg handles dict/list serialization automatically
+    # DO NOT convert to JSON strings - asyncpg expects native Python types
+    # PostgreSQL JSONB columns work with Python dicts/lists directly
 
     # Normalize datetime fields to be timezone-naive (PostgreSQL TIMESTAMP WITHOUT TIME ZONE)
     for field_name, field_value in data.items():

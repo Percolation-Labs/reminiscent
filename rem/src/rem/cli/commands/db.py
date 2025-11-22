@@ -109,15 +109,15 @@ def calculate_checksum(file_path: Path) -> str:
 @click.option(
     "--sql-dir",
     type=click.Path(exists=True, path_type=Path),
-    default="sql",
-    help="Directory containing SQL files",
+    default=None,
+    help="Directory containing SQL files (defaults to package SQL dir)",
 )
 def migrate(
     install_only: bool,
     models_only: bool,
     background_indexes: bool,
     connection: str | None,
-    sql_dir: Path,
+    sql_dir: Path | None,
 ):
     """
     Apply database migrations.
@@ -131,6 +131,22 @@ def migrate(
         rem db migrate --models            # Entity tables only
         rem db migrate --background-indexes  # Background HNSW indexes
     """
+    # Find SQL directory - use package SQL if not specified
+    if sql_dir is None:
+        import importlib.resources
+        try:
+            # Python 3.9+
+            sql_ref = importlib.resources.files("rem") / "sql"
+            sql_dir = Path(str(sql_ref))
+        except AttributeError:
+            # Fallback: try to find sql dir relative to package
+            import rem
+            package_dir = Path(rem.__file__).parent.parent
+            sql_dir = package_dir / "sql"
+            if not sql_dir.exists():
+                # Last resort: current directory
+                sql_dir = Path("sql")
+
     conn_str = connection or get_connection_string()
 
     click.echo("REM Database Migration")
@@ -139,32 +155,37 @@ def migrate(
     click.echo(f"Connection: {conn_str.split('password')[0]}...")
     click.echo()
 
-    migrations = []
+    # Discover migrations from migrations/ directory
+    migrations_dir = sql_dir / "migrations"
 
-    # Determine which migrations to apply
     if background_indexes:
-        migrations.append(("background_indexes.sql", "Background Indexes"))
-    elif install_only:
-        migrations.append(("install.sql", "Core Infrastructure"))
-    elif models_only:
-        migrations.append(("install_models.sql", "Entity Tables"))
+        # Special case: background indexes
+        migrations = [("background_indexes.sql", "Background Indexes")]
+    elif install_only or models_only:
+        # Find specific migration
+        target_prefix = "001" if install_only else "002"
+        migration_files = sorted(migrations_dir.glob(f"{target_prefix}_*.sql"))
+        if migration_files:
+            migrations = [(f"migrations/{f.name}", f.stem.replace("_", " ").title()) for f in migration_files]
+        else:
+            migrations = []
     else:
-        # Default: apply both install and models
-        migrations.append(("install.sql", "Core Infrastructure"))
-        migrations.append(("install_models.sql", "Entity Tables"))
+        # Default: discover and apply all migrations in sorted order
+        migration_files = sorted(migrations_dir.glob("*.sql"))
+        migrations = [(f"migrations/{f.name}", f.stem.replace("_", " ").title()) for f in migration_files]
 
     # Check files exist
     for filename, description in migrations:
         file_path = sql_dir / filename
         if not file_path.exists():
             if filename == "install_models.sql":
-                click.echo(f"✗ {filename} not found", fg="red")
+                click.secho(f"✗ {filename} not found", fg="red")
                 click.echo()
-                click.echo("Generate it first with:", fg="yellow")
-                click.echo("  rem schema generate --models src/rem/models/entities", fg="yellow")
+                click.secho("Generate it first with:", fg="yellow")
+                click.secho("  rem db schema generate --models src/rem/models/entities", fg="yellow")
                 raise click.Abort()
             else:
-                click.echo(f"✗ {filename} not found", fg="red")
+                click.secho(f"✗ {filename} not found", fg="red")
                 raise click.Abort()
 
     # Apply migrations
@@ -182,7 +203,7 @@ def migrate(
         total_time += exec_time
 
         if success:
-            click.echo(f"  ✓ Applied in {exec_time:.0f}ms", fg="green")
+            click.secho(f"  ✓ Applied in {exec_time:.0f}ms", fg="green")
             # Show any NOTICE messages from the output
             for line in output.split("\n"):
                 if "NOTICE:" in line or "✓" in line:
@@ -190,10 +211,10 @@ def migrate(
                     if notice:
                         click.echo(f"    {notice}")
         else:
-            click.echo(f"  ✗ Failed", fg="red")
+            click.secho(f"  ✗ Failed", fg="red")
             click.echo()
-            click.echo("Error output:", fg="red")
-            click.echo(output, fg="red")
+            click.secho("Error output:", fg="red")
+            click.secho(output, fg="red")
             all_success = False
             break
 
@@ -202,10 +223,10 @@ def migrate(
     # Summary
     click.echo("=" * 60)
     if all_success:
-        click.echo(f"✓ All migrations applied successfully", fg="green")
+        click.secho(f"✓ All migrations applied successfully", fg="green")
         click.echo(f"  Total time: {total_time:.0f}ms")
     else:
-        click.echo(f"✗ Migration failed", fg="red")
+        click.secho(f"✗ Migration failed", fg="red")
         raise click.Abort()
 
 
@@ -244,7 +265,7 @@ def status(connection: str | None):
         if not lines or not lines[0]:
             click.echo("No migrations found")
             click.echo()
-            click.echo("Run: rem db migrate --install", fg="yellow")
+            click.secho("Run: rem db migrate --install", fg="yellow")
             return
 
         # Parse and display results
@@ -265,11 +286,11 @@ def status(connection: str | None):
     except subprocess.CalledProcessError as e:
         error = e.stderr or e.stdout or str(e)
         if "does not exist" in error or "relation" in error:
-            click.echo("✗ Migration table not found", fg="red")
+            click.secho("✗ Migration table not found", fg="red")
             click.echo()
-            click.echo("Run: rem db migrate --install", fg="yellow")
+            click.secho("Run: rem db migrate --install", fg="yellow")
         else:
-            click.echo(f"✗ Error: {error}", fg="red")
+            click.secho(f"✗ Error: {error}", fg="red")
         raise click.Abort()
 
 
@@ -302,7 +323,7 @@ def rebuild_cache(connection: str | None):
             check=True,
         )
 
-        click.echo("✓ Cache rebuilt successfully", fg="green")
+        click.secho("✓ Cache rebuilt successfully", fg="green")
 
         # Show any NOTICE messages
         for line in result.stdout.split("\n") + result.stderr.split("\n"):
@@ -313,7 +334,7 @@ def rebuild_cache(connection: str | None):
 
     except subprocess.CalledProcessError as e:
         error = e.stderr or e.stdout or str(e)
-        click.echo(f"✗ Error: {error}", fg="red")
+        click.secho(f"✗ Error: {error}", fg="red")
         raise click.Abort()
 
 

@@ -1,0 +1,102 @@
+---
+# Meeting engram with temporal moments
+kind: engram
+name: team-standup-2025-01-15
+category: meeting
+summary: Daily standup with engineering team discussing Q1 roadmap
+content: |
+  Daily standup with the engineering team. Covered three main topics:
+
+  1. REM MCP integration status (Sarah presenting)
+  2. Database migration planning (Mike)
+  3. Performance optimization blockers (Alex)
+
+  Key decisions:
+  - Move forward with CloudNativePG for production
+  - Prioritize plan mode implementation
+  - Schedule perf testing for next sprint
+
+uri: null
+timestamp: 2025-01-15T10:00:00Z
+
+metadata:
+  meeting_type: standup
+  duration_minutes: 30
+  platform: zoom
+  recording_available: true
+
+tags:
+  - meeting
+  - standup
+  - engineering
+  - q1-roadmap
+
+graph_edges:
+  - dst: sarah-chen
+    rel: attended_by
+    weight: 1.0
+    properties:
+      role: presenter
+
+  - dst: mike-johnson
+    rel: attended_by
+    weight: 1.0
+    properties:
+      role: participant
+
+  - dst: alex-rodriguez
+    rel: attended_by
+    weight: 1.0
+    properties:
+      role: participant
+
+  - dst: cloudnativepg-migration
+    rel: discussed
+    weight: 0.9
+    properties:
+      decision: approved
+
+  - dst: plan-mode-feature
+    rel: discussed
+    weight: 0.8
+    properties:
+      priority: high
+
+moments:
+  - start_time: 2025-01-15T10:00:00Z
+    end_time: 2025-01-15T10:10:00Z
+    summary: REM MCP integration update
+    speakers:
+      - sarah-chen
+    topics:
+      - mcp-integration
+      - plan-mode
+    emotion_tags:
+      - excited
+      - optimistic
+
+  - start_time: 2025-01-15T10:10:00Z
+    end_time: 2025-01-15T10:20:00Z
+    summary: Database migration discussion
+    speakers:
+      - mike-johnson
+    topics:
+      - cloudnativepg
+      - migration
+      - infrastructure
+    emotion_tags:
+      - thoughtful
+      - cautious
+
+  - start_time: 2025-01-15T10:20:00Z
+    end_time: 2025-01-15T10:30:00Z
+    summary: Performance optimization blockers
+    speakers:
+      - alex-rodriguez
+    topics:
+      - performance
+      - optimization
+      - vector-search
+    emotion_tags:
+      - concerned
+      - analytical

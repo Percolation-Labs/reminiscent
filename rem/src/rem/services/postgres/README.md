@@ -351,7 +351,7 @@ results = await service.vector_search(
 ### Initialize Service
 
 ```python
-from rem.services import PostgresService
+from rem.services.postgres import PostgresService, Repository
 
 service = PostgresService(
     connection_string="postgresql://user:pass@localhost/remdb",
@@ -360,6 +360,58 @@ service = PostgresService(
 
 await service.connect()
 ```
+
+### Using Repository Pattern
+
+**Generic Repository** for simple CRUD operations:
+
+```python
+from rem.services.postgres import Repository
+from rem.models.entities import Message, Resource
+
+# Create repository for any model
+message_repo = Repository(Message)
+resource_repo = Repository(Resource)
+
+# Create single record
+message = Message(
+    content="Hello, world!",
+    message_type="user",
+    session_id="session-123",
+    tenant_id="acme-corp"
+)
+created = await message_repo.create(message)
+
+# Batch create
+messages = [message1, message2, message3]
+created_messages = await message_repo.batch_create(messages)
+
+# Find records
+messages = await message_repo.find({
+    "session_id": "session-123",
+    "tenant_id": "acme-corp"
+}, order_by="created_at ASC", limit=100)
+
+# Get by ID
+message = await message_repo.get_by_id("msg-id", "acme-corp")
+
+# Get by session (convenience method)
+session_messages = await message_repo.get_by_session(
+    session_id="session-123",
+    tenant_id="acme-corp",
+    user_id="user-456"
+)
+
+# Count
+count = await message_repo.count({"session_id": "session-123"})
+
+# Delete (soft delete)
+deleted = await message_repo.delete("msg-id", "acme-corp")
+```
+
+**When to use Repository vs PostgresService:**
+- **Repository**: Simple CRUD, session management, high-level operations
+- **PostgresService**: Batch operations with embeddings, custom queries, performance-critical code
 
 ### Register Entity Types
 

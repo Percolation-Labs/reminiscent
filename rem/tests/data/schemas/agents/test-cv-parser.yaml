@@ -1,0 +1,116 @@
+---
+type: object
+description: |
+  Parse CV/resume documents to extract candidate information.
+
+  This agent analyzes resumes and extracts:
+  - Candidate details (name, contact, professional summary)
+  - Work experience with dates and responsibilities
+  - Education history
+  - Skills and competencies
+  - Seniority level assessment
+
+  Guidelines:
+  - Extract all mentioned skills (technical and soft skills)
+  - Infer seniority level from years of experience and titles
+  - Normalize dates to YYYY-MM format
+  - Extract contact information carefully
+
+properties:
+  candidate_name:
+    type: string
+    description: Full name of the candidate
+
+  contact_info:
+    type: object
+    properties:
+      email:
+        type: string
+      phone:
+        type: string
+      linkedin:
+        type: string
+      location:
+        type: string
+    description: Contact information
+
+  professional_summary:
+    type: string
+    description: Brief professional summary or objective
+
+  experience:
+    type: array
+    items:
+      type: object
+      properties:
+        company:
+          type: string
+        title:
+          type: string
+        start_date:
+          type: string
+        end_date:
+          type: string
+        responsibilities:
+          type: array
+          items:
+            type: string
+    description: Work experience history
+
+  education:
+    type: array
+    items:
+      type: object
+      properties:
+        institution:
+          type: string
+        degree:
+          type: string
+        field:
+          type: string
+        graduation_year:
+          type: string
+    description: Educational background
+
+  skills:
+    type: array
+    items:
+      type: string
+    description: Technical and professional skills
+
+  seniority_level:
+    type: string
+    enum: ["junior", "mid-level", "senior", "lead", "executive"]
+    description: Assessed seniority level based on experience
+
+  confidence_score:
+    type: number
+    minimum: 0
+    maximum: 1
+    description: Extraction confidence score
+
+required:
+  - candidate_name
+  - skills
+  - seniority_level
+
+json_schema_extra:
+  fully_qualified_name: rem.agents.CVParser
+  version: "1.0.0"
+  tags:
+    - recruitment
+    - cv-parsing
+    - ontology-extractor
+
+  embedding_fields:
+    - candidate_name
+    - professional_summary
+    - skills
+
+  provider_configs:
+    - provider_name: anthropic
+      model_name: claude-sonnet-4-5-20250929
+    - provider_name: openai
+      model_name: gpt-4o
+
+  category: ontology-extractor

@@ -12,13 +12,11 @@ Design Pattern:
 
 from loguru import logger
 
-from rem.services.postgres import PostgresService
 from rem.services.session.compression import SessionMessageStore
 from rem.settings import settings
 
 
 async def reload_session(
-    db: PostgresService,
     session_id: str,
     tenant_id: str,
     user_id: str | None = None,
@@ -28,7 +26,6 @@ async def reload_session(
     Reload all messages for a session from the database.
 
     Args:
-        db: Postgres service instance
         session_id: Session/conversation identifier
         tenant_id: Tenant identifier for multi-tenancy isolation
         user_id: Optional user identifier for filtering
@@ -44,7 +41,6 @@ async def reload_session(
 
         # Reload previous conversation history
         history = await reload_session(
-            db=db,
             session_id=context.session_id,
             tenant_id=context.tenant_id,
             user_id=context.user_id,
@@ -65,7 +61,7 @@ async def reload_session(
 
     try:
         # Create message store for this session
-        store = SessionMessageStore(db=db, tenant_id=tenant_id)
+        store = SessionMessageStore(tenant_id=tenant_id)
 
         # Load messages (optionally decompressed)
         messages = await store.load_session_messages(

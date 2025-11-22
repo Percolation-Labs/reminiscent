@@ -1,0 +1,106 @@
+---
+# Project note engram with resource references
+kind: engram
+name: cloudnativepg-migration-plan
+category: note
+summary: Migration plan for moving from managed PostgreSQL to CloudNativePG on EKS
+content: |
+  # CloudNativePG Migration Plan
+
+  ## Objective
+  Migrate REM system from managed PostgreSQL (RDS) to self-hosted CloudNativePG
+  running on EKS cluster.
+
+  ## Benefits
+  - Cost reduction (~40% estimated)
+  - Better integration with K8s ecosystem
+  - pgvector extension management simplified
+  - Backup/restore using K8s primitives
+  - No vendor lock-in
+
+  ## Migration Phases
+
+  ### Phase 1: Infrastructure Setup (Week 1)
+  - Deploy CloudNativePG operator via Pulumi
+  - Configure storage class (GP3 volumes)
+  - Set up backup schedule to S3
+  - Create monitoring dashboards
+
+  ### Phase 2: Testing (Week 2)
+  - Load test data into dev cluster
+  - Run performance benchmarks
+  - Validate backup/restore procedures
+  - Test failover scenarios
+
+  ### Phase 3: Production Cutover (Week 3)
+  - Final sync from RDS
+  - Update connection strings
+  - Monitor for 48 hours
+  - Decommission RDS instance
+
+  ## Risks
+  - Data loss during migration (mitigated by backup strategy)
+  - Downtime during cutover (scheduled maintenance window)
+  - Performance regression (mitigated by load testing)
+
+  ## Success Criteria
+  - Zero data loss
+  - < 1 hour downtime
+  - Performance parity with RDS
+  - All tests passing post-migration
+
+uri: null
+timestamp: 2025-01-14T16:00:00Z
+
+metadata:
+  project: cloudnativepg-migration
+  status: planning
+  owner: mike-johnson
+  estimated_weeks: 3
+  risk_level: medium
+
+tags:
+  - project
+  - migration
+  - cloudnativepg
+  - infrastructure
+  - postgres
+
+graph_edges:
+  - dst: mike-johnson
+    rel: authored_by
+    weight: 1.0
+    properties:
+      role: author
+
+  - dst: cloudnativepg-operator
+    rel: references
+    weight: 0.9
+    properties:
+      type: technology
+
+  - dst: rds-instance
+    rel: replaces
+    weight: 0.8
+    properties:
+      action: decommission
+
+  - dst: eks-cluster
+    rel: deploys_to
+    weight: 0.9
+    properties:
+      namespace: postgres
+
+  - dst: migration-runbook
+    rel: builds-on
+    weight: 0.7
+    properties:
+      relationship: implements
+
+  - dst: team-standup-2025-01-15
+    rel: discussed_in
+    weight: 0.8
+    properties:
+      decision: approved
+
+moments: []

@@ -156,6 +156,7 @@ class EngramProcessor:
             records=[resource.model_dump(mode="json")],
             model=Resource,
             table_name="resources",
+            entity_key_field="name",  # Explicit entity_key for KV store
         )
         resource_id = upsert_result["ids"][0]
         logger.info(f"Upserted resource: {resource_id}")
@@ -279,6 +280,7 @@ class EngramProcessor:
                 records=[m.model_dump(mode="json") for m in moments],
                 model=Moment,
                 table_name="moments",
+                entity_key_field="name",  # Explicit entity_key for KV store
             )
             moment_ids = upsert_result["ids"]
             logger.info(f"Upserted {len(moment_ids)} moments")

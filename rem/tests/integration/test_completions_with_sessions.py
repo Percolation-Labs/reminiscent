@@ -9,14 +9,21 @@ Tests the full flow:
 6. Subsequent requests reload full conversation
 """
 
+import os
 import uuid
 
 import pytest
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 from rem.api.main import app
-from rem.services.postgres import get_postgres_service
-from rem.services.repositories.message_repository import MessageRepository
+from rem.models.entities import Message
+from rem.services.postgres import get_postgres_service, Repository
 from rem.settings import settings
+
+# Skip all tests in this module if no LLM API key is available
+pytestmark = pytest.mark.skipif(
+    not os.getenv("OPENAI_API_KEY") and not os.getenv("ANTHROPIC_API_KEY"),
+    reason="LLM API key required for completions tests"
+)
 
 
 @pytest.fixture
@@ -49,7 +56,8 @@ async def db():
 @pytest.fixture
 async def client():
     """Create async HTTP client for API testing."""
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
 
 
@@ -57,7 +65,7 @@ async def client():
 async def test_completions_without_session(client):
     """Test basic completion without session management."""
     response = await client.post(
-        "/api/v1/chat/completions",
+        "/v1/chat/completions",
         json={
             "model": "openai:gpt-4o-mini",
             "messages": [{"role": "user", "content": "Say 'Hello'"}],
@@ -79,7 +87,7 @@ async def test_completions_without_session(client):
 async def test_completions_with_new_session(client, db, tenant_id, session_id, user_id):
     """Test completion with new session (no prior history)."""
     response = await client.post(
-        "/api/v1/chat/completions",
+        "/v1/chat/completions",
         json={
             "model": "openai:gpt-4o-mini",
             "messages": [{"role": "user", "content": "What is 2+2?"}],
@@ -97,7 +105,7 @@ async def test_completions_with_new_session(client, db, tenant_id, session_id, u
     assert "choices" in data
 
     # Verify messages saved to database
-    repo = MessageRepository(db)
+    repo = Repository(Message)
     messages = await repo.get_by_session(
         session_id=session_id, tenant_id=tenant_id, user_id=user_id
     )
@@ -116,7 +124,7 @@ async def test_completions_with_session_continuity(
     """Test multi-turn conversation with session continuity."""
     # Turn 1
     response1 = await client.post(
-        "/api/v1/chat/completions",
+        "/v1/chat/completions",
         json={
             "model": "openai:gpt-4o-mini",
             "messages": [{"role": "user", "content": "My name is Alice"}],
@@ -133,7 +141,7 @@ async def test_completions_with_session_continuity(
 
     # Turn 2 - Ask about information from Turn 1
     response2 = await client.post(
-        "/api/v1/chat/completions",
+        "/v1/chat/completions",
         json={
             "model": "openai:gpt-4o-mini",
             "messages": [{"role": "user", "content": "What is my name?"}],
@@ -154,7 +162,7 @@ async def test_completions_with_session_continuity(
     assistant_response = data2["choices"][0]["message"]["content"]
 
     # Verify full conversation saved
-    repo = MessageRepository(db)
+    repo = Repository(Message)
     messages = await repo.get_by_session(
         session_id=session_id, tenant_id=tenant_id, user_id=user_id
     )
@@ -172,7 +180,7 @@ async def test_completions_with_long_response_compression(
     """Test that long responses are compressed and stored properly."""
     # Ask for detailed explanation (likely long response)
     response = await client.post(
-        "/api/v1/chat/completions",
+        "/v1/chat/completions",
         json={
             "model": "openai:gpt-4o-mini",
             "messages": [
@@ -195,7 +203,7 @@ async def test_completions_with_long_response_compression(
     assistant_response = data["choices"][0]["message"]["content"]
 
     # Verify stored in database
-    repo = MessageRepository(db)
+    repo = Repository(Message)
     messages = await repo.get_by_session(
         session_id=session_id, tenant_id=tenant_id, user_id=user_id
     )
@@ -221,7 +229,7 @@ async def test_completions_session_isolation(client, db, tenant_id, user_id):
 
     # Conversation in session 1
     await client.post(
-        "/api/v1/chat/completions",
+        "/v1/chat/completions",
         json={
             "model": "openai:gpt-4o-mini",
             "messages": [{"role": "user", "content": "I like cats"}],
@@ -236,7 +244,7 @@ async def test_completions_session_isolation(client, db, tenant_id, user_id):
 
     # Conversation in session 2
     await client.post(
-        "/api/v1/chat/completions",
+        "/v1/chat/completions",
         json={
             "model": "openai:gpt-4o-mini",
             "messages": [{"role": "user", "content": "I like dogs"}],
@@ -250,7 +258,7 @@ async def test_completions_session_isolation(client, db, tenant_id, user_id):
     )
 
     # Verify isolation
-    repo = MessageRepository(db)
+    repo = Repository(Message)
 
     messages1 = await repo.get_by_session(
         session_id=session1, tenant_id=tenant_id, user_id=user_id
@@ -280,7 +288,7 @@ async def test_completions_tenant_isolation(client, db, user_id):
 
     # Same session ID but different tenants
     await client.post(
-        "/api/v1/chat/completions",
+        "/v1/chat/completions",
         json={
             "model": "openai:gpt-4o-mini",
             "messages": [{"role": "user", "content": "Tenant 1 message"}],
@@ -294,7 +302,7 @@ async def test_completions_tenant_isolation(client, db, user_id):
     )
 
     await client.post(
-        "/api/v1/chat/completions",
+        "/v1/chat/completions",
         json={
             "model": "openai:gpt-4o-mini",
             "messages": [{"role": "user", "content": "Tenant 2 message"}],
@@ -308,7 +316,7 @@ async def test_completions_tenant_isolation(client, db, user_id):
     )
 
     # Verify isolation
-    repo = MessageRepository(db)
+    repo = Repository(Message)
 
     messages1 = await repo.get_by_session(
         session_id=session_id, tenant_id=tenant1, user_id=user_id
@@ -330,7 +338,7 @@ async def test_completions_with_json_response_format(
 ):
     """Test completions with JSON response format and session management."""
     response = await client.post(
-        "/api/v1/chat/completions",
+        "/v1/chat/completions",
         json={
             "model": "openai:gpt-4o-mini",
             "messages": [
@@ -362,7 +370,7 @@ async def test_completions_with_json_response_format(
 async def test_completions_usage_tracking(client, tenant_id, session_id, user_id):
     """Test that token usage is tracked in responses."""
     response = await client.post(
-        "/api/v1/chat/completions",
+        "/v1/chat/completions",
         json={
             "model": "openai:gpt-4o-mini",
             "messages": [{"role": "user", "content": "Count to 5"}],

@@ -608,8 +608,12 @@ class ContentSettings(BaseSettings):
             ".docx",
             ".pptx",
             ".xlsx",
+            # Images (OCR text extraction)
+            ".png",
+            ".jpg",
+            ".jpeg",
         ],
-        description="File extensions handled by DocProvider (Kreuzberg: PDFs, Office docs)",
+        description="File extensions handled by DocProvider (Kreuzberg: PDFs, Office docs, images with OCR)",
     )
 
     supported_audio_types: list[str] = Field(
@@ -940,6 +944,11 @@ class Settings(BaseSettings):
         description="Root path for reverse proxy (e.g., /rem for ALB routing)",
     )
 
+    sql_dir: str = Field(
+        default="src/rem/sql",
+        description="Directory for SQL files and migrations",
+    )
+
     # Nested settings groups
     api: APISettings = Field(default_factory=APISettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
@@ -954,6 +963,18 @@ class Settings(BaseSettings):
     chunking: ChunkingSettings = Field(default_factory=ChunkingSettings)
     content: ContentSettings = Field(default_factory=ContentSettings)
 
+
+# Load configuration from ~/.rem/config.yaml before initializing settings
+# This allows user configuration to be merged with environment variables
+try:
+    from rem.config import load_config, merge_config_to_env
+
+    _config = load_config()
+    if _config:
+        merge_config_to_env(_config)
+except ImportError:
+    # config module not available (e.g., during initial setup)
+    pass
 
 # Global settings singleton
 settings = Settings()

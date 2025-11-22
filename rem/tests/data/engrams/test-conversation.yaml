@@ -1,0 +1,98 @@
+---
+# Conversation engram capturing multi-turn dialogue
+kind: engram
+name: schema-processing-discussion
+category: conversation
+summary: Discussion about implementing SchemaProvider for agent ingestion
+content: |
+  Conversation between Sarah and the team about implementing schema processing
+  for automatic agent ingestion.
+
+  Key points covered:
+  - SchemaProvider should detect agent/evaluator schemas by checking for
+    `type: object` and `json_schema_extra.fully_qualified_name`
+  - Follow p8fs pattern from AgentDocumentProcessor
+  - Use deterministic IDs (uuid5) for upsert behavior
+  - Register SchemaProvider first in priority order for .yaml/.json files
+  - Store full schema JSON in schemas table
+
+  Decision: Implement SchemaProvider following the existing content provider
+  pattern and register it with priority over generic text provider.
+
+uri: null
+timestamp: 2025-01-15T15:30:00Z
+
+metadata:
+  participants: 3
+  duration_minutes: 25
+  medium: slack
+  channel: engineering
+
+tags:
+  - conversation
+  - technical-discussion
+  - schema-processing
+  - agent-ingestion
+
+graph_edges:
+  - dst: sarah-chen
+    rel: participated_in
+    weight: 1.0
+    properties:
+      role: lead
+
+  - dst: schema-provider-implementation
+    rel: discusses
+    weight: 1.0
+    properties:
+      outcome: decision
+
+  - dst: p8fs-agent-processor
+    rel: references
+    weight: 0.7
+    properties:
+      type: pattern
+
+  - dst: content-service
+    rel: modifies
+    weight: 0.8
+    properties:
+      component: backend
+
+moments:
+  - start_time: 2025-01-15T15:30:00Z
+    end_time: 2025-01-15T15:40:00Z
+    summary: Problem statement and requirements
+    speakers:
+      - sarah-chen
+    topics:
+      - requirements
+      - agent-ingestion
+    emotion_tags:
+      - focused
+
+  - start_time: 2025-01-15T15:40:00Z
+    end_time: 2025-01-15T15:50:00Z
+    summary: Technical design discussion
+    speakers:
+      - sarah-chen
+      - mike-johnson
+    topics:
+      - schema-detection
+      - content-providers
+      - p8fs-patterns
+    emotion_tags:
+      - collaborative
+      - analytical
+
+  - start_time: 2025-01-15T15:50:00Z
+    end_time: 2025-01-15T15:55:00Z
+    summary: Decision and next steps
+    speakers:
+      - sarah-chen
+    topics:
+      - decision
+      - implementation
+    emotion_tags:
+      - confident
+      - decisive

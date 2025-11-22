@@ -2,9 +2,9 @@
 REM CLI entry point.
 
 Usage:
-    rem schema generate --models src/rem/models/entities --output sql/schema.sql
-    rem schema validate
-    rem migrate up
+    rem db schema generate --models src/rem/models/entities
+    rem db schema validate
+    rem db migrate up
     rem dev run-server
 """
 
@@ -28,14 +28,14 @@ def cli(verbose: bool):
 
 
 @cli.group()
-def schema():
-    """Database schema management commands."""
+def db():
+    """Database operations (schema, migrate, status, etc.)."""
     pass
 
 
-@cli.group()
-def db():
-    """Database operations (migrate, status, etc.)."""
+@db.group()
+def schema():
+    """Database schema management commands."""
     pass
 
 
@@ -65,6 +65,9 @@ from .commands.ask import register_command as register_ask_command
 from .commands.phoenix import register_command as register_phoenix_command
 from .commands.dreaming import register_commands as register_dreaming_commands
 from .commands.experiments import experiments as experiments_group
+from .commands.configure import register_command as register_configure_command
+from .commands.serve import register_command as register_serve_command
+from .commands.mcp import register_command as register_mcp_command
 
 register_schema_commands(schema)
 register_db_commands(db)
@@ -72,6 +75,9 @@ register_process_commands(process)
 register_dreaming_commands(dreaming)
 register_ask_command(cli)
 register_phoenix_command(cli)
+register_configure_command(cli)
+register_serve_command(cli)
+register_mcp_command(cli)
 cli.add_command(experiments_group)
 
 

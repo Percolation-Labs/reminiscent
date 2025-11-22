@@ -24,24 +24,27 @@ from fastmcp import FastMCP
 from ...settings import settings
 
 
-def create_mcp_server() -> FastMCP:
+def create_mcp_server(is_local: bool = False) -> FastMCP:
     """
     Create and configure the REM MCP server with all tools and resources.
+
+    Args:
+        is_local: True if running as local/stdio server (enables file ingestion from local paths)
 
     Returns:
         Configured FastMCP server instance
 
     Usage Modes:
         # Stdio mode (for local dev / Claude Desktop)
-        mcp = create_mcp_server()
+        mcp = create_mcp_server(is_local=True)
         mcp.run(transport="stdio")
 
         # HTTP mode (for production / API)
-        mcp = create_mcp_server()
+        mcp = create_mcp_server(is_local=False)
         mcp_app = mcp.http_app(path="/", transport="http", stateless_http=True)
         # Then mount: app.mount("/api/v1/mcp", mcp_app)
 
-    Design Pattern 
+    Design Pattern
     - Instructions provide LLM guidance on workflow
     - Tools implement specific operations
     - Resources provide read-only access to data
@@ -93,11 +96,13 @@ def create_mcp_server() -> FastMCP:
             "  → Found person entity with 3 graph edges\n"
             "\n"
             "Turn 2: Analyze neighborhood (PLAN mode - depth 0)\n"
-            "  TRAVERSE WITH LOOKUP \"Sarah Chen\" DEPTH 0\n"
+            "  ask_rem(\"What are Sarah Chen's connections?\", plan_mode=True)\n"
+            "  → Agent uses TRAVERSE with max_depth=0\n"
             "  → Edge summary: manages(2), authored_by(15), mentors(3)\n"
             "\n"
             "Turn 3: Selective traversal\n"
-            "  TRAVERSE manages,mentors WITH LOOKUP \"Sarah Chen\" DEPTH 2\n"
+            "  ask_rem(\"Show Sarah Chen's team hierarchy\")\n"
+            "  → Agent uses TRAVERSE with rel_type=\"manages\", max_depth=2\n"
             "  → Returns: Sarah + team hierarchy (depth 2)\n"
             "\n"
             "Turn 4: Follow reference chain\n"
@@ -114,18 +119,10 @@ def create_mcp_server() -> FastMCP:
             "AVAILABLE TOOLS\n"
             "═══════════════════════════════════════════════════════════════════════════\n"
             "\n"
-            "Core REM Operations:\n"
             "• rem_query - Execute REM queries (LOOKUP, FUZZY, SEARCH, SQL, TRAVERSE)\n"
             "• ask_rem - Natural language to REM query conversion\n"
-            "\n"
-            "Resource Management:\n"
-            "• create_resource - Create new resource with content\n"
-            "• create_moment - Create temporal narrative\n"
-            "• update_graph_edges - Add/update entity graph edges\n"
-            "\n"
-            "File Operations:\n"
-            "• upload_file - Upload file to S3 (tenant-scoped)\n"
-            "• download_file - Download file from S3\n"
+            "  - plan_mode=True: Hints agent to use TRAVERSE with depth=0 for edge analysis\n"
+            "• ingest_file - Ingest files from local paths (local server only), s3://, or https://\n"
             "\n"
             "═══════════════════════════════════════════════════════════════════════════\n"
             "AVAILABLE RESOURCES (Read-Only)\n"
@@ -134,6 +131,12 @@ def create_mcp_server() -> FastMCP:
             "Schema Information:\n"
             "• rem://schema/entities - Entity schemas (Resource, Message, User, File, Moment)\n"
             "• rem://schema/query-types - REM query type documentation\n"
+            "\n"
+            "Agent Schemas:\n"
+            "• rem://agents - List available agent schemas with descriptions and usage\n"
+            "\n"
+            "File Operations:\n"
+            "• rem://files/presigned-url - Generate presigned S3 URLs for file download\n"
             "\n"
             "System Status:\n"
             "• rem://status - System health and statistics\n"
@@ -156,25 +159,50 @@ def create_mcp_server() -> FastMCP:
     )
 
     # Register REM query tools
-    from .tools import ask_rem, create_moment, create_resource, rem_query, update_graph_edges
+    from .tools import ask_rem, ingest_file, rem_query
 
     mcp.tool()(rem_query)
     mcp.tool()(ask_rem)
 
-    # Register resource management tools
-    mcp.tool()(create_resource)
-    mcp.tool()(create_moment)
-    mcp.tool()(update_graph_edges)
+    # File ingestion tool (with local path support for local servers)
+    # Wrap to inject is_local parameter
+    from functools import wraps
 
-    # File operation tools TODO: Implement upload_file, download_file
-    # from .tools import upload_file, download_file
-    # mcp.tool()(upload_file)
-    # mcp.tool()(download_file)
+    @wraps(ingest_file)
+    async def ingest_file_wrapper(
+        file_uri: str,
+        tenant_id: str,
+        user_id: str | None = None,
+        category: str | None = None,
+        tags: list[str] | None = None,
+    ):
+        return await ingest_file(
+            file_uri=file_uri,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            category=category,
+            tags=tags,
+            is_local_server=is_local,
+        )
+
+    mcp.tool()(ingest_file_wrapper)
+
+    # Register prompts
+    from .prompts import register_prompts
+
+    register_prompts(mcp)
 
     # Register schema resources
-    from .resources import register_schema_resources, register_status_resources
+    from .resources import (
+        register_agent_resources,
+        register_file_resources,
+        register_schema_resources,
+        register_status_resources,
+    )
 
     register_schema_resources(mcp)
+    register_agent_resources(mcp)
+    register_file_resources(mcp)
     register_status_resources(mcp)
 
     return mcp

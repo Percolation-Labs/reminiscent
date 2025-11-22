@@ -52,7 +52,6 @@ from loguru import logger
 
 from ....agentic.context import AgentContext
 from ....agentic.providers.pydantic_ai import create_pydantic_ai_agent
-from ....services.postgres import get_postgres_service
 from ....services.session import SessionMessageStore, reload_session
 from ....settings import settings
 from .json_utils import extract_json_resilient
@@ -169,16 +168,13 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
     # Reload session history if session_id provided
     history = []
     if use_db:
-        db = get_postgres_service()
-        if db:
-            history = await reload_session(
-                db=db,
-                session_id=context.session_id,
-                tenant_id=context.tenant_id or "default",
-                user_id=context.user_id,
-                decompress_messages=False,  # Use compressed versions for efficiency
-            )
-            logger.info(f"Loaded {len(history)} historical messages for session {context.session_id}")
+        history = await reload_session(
+            session_id=context.session_id,
+            tenant_id=context.tenant_id or "default",
+            user_id=context.user_id,
+            decompress_messages=False,  # Use compressed versions for efficiency
+        )
+        logger.info(f"Loaded {len(history)} historical messages for session {context.session_id}")
 
     # Create agent with schema and model override
     agent = await create_pydantic_ai_agent(
@@ -231,28 +227,23 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
 
     # Save conversation messages to database
     if use_db:
-        db = get_postgres_service()
-        if db:
-            assistant_message = {
-                "role": "assistant",
-                "content": content,
-                "timestamp": datetime.utcnow().isoformat(),
-            }
+        assistant_message = {
+            "role": "assistant",
+            "content": content,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
 
-            # Store messages with compression
-            store = SessionMessageStore(
-                db=db,
-                tenant_id=context.tenant_id or "default",
-            )
+        # Store messages with compression
+        store = SessionMessageStore(tenant_id=context.tenant_id or "default")
 
-            await store.store_session_messages(
-                session_id=context.session_id,
-                messages=[user_message, assistant_message],
-                user_id=context.user_id,
-                compress=True,
-            )
+        await store.store_session_messages(
+            session_id=context.session_id,
+            messages=[user_message, assistant_message],
+            user_id=context.user_id,
+            compress=True,
+        )
 
-            logger.info(f"Saved conversation to session {context.session_id}")
+        logger.info(f"Saved conversation to session {context.session_id}")
 
     return ChatCompletionResponse(
         id=request_id,

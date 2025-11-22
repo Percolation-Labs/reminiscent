@@ -34,14 +34,14 @@ The dreaming worker processes user content to construct the REM knowledge graph 
 
 ## Design Philosophy
 
-**Lean Implementation**: Push complex utilities to services/repositories
+**Lean Implementation**: Push complex utilities to services
 - Worker focuses on orchestration and coordination
 - Complex operations delegated to REM services
 - Minimal business logic in worker code
 
 **REM-First**: Use REM system for all reads and writes
 - Query API for resource retrieval
-- Repository API for entity persistence
+- PostgresService/Repository for entity persistence
 - Embedding API for vector operations
 - Chat completions for LLM operations
 
@@ -484,7 +484,7 @@ docker run --rm \
 ## Architecture Decisions
 
 ### Why Lean?
-Complex operations belong in services/repositories, not workers. Workers orchestrate, services execute.
+Complex operations belong in services (postgres, embeddings, etc.), not workers. Workers orchestrate, services execute.
 
 ### Why REM-First?
 Using REM APIs ensures consistency, observability, and reusability. No direct database access in workers.
@@ -502,5 +502,5 @@ Workers are fault-tolerant and can restart. Spot instances reduce costs by 70% w
 
 - [Engram Specification](../../models/core/engram.py) - Core memory model
 - [REM Query API](../../api/) - Query interface
-- [REM Repository](../../repositories/) - Entity persistence
+- [PostgresService & Repository](../../services/postgres/) - Entity persistence
 - [CLAUDE.md](../../../../CLAUDE.md) - Overall architecture

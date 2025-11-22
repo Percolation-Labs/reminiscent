@@ -134,6 +134,12 @@ def generate_table_schema(
         f"CREATE INDEX idx_{table_name}_metadata ON {table_name} USING GIN (metadata);"
     )
 
+    # Add tags field (TEXT[] for list[str])
+    columns.append("tags TEXT[] DEFAULT ARRAY[]::TEXT[]")
+    indexes.append(
+        f"CREATE INDEX idx_{table_name}_tags ON {table_name} USING GIN (tags);"
+    )
+
     # Generate CREATE TABLE statement
     create_table = f"""
 CREATE TABLE IF NOT EXISTS {table_name} (
@@ -218,13 +224,16 @@ CREATE INDEX idx_{embeddings_table}_field_provider ON {embeddings_table} (field_
 # Removed to use the centralized utility instead
 
 
-def generate_kv_store_upsert(table_name: str, entity_key_field: str = "name") -> str:
+def generate_kv_store_upsert(
+    table_name: str,
+    entity_key_field: str = "name",
+) -> str:
     """
     Generate trigger to maintain KV_STORE cache on entity changes.
 
     Creates a trigger that:
     1. Extracts entity_key from entity (e.g., name, key, label)
-    2. Updates KV_STORE on INSERT/UPDATE
+    2. Updates KV_STORE on INSERT/UPDATE for O(1) lookups
     3. Removes from KV_STORE on DELETE
 
     Args:
@@ -248,14 +257,13 @@ BEGIN
         WHERE entity_id = OLD.id;
         RETURN OLD;
     ELSIF (TG_OP = 'INSERT' OR TG_OP = 'UPDATE') THEN
-        -- Upsert to KV_STORE
+        -- Upsert to KV_STORE (O(1) lookup by entity_key)
         INSERT INTO kv_store (
             entity_key,
             entity_type,
             entity_id,
             tenant_id,
             user_id,
-            content_summary,
             metadata,
             updated_at
         ) VALUES (
@@ -264,7 +272,6 @@ BEGIN
             NEW.id,
             NEW.tenant_id,
             NEW.user_id,
-            COALESCE(NEW.description, NEW.content, ''),
             NEW.metadata,
             CURRENT_TIMESTAMP
         )
@@ -272,7 +279,6 @@ BEGIN
         DO UPDATE SET
             entity_id = EXCLUDED.entity_id,
             user_id = EXCLUDED.user_id,
-            content_summary = EXCLUDED.content_summary,
             metadata = EXCLUDED.metadata,
             updated_at = CURRENT_TIMESTAMP;
 

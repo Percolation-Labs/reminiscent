@@ -79,10 +79,10 @@ Best Practices:
 - Always include timestamps in ISO 8601 format
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .inline_edge import InlineEdge
 
@@ -243,7 +243,7 @@ class Engram(BaseModel):
         description="Resource URI (s3://, seaweedfs://, etc.)",
     )
     timestamp: datetime = Field(
-        default_factory=datetime.utcnow,
+        default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None),
         description="Engram timestamp (content creation time)",
     )
     metadata: dict = Field(
@@ -331,6 +331,3 @@ class Engram(BaseModel):
         )
         self.graph_edges.append(edge)
         return edge
-
-    class Config:
-        json_encoders = {datetime: lambda v: v.isoformat()}
