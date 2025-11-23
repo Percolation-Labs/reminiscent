@@ -486,9 +486,10 @@ async def _ask_async(
 
     # Load schema using centralized utility
     # Handles both file paths and schema names automatically
+    # Falls back to database LOOKUP if not found in filesystem
     logger.info(f"Loading schema: {name} (version: {version or 'latest'})")
     try:
-        schema = load_agent_schema(name)
+        schema = load_agent_schema(name, user_id=user_id)
     except FileNotFoundError as e:
         logger.error(str(e))
         sys.exit(1)

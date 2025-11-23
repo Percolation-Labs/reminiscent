@@ -89,7 +89,88 @@ _fs_schema_cache: dict[str, dict[str, Any]] = {}
 # _db_schema_ttl: int = 300  # 5 minutes in seconds
 
 
-def load_agent_schema(schema_name_or_path: str, use_cache: bool = True) -> dict[str, Any]:
+def _load_schema_from_database(schema_name: str, user_id: str) -> dict[str, Any] | None:
+    """
+    Load schema from database using LOOKUP query.
+
+    This function is synchronous but calls async database operations.
+    It's designed to be called from load_agent_schema() which is sync.
+
+    Args:
+        schema_name: Schema name to lookup
+        user_id: User ID for data scoping
+
+    Returns:
+        Schema spec (dict) if found, None otherwise
+
+    Raises:
+        RuntimeError: If database connection fails
+    """
+    import asyncio
+
+    # Check if we're already in an async context
+    try:
+        loop = asyncio.get_running_loop()
+        # We're in an async context - can't use asyncio.run()
+        # This shouldn't happen in normal usage since load_agent_schema is called from sync contexts
+        logger.warning(
+            "Database schema lookup called from async context. "
+            "This may cause issues. Consider using async version of load_agent_schema."
+        )
+        return None
+    except RuntimeError:
+        # Not in async context - safe to use asyncio.run()
+        pass
+
+    async def _async_lookup():
+        """Async helper to query database."""
+        from rem.services.postgres import get_postgres_service
+        from rem.models.entities import Schema
+
+        db = get_postgres_service()
+        if not db:
+            logger.debug("PostgreSQL service not available for schema lookup")
+            return None
+
+        try:
+            await db.connect()
+
+            # Use REM LOOKUP query to find schema
+            query = f"LOOKUP '{schema_name}' FROM schemas"
+            logger.debug(f"Executing: {query} (user_id={user_id})")
+
+            result = await db.execute_rem_query(
+                query=query,
+                user_id=user_id,
+            )
+
+            if result and isinstance(result, dict):
+                # LOOKUP returns single entity or None
+                # Extract spec field (JSON Schema)
+                spec = result.get("spec")
+                if spec and isinstance(spec, dict):
+                    logger.debug(f"Found schema in database: {schema_name}")
+                    return spec
+
+            logger.debug(f"Schema not found in database: {schema_name}")
+            return None
+
+        except Exception as e:
+            logger.debug(f"Database schema lookup error: {e}")
+            return None
+        finally:
+            await db.disconnect()
+
+    # Run async lookup in new event loop
+    return asyncio.run(_async_lookup())
+
+
+def load_agent_schema(
+    schema_name_or_path: str,
+    use_cache: bool = True,
+    user_id: str | None = None,
+    enable_db_fallback: bool = True,
+) -> dict[str, Any]:
     """
     Load agent schema from YAML file with unified search logic and caching.
 
@@ -112,17 +193,20 @@ def load_agent_schema(schema_name_or_path: str, use_cache: bool = True) -> dict[
     5. Package resources: schemas/agents/examples/{name}.yaml
     6. Package resources: schemas/evaluators/{name}.yaml
     7. Package resources: schemas/{name}.yaml
+    8. Database LOOKUP: schemas table (if enable_db_fallback=True and user_id provided)
 
     Args:
         schema_name_or_path: Schema name or file path
             Examples: "rem-query-agent", "contract-analyzer", "./my-schema.yaml"
         use_cache: If True, uses in-memory cache for filesystem schemas
+        user_id: User ID for database schema lookup (required for DB fallback)
+        enable_db_fallback: If True, falls back to database LOOKUP when file not found
 
     Returns:
         Agent schema as dictionary
 
     Raises:
-        FileNotFoundError: If schema not found in any search location
+        FileNotFoundError: If schema not found in any search location (filesystem + database)
         yaml.YAMLError: If schema file is invalid YAML
 
     Examples:
@@ -134,6 +218,9 @@ def load_agent_schema(schema_name_or_path: str, use_cache: bool = True) -> dict[
         >>>
         >>> # Load evaluator schema (cached)
         >>> schema = load_agent_schema("rem-lookup-correctness")
+        >>>
+        >>> # Load custom user schema from database
+        >>> schema = load_agent_schema("my-custom-agent", user_id="user-123")
     """
     # Normalize the name for cache key
     cache_key = str(schema_name_or_path).replace('agents/', '').replace('schemas/', '').replace('evaluators/', '').replace('core/', '').replace('examples/', '')
@@ -185,13 +272,33 @@ def load_agent_schema(schema_name_or_path: str, use_cache: bool = True) -> dict[
             logger.debug(f"Could not load from {search_path}: {e}")
             continue
 
-    # 4. Schema not found in any location
+    # 4. Try database LOOKUP fallback (if enabled and user_id provided)
+    if enable_db_fallback and user_id:
+        try:
+            logger.debug(f"Attempting database LOOKUP for schema: {base_name} (user_id={user_id})")
+            db_schema = _load_schema_from_database(base_name, user_id)
+            if db_schema:
+                logger.info(f"✅ Loaded schema from database: {base_name} (user_id={user_id})")
+                return db_schema
+        except Exception as e:
+            logger.debug(f"Database schema lookup failed: {e}")
+            # Fall through to error below
+
+    # 5. Schema not found in any location
     searched_paths = [pattern.format(name=base_name) for pattern in SCHEMA_SEARCH_PATHS]
+    db_search_note = ""
+    if enable_db_fallback:
+        if user_id:
+            db_search_note = f"\n  - Database: LOOKUP '{base_name}' FROM schemas WHERE user_id='{user_id}' (no match)"
+        else:
+            db_search_note = "\n  - Database: (skipped - no user_id provided)"
+
     raise FileNotFoundError(
         f"Schema not found: {schema_name_or_path}\n"
         f"Searched locations:\n"
         f"  - Exact path: {path}\n"
         f"  - Package resources: {', '.join(searched_paths)}"
+        f"{db_search_note}"
     )
 
 

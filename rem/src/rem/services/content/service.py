@@ -159,12 +159,21 @@ class ContentService:
 
             extracted_content = provider.extract(content_bytes, metadata)
 
-            return {
+            # Build result with standard fields
+            result = {
                 "uri": uri,
                 "content": extracted_content["text"],
                 "metadata": {**metadata, **extracted_content.get("metadata", {})},
                 "provider": provider.name,
             }
+
+            # Preserve schema-specific fields if present (from SchemaProvider)
+            if "is_schema" in extracted_content:
+                result["is_schema"] = extracted_content["is_schema"]
+            if "schema_data" in extracted_content:
+                result["schema_data"] = extracted_content["schema_data"]
+
+            return result
 
         except ClientError as e:
             error_code = e.response.get("Error", {}).get("Code", "")
@@ -221,12 +230,21 @@ class ContentService:
         provider = self._get_provider(file_path.suffix)
         extracted_content = provider.extract(content_bytes, metadata)
 
-        return {
+        # Build result with standard fields
+        result = {
             "uri": str(file_path.absolute()),
             "content": extracted_content["text"],
             "metadata": {**metadata, **extracted_content.get("metadata", {})},
             "provider": provider.name,
         }
+
+        # Preserve schema-specific fields if present (from SchemaProvider)
+        if "is_schema" in extracted_content:
+            result["is_schema"] = extracted_content["is_schema"]
+        if "schema_data" in extracted_content:
+            result["schema_data"] = extracted_content["schema_data"]
+
+        return result
 
     def _get_provider(self, suffix: str) -> ContentProvider:
         """Get content provider for file extension."""
@@ -470,8 +488,9 @@ class ContentService:
         file_suffix = Path(uri).suffix.lower()
         if file_suffix in ['.yaml', '.yml', '.json']:
             # Check if schema provider detected a valid schema
-            if result.get('metadata', {}).get('is_schema'):
-                logger.info(f"🔧 Custom provider flow initiated: kind={result['metadata'].get('kind')} for {filename}")
+            # is_schema flag is at top level of result (preserved from SchemaProvider)
+            if result.get('is_schema'):
+                logger.info(f"🔧 Custom provider flow initiated: kind={result.get('metadata', {}).get('kind')} for {filename}")
                 return await self._process_schema(result, uri, user_id)
 
             # Check for engram kind in raw data

@@ -167,9 +167,196 @@ curl -X POST http://localhost:8000/api/v1/chat/completions \
 - [REM Query Dialect](#rem-query-dialect) - LOOKUP, SEARCH, TRAVERSE, SQL query types
 - [API Endpoints](#api-endpoints) - OpenAI-compatible chat completions, MCP server
 - [CLI Reference](#cli-reference) - Complete command-line interface documentation
+- [Bring Your Own Agent](#bring-your-own-agent) - Create custom agents with your own prompts and tools
 - [Production Deployment](#production-deployment) - AWS EKS with Kubernetes
 
 **Sample Data**: Test data with users, resources, and moments is at `tests/data/seed/test-user-data.yaml`
+
+---
+
+## Bring Your Own Agent
+
+REM allows you to create **custom agents** with your own system prompts, tools, and output schemas. Custom agents are stored in the database and dynamically loaded when referenced, enabling **no-code agent creation** without modifying the codebase.
+
+### How It Works
+
+1. **Define Agent Schema** - Create a YAML file with your agent's prompt, tools, and output structure
+2. **Ingest Schema** - Use `rem process ingest` to store the schema in the database
+3. **Use Your Agent** - Reference your agent by name with `rem ask <agent-name> "query"`
+
+When you run `rem ask my-agent "query"`, REM:
+1. Checks if `my-agent` exists in the filesystem (`schemas/agents/`)
+2. If not found, performs a **LOOKUP** query on the `schemas` table in the database
+3. Loads the schema dynamically and creates a Pydantic AI agent
+4. Runs your query with the custom agent
+
+### Expected Behavior
+
+**Schema Ingestion Flow** (`rem process ingest my-agent.yaml`):
+- Parse YAML file to extract JSON Schema content
+- Extract `json_schema_extra.kind` field → maps to `category` column
+- Extract `json_schema_extra.provider_configs` → stores provider configurations
+- Extract `json_schema_extra.embedding_fields` → stores semantic search fields
+- Create `Schema` entity in `schemas` table with `user_id` scoping
+- Schema is now queryable via `LOOKUP "my-agent" FROM schemas`
+
+**Agent Loading Flow** (`rem ask my-agent "query"`):
+1. `load_agent_schema("my-agent")` checks filesystem cache → miss
+2. Falls back to database: `LOOKUP "my-agent" FROM schemas WHERE user_id = '<user-id>'`
+3. Returns `Schema.spec` (JSON Schema dict) from database
+4. `create_agent()` factory creates Pydantic AI agent from schema
+5. Agent runs with tools specified in `json_schema_extra.tools`
+6. Returns structured output defined in `properties` field
+
+### Quick Example
+
+**Step 1: Create Agent Schema** (`my-research-assistant.yaml`)
+
+```yaml
+type: object
+description: |
+  You are a research assistant that helps users find and analyze documents.
+
+  Use the search_rem tool to find relevant documents, then analyze and summarize them.
+  Be concise and cite specific documents in your responses.
+
+properties:
+  summary:
+    type: string
+    description: A concise summary of findings
+  sources:
+    type: array
+    items:
+      type: string
+    description: List of document labels referenced
+
+required:
+  - summary
+  - sources
+
+json_schema_extra:
+  kind: agent
+  name: research-assistant
+  version: 1.0.0
+  tools:
+    - search_rem
+    - lookup_rem
+  resources: []
+```
+
+**For more examples**, see:
+- Simple agent (no tools): `src/rem/schemas/agents/examples/simple.yaml`
+- Agent with REM tools: `src/rem/schemas/agents/core/rem-query-agent.yaml`
+- Ontology extractor: `src/rem/schemas/agents/examples/cv-parser.yaml`
+
+**Step 2: Ingest Schema into Database**
+
+```bash
+# Ingest the schema (stores in database schemas table)
+rem process ingest my-research-assistant.yaml \
+  --user-id my-user \
+  --category agents \
+  --tags custom,research
+
+# Verify schema is in database (should show schema details)
+rem ask "LOOKUP 'my-research-assistant' FROM schemas" --user-id my-user
+```
+
+**Step 3: Use Your Custom Agent**
+
+```bash
+# Run a query with your custom agent
+rem ask research-assistant "Find documents about machine learning architecture" \
+  --user-id my-user
+
+# With streaming
+rem ask research-assistant "Summarize recent API design documents" \
+  --user-id my-user \
+  --stream
+
+# With session continuity
+rem ask research-assistant "What did we discuss about ML?" \
+  --user-id my-user \
+  --session-id abc-123
+```
+
+### Agent Schema Structure
+
+Every agent schema must include:
+
+**Required Fields:**
+- `type: object` - JSON Schema type (always "object")
+- `description` - System prompt with instructions for the agent
+- `properties` - Output schema defining structured response fields
+
+**Optional Metadata** (`json_schema_extra`):
+- `kind` - Agent category ("agent", "evaluator", etc.) → maps to `Schema.category`
+- `name` - Agent identifier (used for LOOKUP)
+- `version` - Semantic version (e.g., "1.0.0")
+- `tools` - List of MCP tools to load (e.g., `["search_rem", "lookup_rem"]`)
+- `resources` - List of MCP resources to expose (e.g., `["user_profile"]`)
+- `provider_configs` - Multi-provider testing configurations (for ontology extractors)
+- `embedding_fields` - Fields to embed for semantic search (for ontology extractors)
+
+### Available MCP Tools
+
+REM provides **5 built-in MCP tools** your agents can use:
+
+| Tool | Purpose | Example |
+|------|---------|---------|
+| `search_rem` | Semantic vector search | `SEARCH "ML architecture" FROM resources LIMIT 10` |
+| `lookup_rem` | O(1) exact lookup by label | `LOOKUP "sarah-chen" FROM resources` |
+| `traverse_rem` | Graph traversal | `TRAVERSE FROM "project-x" TYPE "references" DEPTH 2` |
+| `query_rem` | Execute REM queries (LOOKUP, SEARCH, TRAVERSE, SQL) | Any REM query |
+| `ask_rem` | Iterated retrieval with query evolution | Natural language questions |
+
+**Tool Reference**: Tools are defined in `src/rem/api/mcp_router/tools.py`
+
+### Multi-User Isolation
+
+Custom agents are **scoped by `user_id`**, ensuring complete data isolation:
+
+```bash
+# User A creates a custom agent
+rem process ingest my-agent.yaml --user-id user-a --category agents
+
+# User B cannot see User A's agent
+rem ask my-agent "test" --user-id user-b
+# ❌ Error: Schema not found (LOOKUP returns no results for user-b)
+
+# User A can use their agent
+rem ask my-agent "test" --user-id user-a
+# ✅ Works - LOOKUP finds schema for user-a
+```
+
+### Advanced: Ontology Extractors
+
+Custom agents can also be used as **ontology extractors** to extract structured knowledge from files. See [CLAUDE.md](../CLAUDE.md#ontology-extraction-pattern) for details on:
+- Multi-provider testing (`provider_configs`)
+- Semantic search configuration (`embedding_fields`)
+- File matching rules (`OntologyConfig`)
+- Dreaming workflow integration
+
+### Troubleshooting
+
+**Schema not found error:**
+```bash
+# Check if schema was ingested correctly
+rem ask "SEARCH 'my-agent' FROM schemas" --user-id my-user
+
+# List all schemas for your user
+rem ask "SELECT name, category, created_at FROM schemas ORDER BY created_at DESC LIMIT 10" --user-id my-user
+```
+
+**Agent not loading tools:**
+- Verify `json_schema_extra.tools` lists correct tool names
+- Check MCP tool names in `src/rem/api/mcp_router/tools.py`
+- Tools are case-sensitive: use `search_rem`, not `Search_REM`
+
+**Agent not returning structured output:**
+- Ensure `properties` field defines all expected output fields
+- Use `required` field to mark mandatory fields
+- Check agent response with `--stream` disabled to see full JSON output
 
 ---
 
