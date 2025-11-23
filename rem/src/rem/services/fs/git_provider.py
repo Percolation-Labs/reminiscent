@@ -169,8 +169,18 @@ import shutil
 from urllib.parse import urlparse, parse_qs
 
 from loguru import logger
-from git import Repo, GitCommandError
-from git.exc import InvalidGitRepositoryError, NoSuchPathError
+
+# Optional GitPython dependency
+try:
+    from git import Repo, GitCommandError
+    from git.exc import InvalidGitRepositoryError, NoSuchPathError
+    GitPython_available = True
+except ImportError:
+    GitPython_available = False
+    Repo = None  # type: ignore[assignment,misc]
+    GitCommandError = Exception  # type: ignore[assignment,misc]
+    InvalidGitRepositoryError = Exception  # type: ignore[assignment,misc]
+    NoSuchPathError = Exception  # type: ignore[assignment,misc]
 
 from rem.settings import settings
 
@@ -310,6 +320,9 @@ class GitProvider:
             raise ValueError(
                 "Git repository URL not provided. Set GIT__DEFAULT_REPO_URL or pass repo_url argument."
             )
+
+        # Type guard: repo_url is guaranteed to be str after the check above
+        assert self.repo_url is not None
 
         self.branch = branch or settings.git.default_branch
         self.cache_dir = Path(cache_dir or settings.git.cache_dir)
@@ -454,6 +467,9 @@ class GitProvider:
         env = self._setup_git_ssh()
         repo_url = self.repo_url
 
+        if not repo_url:
+            raise ValueError("repo_url is required for cloning")
+
         # If HTTPS, inject PAT
         if repo_url.startswith("https://") or repo_url.startswith("http://"):
             repo_url = self._setup_git_https(repo_url)
@@ -484,17 +500,23 @@ class GitProvider:
                 logger.info(f"Cloning repo {self.repo_url} to {repo_path}")
                 repo_path.mkdir(parents=True, exist_ok=True)
 
-                clone_kwargs = {
-                    "to_path": str(repo_path),
-                    "branch": ref,
-                    "env": env,
-                }
-
+                # Clone with explicit arguments (mypy-safe)
                 if self.shallow:
-                    clone_kwargs["depth"] = 1
                     logger.debug("Using shallow clone (--depth=1)")
-
-                repo = Repo.clone_from(repo_url, **clone_kwargs)
+                    repo = Repo.clone_from(
+                        repo_url,
+                        to_path=str(repo_path),
+                        branch=ref,
+                        env=env,
+                        depth=1,
+                    )
+                else:
+                    repo = Repo.clone_from(
+                        repo_url,
+                        to_path=str(repo_path),
+                        branch=ref,
+                        env=env,
+                    )
                 logger.info(f"Successfully cloned repo to {repo_path}")
 
                 return repo

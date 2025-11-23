@@ -21,10 +21,33 @@ Processing Flow:
 See: /Users/sirsh/code/p8fs-modules/p8fs/docs/04 engram-specification.md
 """
 
+"""
+Engram Processor for REM.
+
+Processes engram YAML/JSON files into Resources and Moments following
+the p8fs-modules engram specification.
+
+Key Design Principles:
+- Engrams ARE Resources (category="engram")
+- Human-friendly labels in graph edges (not UUIDs)
+- Upsert with JSON merge behavior (never overwrite)
+- Dual indexing handled by repository (SQL + embeddings + KV)
+- Moment attachment via part_of relationship
+
+Processing Flow:
+1. Parse YAML/JSON engram
+2. Create Resource from top-level engram fields
+3. Upsert Resource (triggers embeddings + KV store population)
+4. Create Moments from moments array
+5. Link moments to parent engram via graph edges
+
+See: /Users/sirsh/code/p8fs-modules/p8fs/docs/04 engram-specification.md
+"""
+
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, cast # Added cast
 
 import yaml
 

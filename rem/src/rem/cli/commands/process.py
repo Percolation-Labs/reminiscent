@@ -10,10 +10,95 @@ from loguru import logger
 from rem.services.content import ContentService
 
 
+@click.command(name="ingest")
+@click.argument("file_path", type=click.Path(exists=True))
+@click.option("--user-id", required=True, help="User ID to own the file")
+@click.option("--category", help="Optional file category")
+@click.option("--tags", help="Optional comma-separated tags")
+def process_ingest(
+    file_path: str,
+    user_id: str,
+    category: str | None,
+    tags: str | None,
+):
+    """
+    Ingest a file into REM (storage + parsing + embedding).
+
+    This command performs the full ingestion pipeline:
+    1. Reads the file from the local path.
+    2. Stores it in the configured storage (local/S3).
+    3. Parses the content.
+    4. Chunks and embeds the content into Resources.
+    5. Creates a File entity record.
+
+    Examples:
+        rem process ingest sample.pdf --user-id user-123
+        rem process ingest contract.docx --user-id user-123 --category legal --tags contract,2023
+    """
+    import asyncio
+    from ...services.content import ContentService
+
+    async def _ingest():
+        # Initialize ContentService with repositories for proper resource saving
+        from rem.services.postgres import get_postgres_service
+        from rem.services.postgres.repository import Repository
+        from rem.models.entities import File, Resource
+
+        db = get_postgres_service()
+        if not db:
+            raise RuntimeError("PostgreSQL service not available")
+        await db.connect()
+
+        try:
+            file_repo = Repository(File, "files", db=db)
+            resource_repo = Repository(Resource, "resources", db=db)
+            service = ContentService(file_repo=file_repo, resource_repo=resource_repo)
+
+            tag_list = tags.split(",") if tags else None
+
+            logger.info(f"Ingesting file: {file_path} for user: {user_id}")
+            result = await service.ingest_file(
+                file_uri=file_path,
+                user_id=user_id,
+                category=category,
+                tags=tag_list,
+                is_local_server=True, # CLI is local
+            )
+
+            if result.get("processing_status") == "completed":
+                logger.success(f"File ingested successfully: {result['file_name']}")
+                logger.info(f"File ID: {result['file_id']}")
+                logger.info(f"Resources created: {result['resources_created']}")
+                logger.info(f"Status: {result['processing_status']}")
+            else:
+                logger.error(f"Ingestion failed: {result.get('message', 'Unknown error')}")
+                sys.exit(1)
+
+        except Exception as e:
+            logger.error(f"Error during ingestion: {e}")
+            sys.exit(1)
+        finally:
+            # Wait for global embedding worker to finish queued tasks
+            from rem.services.embeddings.worker import get_global_embedding_worker
+            try:
+                worker = get_global_embedding_worker()
+                if worker and worker.running and not worker.task_queue.empty():
+                    logger.info(f"Waiting for {worker.task_queue.qsize()} embedding tasks to complete...")
+                    # Worker.stop() waits for queue to drain (see worker.py line ~148)
+                    await worker.stop()
+            except RuntimeError:
+                # Worker doesn't exist yet - no tasks queued
+                pass
+
+            await db.disconnect()
+
+    asyncio.run(_ingest())
+
 def register_commands(group: click.Group):
     """Register process commands."""
     group.add_command(process_uri)
     group.add_command(process_files)
+    group.add_command(process_ingest)
 
 
 @click.command(name="uri")

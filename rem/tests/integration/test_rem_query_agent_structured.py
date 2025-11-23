@@ -18,6 +18,7 @@ Run with:
 Or directly:
     python tests/integration/test_rem_query_agent_structured.py
 """
+from rem.settings import settings
 
 import asyncio
 import os
@@ -55,7 +56,7 @@ async def create_agent():
     context = AgentContext(
         agent_schema_uri="rem-query-agent.yaml",  # Will be loaded from schema override
         tenant_id="test-tenant",
-        user_id="test-user"
+        user_id=settings.test.effective_user_id
     )
 
     # Create agent with schema override

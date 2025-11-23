@@ -71,29 +71,34 @@ def serve_command(
     # Import settings to trigger config loading
     from rem.settings import settings
 
-    # Build uvicorn config
-    uvicorn_config = {
-        "app": "rem.api.main:app",
-        "host": host or settings.api.host,
-        "port": port or settings.api.port,
-        "log_level": log_level or settings.api.log_level,
-    }
-
-    # Reload or workers (mutually exclusive)
-    if reload is not None:
-        uvicorn_config["reload"] = reload
-    elif workers is not None:
-        uvicorn_config["workers"] = workers
-    else:
-        # Use settings defaults
-        if settings.api.reload:
-            uvicorn_config["reload"] = True
-        else:
-            uvicorn_config["workers"] = settings.api.workers
+    # Determine reload/workers (mutually exclusive)
+    use_reload = reload if reload is not None else (settings.api.reload if workers is None else False)
+    use_workers = workers if workers is not None else (settings.api.workers if not use_reload else None)
 
     # Start server
-    logger.info(f"Starting REM API server at http://{uvicorn_config['host']}:{uvicorn_config['port']}")
-    uvicorn.run(**uvicorn_config)
+    final_host = host or settings.api.host
+    final_port = port or settings.api.port
+    final_log_level = log_level or settings.api.log_level
+
+    logger.info(f"Starting REM API server at http://{final_host}:{final_port}")
+
+    # Call uvicorn.run with explicit parameters to satisfy type checker
+    if use_reload:
+        uvicorn.run(
+            "rem.api.main:app",
+            host=final_host,
+            port=final_port,
+            log_level=final_log_level,
+            reload=True,
+        )
+    else:
+        uvicorn.run(
+            "rem.api.main:app",
+            host=final_host,
+            port=final_port,
+            log_level=final_log_level,
+            workers=use_workers,
+        )
 
 
 def register_command(cli_group):

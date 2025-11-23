@@ -40,6 +40,6 @@
       content: High level plan...
       category: document
       graph_edges:
-        - dst: meeting-notes
+        - dst: Meeting Notes
           rel_type: referenced_by
           weight: 0.5

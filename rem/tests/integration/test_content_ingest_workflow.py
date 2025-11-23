@@ -76,7 +76,7 @@ async def test_ingest_file_full_workflow(postgres_service):
     content_service = ContentService(file_repo=file_repo, resource_repo=resource_repo)
 
     # Test parameters
-    user_id = "test-user"
+    user_id=settings.test.effective_user_id
 
     # Clean up any existing data for this test
     await postgres_service.execute(

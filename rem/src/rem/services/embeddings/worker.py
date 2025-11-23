@@ -46,6 +46,34 @@ class EmbeddingTask(BaseModel):
     model: str = "text-embedding-3-small"
 
 
+# Global singleton worker instance
+_global_worker: Optional["EmbeddingWorker"] = None
+
+
+def get_global_embedding_worker(postgres_service: Any = None) -> "EmbeddingWorker":
+    """
+    Get or create global embedding worker singleton.
+
+    Worker lives independently of any single PostgresService instance.
+    Multiple services can share the same worker.
+
+    Args:
+        postgres_service: PostgresService instance (required on first call)
+
+    Returns:
+        Global EmbeddingWorker instance
+    """
+    global _global_worker
+
+    if _global_worker is None:
+        if postgres_service is None:
+            raise RuntimeError("Must provide postgres_service on first call to get_global_embedding_worker")
+        _global_worker = EmbeddingWorker(postgres_service=postgres_service)
+        logger.info("Created global EmbeddingWorker singleton")
+
+    return _global_worker
+
+
 class EmbeddingWorker:
     """
     Background worker for generating embeddings.
@@ -110,11 +138,29 @@ class EmbeddingWorker:
         logger.info("EmbeddingWorker started")
 
     async def stop(self) -> None:
-        """Stop worker pool gracefully."""
+        """Stop worker pool gracefully - processes remaining queue before stopping."""
         if not self.running:
             return
 
-        logger.info("Stopping EmbeddingWorker")
+        queue_size = self.task_queue.qsize()
+        logger.info(f"Stopping EmbeddingWorker (processing {queue_size} queued tasks first)")
+
+        # Wait for queue to drain (with timeout)
+        max_wait = 30  # 30 seconds max
+        waited = 0.0
+        while not self.task_queue.empty() and waited < max_wait:
+            await asyncio.sleep(0.5)
+            waited += 0.5
+
+        if not self.task_queue.empty():
+            remaining = self.task_queue.qsize()
+            logger.warning(
+                f"EmbeddingWorker timeout: {remaining} tasks remaining after {max_wait}s"
+            )
+            raise RuntimeError(
+                f"{remaining} embedding tasks did not complete within {max_wait}s timeout"
+            )
+
         self.running = False
 
         # Cancel all workers
@@ -238,6 +284,7 @@ class EmbeddingWorker:
             )
 
             # Upsert to database
+            logger.info(f"Upserting {len(embeddings)} embeddings to database...")
             await self._upsert_embeddings(batch, embeddings)
 
             logger.info(
@@ -247,6 +294,10 @@ class EmbeddingWorker:
 
         except Exception as e:
             logger.error(f"Failed to process embedding batch: {e}", exc_info=True)
+            # Re-raise to signal failure - embeddings MUST NOT fail silently
+            raise RuntimeError(
+                f"Embedding generation failed for {len(batch)} resources: {e}"
+            ) from e
 
     async def _generate_embeddings_api(
         self, texts: list[str], provider: str, model: str
@@ -358,7 +409,7 @@ class EmbeddingWorker:
                     ),
                 )
 
-                logger.debug(
+                logger.info(
                     f"Upserted embedding: {task.table_name}.{task.entity_id}.{task.field_name}"
                 )
 

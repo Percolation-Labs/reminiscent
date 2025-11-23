@@ -1,9 +1,9 @@
 -- REM Model Schema (install_models.sql)
 -- Generated from Pydantic models
 -- Source directory: src/rem/models/entities
--- Generated at: 2025-11-21T22:20:29.773072
+-- Generated at: 2025-11-23T00:04:23.989467
 --
--- DO NOT EDIT MANUALLY - Regenerate with: rem schema generate
+-- DO NOT EDIT MANUALLY - Regenerate with: rem db schema generate
 --
 -- This script creates:
 -- 1. Primary entity tables
@@ -19,11 +19,11 @@ DO $$
 BEGIN
     -- Check that install.sql has been run
     IF NOT EXISTS (SELECT 1 FROM pg_tables WHERE tablename = 'kv_store') THEN
-        RAISE EXCEPTION 'KV_STORE table not found. Run sql/install.sql first.';
+        RAISE EXCEPTION 'KV_STORE table not found. Run migrations/001_install.sql first.';
     END IF;
 
     IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') THEN
-        RAISE EXCEPTION 'pgvector extension not found. Run sql/install.sql first.';
+        RAISE EXCEPTION 'pgvector extension not found. Run migrations/001_install.sql first.';
     END IF;
 
     RAISE NOTICE 'Prerequisites check passed';
@@ -106,14 +106,16 @@ BEGIN
             tenant_id,
             user_id,
             metadata,
+            graph_edges,
             updated_at
         ) VALUES (
-            NEW.id,
+            NEW.name::VARCHAR,
             'users',
             NEW.id,
             NEW.tenant_id,
             NEW.user_id,
             NEW.metadata,
+            COALESCE(NEW.graph_edges, '[]'::jsonb),
             CURRENT_TIMESTAMP
         )
         ON CONFLICT (tenant_id, entity_key)
@@ -121,6 +123,7 @@ BEGIN
             entity_id = EXCLUDED.entity_id,
             user_id = EXCLUDED.user_id,
             metadata = EXCLUDED.metadata,
+            graph_edges = EXCLUDED.graph_edges,
             updated_at = CURRENT_TIMESTAMP;
 
         RETURN NEW;
@@ -142,7 +145,7 @@ CREATE TABLE IF NOT EXISTS image_resources (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id VARCHAR(100) NOT NULL,
     user_id VARCHAR(256),
-    name VARCHAR(256) NOT NULL,
+    name VARCHAR(256),
     uri VARCHAR(256),
     ordinal INTEGER,
     content TEXT,
@@ -216,14 +219,16 @@ BEGIN
             tenant_id,
             user_id,
             metadata,
+            graph_edges,
             updated_at
         ) VALUES (
-            NEW.uri,
+            NEW.name::VARCHAR,
             'image_resources',
             NEW.id,
             NEW.tenant_id,
             NEW.user_id,
             NEW.metadata,
+            COALESCE(NEW.graph_edges, '[]'::jsonb),
             CURRENT_TIMESTAMP
         )
         ON CONFLICT (tenant_id, entity_key)
@@ -231,6 +236,7 @@ BEGIN
             entity_id = EXCLUDED.entity_id,
             user_id = EXCLUDED.user_id,
             metadata = EXCLUDED.metadata,
+            graph_edges = EXCLUDED.graph_edges,
             updated_at = CURRENT_TIMESTAMP;
 
         RETURN NEW;
@@ -252,7 +258,7 @@ CREATE TABLE IF NOT EXISTS moments (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id VARCHAR(100) NOT NULL,
     user_id VARCHAR(256),
-    name VARCHAR(256) NOT NULL,
+    name VARCHAR(256),
     moment_type VARCHAR(256),
     category VARCHAR(256),
     starts_timestamp TIMESTAMP NOT NULL,
@@ -321,14 +327,16 @@ BEGIN
             tenant_id,
             user_id,
             metadata,
+            graph_edges,
             updated_at
         ) VALUES (
-            NEW.id,
+            NEW.name::VARCHAR,
             'moments',
             NEW.id,
             NEW.tenant_id,
             NEW.user_id,
             NEW.metadata,
+            COALESCE(NEW.graph_edges, '[]'::jsonb),
             CURRENT_TIMESTAMP
         )
         ON CONFLICT (tenant_id, entity_key)
@@ -336,6 +344,7 @@ BEGIN
             entity_id = EXCLUDED.entity_id,
             user_id = EXCLUDED.user_id,
             metadata = EXCLUDED.metadata,
+            graph_edges = EXCLUDED.graph_edges,
             updated_at = CURRENT_TIMESTAMP;
 
         RETURN NEW;
@@ -392,14 +401,16 @@ BEGIN
             tenant_id,
             user_id,
             metadata,
+            graph_edges,
             updated_at
         ) VALUES (
-            NEW.id,
+            NEW.id::VARCHAR,
             'persons',
             NEW.id,
             NEW.tenant_id,
             NEW.user_id,
             NEW.metadata,
+            COALESCE(NEW.graph_edges, '[]'::jsonb),
             CURRENT_TIMESTAMP
         )
         ON CONFLICT (tenant_id, entity_key)
@@ -407,6 +418,7 @@ BEGIN
             entity_id = EXCLUDED.entity_id,
             user_id = EXCLUDED.user_id,
             metadata = EXCLUDED.metadata,
+            graph_edges = EXCLUDED.graph_edges,
             updated_at = CURRENT_TIMESTAMP;
 
         RETURN NEW;
@@ -428,7 +440,7 @@ CREATE TABLE IF NOT EXISTS resources (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id VARCHAR(100) NOT NULL,
     user_id VARCHAR(256),
-    name VARCHAR(256) NOT NULL,
+    name VARCHAR(256),
     uri VARCHAR(256),
     ordinal INTEGER,
     content TEXT,
@@ -494,14 +506,16 @@ BEGIN
             tenant_id,
             user_id,
             metadata,
+            graph_edges,
             updated_at
         ) VALUES (
-            NEW.uri,
+            NEW.name::VARCHAR,
             'resources',
             NEW.id,
             NEW.tenant_id,
             NEW.user_id,
             NEW.metadata,
+            COALESCE(NEW.graph_edges, '[]'::jsonb),
             CURRENT_TIMESTAMP
         )
         ON CONFLICT (tenant_id, entity_key)
@@ -509,6 +523,7 @@ BEGIN
             entity_id = EXCLUDED.entity_id,
             user_id = EXCLUDED.user_id,
             metadata = EXCLUDED.metadata,
+            graph_edges = EXCLUDED.graph_edges,
             updated_at = CURRENT_TIMESTAMP;
 
         RETURN NEW;
@@ -592,14 +607,16 @@ BEGIN
             tenant_id,
             user_id,
             metadata,
+            graph_edges,
             updated_at
         ) VALUES (
-            NEW.id,
+            NEW.id::VARCHAR,
             'messages',
             NEW.id,
             NEW.tenant_id,
             NEW.user_id,
             NEW.metadata,
+            COALESCE(NEW.graph_edges, '[]'::jsonb),
             CURRENT_TIMESTAMP
         )
         ON CONFLICT (tenant_id, entity_key)
@@ -607,6 +624,7 @@ BEGIN
             entity_id = EXCLUDED.entity_id,
             user_id = EXCLUDED.user_id,
             metadata = EXCLUDED.metadata,
+            graph_edges = EXCLUDED.graph_edges,
             updated_at = CURRENT_TIMESTAMP;
 
         RETURN NEW;
@@ -694,14 +712,16 @@ BEGIN
             tenant_id,
             user_id,
             metadata,
+            graph_edges,
             updated_at
         ) VALUES (
-            NEW.id,
+            NEW.id::VARCHAR,
             'files',
             NEW.id,
             NEW.tenant_id,
             NEW.user_id,
             NEW.metadata,
+            COALESCE(NEW.graph_edges, '[]'::jsonb),
             CURRENT_TIMESTAMP
         )
         ON CONFLICT (tenant_id, entity_key)
@@ -709,6 +729,7 @@ BEGIN
             entity_id = EXCLUDED.entity_id,
             user_id = EXCLUDED.user_id,
             metadata = EXCLUDED.metadata,
+            graph_edges = EXCLUDED.graph_edges,
             updated_at = CURRENT_TIMESTAMP;
 
         RETURN NEW;
@@ -772,14 +793,16 @@ BEGIN
             tenant_id,
             user_id,
             metadata,
+            graph_edges,
             updated_at
         ) VALUES (
-            NEW.id,
+            NEW.id::VARCHAR,
             'ontologies',
             NEW.id,
             NEW.tenant_id,
             NEW.user_id,
             NEW.metadata,
+            COALESCE(NEW.graph_edges, '[]'::jsonb),
             CURRENT_TIMESTAMP
         )
         ON CONFLICT (tenant_id, entity_key)
@@ -787,6 +810,7 @@ BEGIN
             entity_id = EXCLUDED.entity_id,
             user_id = EXCLUDED.user_id,
             metadata = EXCLUDED.metadata,
+            graph_edges = EXCLUDED.graph_edges,
             updated_at = CURRENT_TIMESTAMP;
 
         RETURN NEW;
@@ -877,14 +901,16 @@ BEGIN
             tenant_id,
             user_id,
             metadata,
+            graph_edges,
             updated_at
         ) VALUES (
-            NEW.id,
+            NEW.id::VARCHAR,
             'ontology_configs',
             NEW.id,
             NEW.tenant_id,
             NEW.user_id,
             NEW.metadata,
+            COALESCE(NEW.graph_edges, '[]'::jsonb),
             CURRENT_TIMESTAMP
         )
         ON CONFLICT (tenant_id, entity_key)
@@ -892,6 +918,7 @@ BEGIN
             entity_id = EXCLUDED.entity_id,
             user_id = EXCLUDED.user_id,
             metadata = EXCLUDED.metadata,
+            graph_edges = EXCLUDED.graph_edges,
             updated_at = CURRENT_TIMESTAMP;
 
         RETURN NEW;
@@ -978,14 +1005,16 @@ BEGIN
             tenant_id,
             user_id,
             metadata,
+            graph_edges,
             updated_at
         ) VALUES (
-            NEW.id,
+            NEW.id::VARCHAR,
             'schemas',
             NEW.id,
             NEW.tenant_id,
             NEW.user_id,
             NEW.metadata,
+            COALESCE(NEW.graph_edges, '[]'::jsonb),
             CURRENT_TIMESTAMP
         )
         ON CONFLICT (tenant_id, entity_key)
@@ -993,6 +1022,7 @@ BEGIN
             entity_id = EXCLUDED.entity_id,
             user_id = EXCLUDED.user_id,
             metadata = EXCLUDED.metadata,
+            graph_edges = EXCLUDED.graph_edges,
             updated_at = CURRENT_TIMESTAMP;
 
         RETURN NEW;

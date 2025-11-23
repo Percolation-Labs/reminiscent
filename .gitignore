@@ -63,3 +63,5 @@ cdk.out/
 Pulumi.*.yaml
 !Pulumi.yaml
 .cases
+.mypy_cache
+.claude

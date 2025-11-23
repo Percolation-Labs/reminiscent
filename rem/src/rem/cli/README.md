@@ -19,16 +19,16 @@ rem --help
 
 ```bash
 # Simple question (non-streaming by default)
-rem ask simple-agent "What is 2+2?"
+rem ask simple "What is 2+2?"
 
 # Streaming mode for real-time output
-rem ask simple-agent "What is 2+2?" --stream
+rem ask simple "What is 2+2?" --stream
 
 # With specific model
-rem ask simple-agent "What is 2+2?" --model openai:gpt-4o-mini
+rem ask simple "What is 2+2?" --model openai:gpt-4o-mini
 
 # Structured output
-rem ask query-agent "Find all documents by Sarah" --model openai:gpt-4o-mini
+rem ask query "Find all documents by Sarah" --model openai:gpt-4o-mini
 
 # Process file and save output
 rem ask contract-analyzer -i rem/tests/data/content-examples/service_agreement.txt -o output.yaml
@@ -63,10 +63,10 @@ rem ask contract-analyzer -i rem/tests/data/content-examples/service_agreement.t
 ```
 
 **Schema name resolution:**
-- Short names: `contract-analyzer` → `schemas/agents/contract-analyzer.yaml`
-- With prefix: `agents/contract-analyzer` → `schemas/agents/contract-analyzer.yaml`
-- With extension: `contract-analyzer.yaml` → `schemas/agents/contract-analyzer.yaml`
-- Full paths: `schemas/agents/contract-analyzer.yaml` (as-is)
+- Short names: `contract-analyzer` → `schemas/agents/examples/contract-analyzer.yaml`
+- With folder: `examples/contract-analyzer` → `schemas/agents/examples/contract-analyzer.yaml`
+- Core agents: `moment-builder` → `schemas/agents/core/moment-builder.yaml`
+- Full paths: `schemas/agents/examples/contract-analyzer.yaml` (as-is)
 ```
 
 **Supported file types:**
@@ -85,9 +85,10 @@ rem ask NAME [QUERY] [OPTIONS]
 
 Arguments:
   NAME   Agent schema name (YAML files in schemas/agents/)
-         - Short name: contract-analyzer
-         - With extension: contract-analyzer.yaml
-         - Full path: schemas/agents/contract-analyzer.yaml
+         - Short name: contract-analyzer → schemas/agents/examples/contract-analyzer.yaml
+         - With folder: examples/contract-analyzer → schemas/agents/examples/contract-analyzer.yaml
+         - Core agent: moment-builder → schemas/agents/core/moment-builder.yaml
+         - Full path: schemas/agents/examples/contract-analyzer.yaml
 
   QUERY  User query to send to the agent (optional if --input-file is used)
 
@@ -137,7 +138,7 @@ json_schema_extra:
 
 ## Example Schemas
 
-### Simple Agent (`schemas/simple-agent.yaml`)
+### Simple Agent (`schemas/agents/examples/simple.yaml`)
 
 A basic conversational agent that returns simple text answers:
 
@@ -164,7 +165,7 @@ json_schema_extra:
   resources: []
 ```
 
-### Query Agent (`schemas/query-agent.yaml`)
+### Query Agent (`schemas/agents/examples/query.yaml`)
 
 An agent that provides structured output with confidence scores:
 
@@ -215,7 +216,7 @@ json_schema_extra:
 Uses `agent.run()` to return complete structured result at once:
 
 ```bash
-rem ask schemas/simple-agent.yaml "Explain quantum computing"
+rem ask simple "Explain quantum computing"
 ```
 
 Output:
@@ -239,7 +240,7 @@ Uses `agent.iter()` to stream events in real-time:
 - Final structured result after completion
 
 ```bash
-rem ask schemas/simple-agent.yaml "Explain quantum computing" --stream
+rem ask simple "Explain quantum computing" --stream
 ```
 
 Output:
@@ -328,7 +329,7 @@ export OTEL__COLLECTOR_ENDPOINT=http://localhost:4318
 export OTEL__PROTOCOL=http
 
 # Run agent with tracing
-rem ask schemas/query-agent.yaml "Find documents" --model openai:gpt-4o-mini
+rem ask query "Find documents" --model openai:gpt-4o-mini
 ```
 
 ### Phoenix Integration
@@ -345,7 +346,7 @@ export PHOENIX__COLLECTOR_ENDPOINT=http://localhost:6006/v1/traces
 export PHOENIX__PROJECT_NAME=rem-cli
 
 # Run agent with Phoenix tracing
-rem ask schemas/query-agent.yaml "Find documents" --model openai:gpt-4o-mini
+rem ask query "Find documents" --model openai:gpt-4o-mini
 
 # View traces at http://localhost:6006
 ```
@@ -378,30 +379,30 @@ Once implemented, you can load agents by name:
 
 ```bash
 # Load latest version
-rem ask query-agent "Find documents"
+rem ask query "Find documents"
 
 # Load specific version
-rem ask query-agent "Find documents" --version 1.2.0
+rem ask query "Find documents" --version 1.2.0
 ```
 
 ## Testing
 
 ```bash
 # Test simple agent (default non-streaming)
-rem ask schemas/simple-agent.yaml "What is 2+2?" --model openai:gpt-4o-mini
+rem ask simple "What is 2+2?" --model openai:gpt-4o-mini
 
 # Test simple agent (streaming)
-rem ask schemas/simple-agent.yaml "What is 2+2?" --stream --model openai:gpt-4o-mini
+rem ask simple "What is 2+2?" --stream --model openai:gpt-4o-mini
 
 # Test structured output
-rem ask schemas/query-agent.yaml "Find all documents by Sarah" --model openai:gpt-4o-mini
+rem ask query "Find all documents by Sarah" --model openai:gpt-4o-mini
 
 # Test file processing
 rem ask contract-analyzer -i examples/contract.pdf -o output.yaml
 
 # Test with different models
-rem ask schemas/simple-agent.yaml "Hello" --model openai:gpt-4o
-rem ask schemas/simple-agent.yaml "Hello" --model anthropic:claude-sonnet-4-5-20250929
+rem ask simple "Hello" --model openai:gpt-4o
+rem ask simple "Hello" --model anthropic:claude-sonnet-4-5-20250929
 ```
 
 ## Troubleshooting
@@ -424,7 +425,7 @@ Schema registry not implemented yet. Please use a file path instead.
 
 Use file paths until registry is implemented:
 ```bash
-rem ask schemas/simple-agent.yaml "query"
+rem ask simple "query"
 ```
 
 ### Model Not Found

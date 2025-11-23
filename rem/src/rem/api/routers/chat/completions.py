@@ -200,7 +200,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
     agent = await create_agent(
         context=context,
         agent_schema_override=agent_schema,
-        model_override=body.model,
+        model_override=body.model,  # type: ignore[arg-type]
     )
 
     # Combine all messages into single prompt for agent
@@ -224,11 +224,11 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
     # Determine content format based on response_format request
     if body.response_format and body.response_format.type == "json_object":
         # JSON mode: Best-effort extraction of JSON from agent output
-        content = extract_json_resilient(result.output)
+        content = extract_json_resilient(result.output)  # type: ignore[attr-defined]
     else:
         # Text mode: Return as string (handle structured output)
         from rem.agentic.serialization import serialize_agent_result_json
-        content = serialize_agent_result_json(result.output)
+        content = serialize_agent_result_json(result.output)  # type: ignore[attr-defined]
 
     # Get usage from result if available
     usage = result.usage() if hasattr(result, "usage") else None

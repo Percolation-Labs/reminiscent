@@ -25,6 +25,7 @@ from rem.agentic import ask_rem
 
 
 @pytest.mark.asyncio
+@pytest.mark.llm
 async def test_lookup_query():
     """Test LOOKUP query generation for entity by name."""
     result = await ask_rem("Show me Sarah Chen")
@@ -36,6 +37,7 @@ async def test_lookup_query():
 
 
 @pytest.mark.asyncio
+@pytest.mark.llm
 async def test_fuzzy_query():
     """Test FUZZY query generation for partial/misspelled names."""
     result = await ask_rem("Find people named Sara")
@@ -47,6 +49,7 @@ async def test_fuzzy_query():
 
 
 @pytest.mark.asyncio
+@pytest.mark.llm
 async def test_search_query():
     """Test SEARCH query generation for semantic/conceptual questions."""
     result = await ask_rem("Find documents about database migration")
@@ -59,6 +62,7 @@ async def test_search_query():
 
 
 @pytest.mark.asyncio
+@pytest.mark.llm
 async def test_sql_query():
     """Test SQL query generation for temporal/filtered queries."""
     result = await ask_rem("Show meetings in Q4 2024")
@@ -71,6 +75,7 @@ async def test_sql_query():
 
 
 @pytest.mark.asyncio
+@pytest.mark.llm
 async def test_traverse_query():
     """Test TRAVERSE query generation for relationship questions."""
     result = await ask_rem("What does Sarah manage?")
@@ -85,6 +90,7 @@ async def test_traverse_query():
 
 
 @pytest.mark.asyncio
+@pytest.mark.llm
 async def test_all_query_types():
     """Test all REM query types with expected outputs."""
     test_cases = [
@@ -121,6 +127,7 @@ async def test_all_query_types():
 
 
 @pytest.mark.asyncio
+@pytest.mark.llm
 async def test_agent_uses_cerebras_qwen():
     """Test that agent uses Cerebras Qwen model for ultra-fast inference."""
     from rem.settings import settings
@@ -132,6 +139,7 @@ async def test_agent_uses_cerebras_qwen():
 
 
 @pytest.mark.asyncio
+@pytest.mark.llm
 async def test_confidence_and_reasoning():
     """Test confidence scores and reasoning for low confidence queries."""
     # High confidence query

@@ -70,6 +70,7 @@ STAGE_4_QUESTIONS = [
 ]
 
 
+@pytest.mark.llm
 class TestQueryAgentOutput:
     """Test REM Query Agent output structure and quality."""
 
@@ -120,6 +121,7 @@ class TestQueryAgentOutput:
             print(f"  Confidence: {result.confidence:.2f}")
 
 
+@pytest.mark.llm
 class TestNaturalLanguageToREMDialect:
     """Test natural language to REM dialect conversion across maturity stages."""
 
@@ -223,6 +225,7 @@ class TestNaturalLanguageToREMDialect:
                 print(f"  Reasoning: {result.reasoning}")
 
 
+@pytest.mark.llm
 class TestQueryEvolutionDemonstration:
     """Demonstrate query evolution as graph matures."""
 
@@ -297,6 +300,7 @@ class TestQueryEvolutionDemonstration:
                 print(f"Reasoning:        {result.reasoning}")
 
 
+@pytest.mark.llm
 class TestUserKnownVsSystemInternal:
     """
     Critical testing principle: Use what USERS know, not system internals.
@@ -361,6 +365,7 @@ class TestUserKnownVsSystemInternal:
         print("\n✓ System handles all natural variations")
 
 
+@pytest.mark.llm
 class TestConfidenceAndReasoning:
     """Test confidence scoring and reasoning for ambiguous queries."""
 
@@ -412,6 +417,7 @@ class TestConfidenceAndReasoning:
                 print(f"  ⚠ Reasoning: {result.reasoning}")
 
 
+@pytest.mark.llm
 class TestPlanModeVsDirectMode:
     """Test plan mode (show query) vs direct mode (execute query)."""
 

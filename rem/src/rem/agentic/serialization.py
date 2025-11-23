@@ -34,7 +34,7 @@ Design Rules:
 4. Document when functions return Pydantic models vs dicts
 """
 
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel
 
@@ -79,10 +79,10 @@ def serialize_agent_result(result: Any) -> dict[str, Any] | str:
 
     # Check if this has a model_dump method (duck typing)
     if hasattr(result, "model_dump") and callable(getattr(result, "model_dump")):
-        return result.model_dump()
+        return cast(dict[str, Any] | str, result.model_dump())
 
     # Already a dict or primitive - return as-is
-    return result
+    return cast(dict[str, Any] | str, result)
 
 
 def serialize_agent_result_json(result: Any) -> str:
@@ -121,7 +121,7 @@ def serialize_agent_result_json(result: Any) -> str:
     if hasattr(result, "model_dump_json") and callable(
         getattr(result, "model_dump_json")
     ):
-        return result.model_dump_json()
+        return cast(str, result.model_dump_json())
 
     # Fall back to standard json.dumps
     return json.dumps(result)

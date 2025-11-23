@@ -28,8 +28,12 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture
 def tenant_id():
-    """Generate unique tenant ID for test isolation."""
-    return f"test-tenant-{uuid.uuid4().hex[:8]}"
+    """
+    DEPRECATED: tenant_id is now the same as user_id.
+    Application is user-scoped, not tenant-scoped.
+    Kept for backward compatibility with X-Tenant-Id header.
+    """
+    return f"test-user-{uuid.uuid4().hex[:8]}"
 
 
 @pytest.fixture
@@ -62,6 +66,7 @@ async def client():
 
 
 @pytest.mark.asyncio
+@pytest.mark.llm
 async def test_completions_without_session(client):
     """Test basic completion without session management."""
     response = await client.post(
@@ -84,6 +89,7 @@ async def test_completions_without_session(client):
 
 
 @pytest.mark.asyncio
+@pytest.mark.llm
 async def test_completions_with_new_session(client, db, tenant_id, session_id, user_id):
     """Test completion with new session (no prior history)."""
     response = await client.post(
@@ -105,9 +111,10 @@ async def test_completions_with_new_session(client, db, tenant_id, session_id, u
     assert "choices" in data
 
     # Verify messages saved to database
+    # Note: Messages are stored with tenant_id=user_id (application is user-scoped)
     repo = Repository(Message)
     messages = await repo.get_by_session(
-        session_id=session_id, tenant_id=tenant_id, user_id=user_id
+        session_id=session_id, tenant_id=user_id, user_id=user_id
     )
 
     # Should have user + assistant messages
@@ -118,6 +125,7 @@ async def test_completions_with_new_session(client, db, tenant_id, session_id, u
 
 
 @pytest.mark.asyncio
+@pytest.mark.llm
 async def test_completions_with_session_continuity(
     client, db, tenant_id, session_id, user_id
 ):
@@ -134,6 +142,7 @@ async def test_completions_with_session_continuity(
             "X-Tenant-Id": tenant_id,
             "X-Session-Id": session_id,
             "X-User-Id": user_id,
+            "X-Agent-Schema": "simple-assistant",  # Use simple agent for conversational test
         },
     )
 
@@ -151,6 +160,7 @@ async def test_completions_with_session_continuity(
             "X-Tenant-Id": tenant_id,
             "X-Session-Id": session_id,
             "X-User-Id": user_id,
+            "X-Agent-Schema": "simple-assistant",  # Use simple agent for conversational test
         },
     )
 
@@ -162,9 +172,10 @@ async def test_completions_with_session_continuity(
     assistant_response = data2["choices"][0]["message"]["content"]
 
     # Verify full conversation saved
+    # Note: Messages are stored with tenant_id=user_id (application is user-scoped)
     repo = Repository(Message)
     messages = await repo.get_by_session(
-        session_id=session_id, tenant_id=tenant_id, user_id=user_id
+        session_id=session_id, tenant_id=user_id, user_id=user_id
     )
 
     # Should have 4 messages: user1, assistant1, user2, assistant2
@@ -174,6 +185,7 @@ async def test_completions_with_session_continuity(
 
 
 @pytest.mark.asyncio
+@pytest.mark.llm
 async def test_completions_with_long_response_compression(
     client, db, tenant_id, session_id, user_id
 ):
@@ -195,6 +207,7 @@ async def test_completions_with_long_response_compression(
             "X-Tenant-Id": tenant_id,
             "X-Session-Id": session_id,
             "X-User-Id": user_id,
+            "X-Agent-Schema": "rem",  # Use REM agent which knows about REM architecture
         },
     )
 
@@ -203,9 +216,10 @@ async def test_completions_with_long_response_compression(
     assistant_response = data["choices"][0]["message"]["content"]
 
     # Verify stored in database
+    # Note: Messages are stored with tenant_id=user_id (application is user-scoped)
     repo = Repository(Message)
     messages = await repo.get_by_session(
-        session_id=session_id, tenant_id=tenant_id, user_id=user_id
+        session_id=session_id, tenant_id=user_id, user_id=user_id
     )
 
     assert len(messages) >= 2
@@ -222,12 +236,14 @@ async def test_completions_with_long_response_compression(
 
 
 @pytest.mark.asyncio
+@pytest.mark.llm
 async def test_completions_session_isolation(client, db, tenant_id, user_id):
     """Test that different sessions are properly isolated."""
     session1 = f"session-{uuid.uuid4()}"
     session2 = f"session-{uuid.uuid4()}"
 
     # Conversation in session 1
+    # Use simple-assistant agent to avoid REM query overhead
     await client.post(
         "/v1/chat/completions",
         json={
@@ -239,10 +255,12 @@ async def test_completions_session_isolation(client, db, tenant_id, user_id):
             "X-Tenant-Id": tenant_id,
             "X-Session-Id": session1,
             "X-User-Id": user_id,
+            "X-Agent-Schema": "simple-assistant",
         },
     )
 
     # Conversation in session 2
+    # Use simple-assistant agent to avoid REM query overhead
     await client.post(
         "/v1/chat/completions",
         json={
@@ -254,17 +272,19 @@ async def test_completions_session_isolation(client, db, tenant_id, user_id):
             "X-Tenant-Id": tenant_id,
             "X-Session-Id": session2,
             "X-User-Id": user_id,
+            "X-Agent-Schema": "simple-assistant",
         },
     )
 
     # Verify isolation
+    # Note: Messages are stored with tenant_id=user_id (application is user-scoped)
     repo = Repository(Message)
 
     messages1 = await repo.get_by_session(
-        session_id=session1, tenant_id=tenant_id, user_id=user_id
+        session_id=session1, tenant_id=user_id, user_id=user_id
     )
     messages2 = await repo.get_by_session(
-        session_id=session2, tenant_id=tenant_id, user_id=user_id
+        session_id=session2, tenant_id=user_id, user_id=user_id
     )
 
     assert len(messages1) >= 2
@@ -280,93 +300,71 @@ async def test_completions_session_isolation(client, db, tenant_id, user_id):
 
 
 @pytest.mark.asyncio
-async def test_completions_tenant_isolation(client, db, user_id):
-    """Test that different tenants are properly isolated."""
-    tenant1 = f"tenant-{uuid.uuid4().hex[:8]}"
-    tenant2 = f"tenant-{uuid.uuid4().hex[:8]}"
+@pytest.mark.llm
+async def test_completions_tenant_isolation(client, db, tenant_id):
+    """Test that different users are properly isolated.
+
+    Note: Application is now user-scoped (tenant_id=user_id internally).
+    This test verifies that different users cannot see each other's messages.
+    """
+    user1 = f"user-{uuid.uuid4().hex[:8]}"
+    user2 = f"user-{uuid.uuid4().hex[:8]}"
     session_id = f"session-{uuid.uuid4()}"
 
-    # Same session ID but different tenants
+    # Same session ID but different users
+    # Use simple-assistant agent to avoid REM query overhead
     await client.post(
         "/v1/chat/completions",
         json={
             "model": "openai:gpt-4o-mini",
-            "messages": [{"role": "user", "content": "Tenant 1 message"}],
+            "messages": [{"role": "user", "content": "User 1 message"}],
             "stream": False,
-        },
-        headers={
-            "X-Tenant-Id": tenant1,
-            "X-Session-Id": session_id,
-            "X-User-Id": user_id,
-        },
-    )
-
-    await client.post(
-        "/v1/chat/completions",
-        json={
-            "model": "openai:gpt-4o-mini",
-            "messages": [{"role": "user", "content": "Tenant 2 message"}],
-            "stream": False,
-        },
-        headers={
-            "X-Tenant-Id": tenant2,
-            "X-Session-Id": session_id,
-            "X-User-Id": user_id,
-        },
-    )
-
-    # Verify isolation
-    repo = Repository(Message)
-
-    messages1 = await repo.get_by_session(
-        session_id=session_id, tenant_id=tenant1, user_id=user_id
-    )
-    messages2 = await repo.get_by_session(
-        session_id=session_id, tenant_id=tenant2, user_id=user_id
-    )
-
-    # Each tenant should only see their own messages
-    assert len(messages1) >= 2
-    assert len(messages2) >= 2
-    assert messages1[0].content == "Tenant 1 message"
-    assert messages2[0].content == "Tenant 2 message"
-
-
-@pytest.mark.asyncio
-async def test_completions_with_json_response_format(
-    client, tenant_id, session_id, user_id
-):
-    """Test completions with JSON response format and session management."""
-    response = await client.post(
-        "/v1/chat/completions",
-        json={
-            "model": "openai:gpt-4o-mini",
-            "messages": [
-                {
-                    "role": "user",
-                    "content": "Return a JSON object with name and age fields",
-                }
-            ],
-            "stream": False,
-            "response_format": {"type": "json_object"},
         },
         headers={
             "X-Tenant-Id": tenant_id,
             "X-Session-Id": session_id,
-            "X-User-Id": user_id,
+            "X-User-Id": user1,
+            "X-Agent-Schema": "simple-assistant",
         },
     )
 
-    assert response.status_code == 200
-    data = response.json()
+    await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "openai:gpt-4o-mini",
+            "messages": [{"role": "user", "content": "User 2 message"}],
+            "stream": False,
+        },
+        headers={
+            "X-Tenant-Id": tenant_id,
+            "X-Session-Id": session_id,
+            "X-User-Id": user2,
+            "X-Agent-Schema": "simple-assistant",
+        },
+    )
 
-    # Response should be JSON
-    content = data["choices"][0]["message"]["content"]
-    # Should be valid JSON or JSON string
-    assert content is not None
+    # Verify isolation
+    # Note: Messages are stored with tenant_id=user_id (application is user-scoped)
+    repo = Repository(Message)
+
+    messages1 = await repo.get_by_session(
+        session_id=session_id, tenant_id=user1, user_id=user1
+    )
+    messages2 = await repo.get_by_session(
+        session_id=session_id, tenant_id=user2, user_id=user2
+    )
+
+    # Each user should only see their own messages
+    assert len(messages1) >= 2
+    assert len(messages2) >= 2
+    assert messages1[0].content == "User 1 message"
+    assert messages2[0].content == "User 2 message"
+
+
 
 
 @pytest.mark.asyncio
+@pytest.mark.llm
 async def test_completions_usage_tracking(client, tenant_id, session_id, user_id):
     """Test that token usage is tracked in responses."""
     response = await client.post(

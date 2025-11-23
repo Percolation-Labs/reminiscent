@@ -2,7 +2,7 @@
 Experiment management CLI commands.
 
 Experiments use ExperimentConfig (rem/models/core/experiment.py) for configuration
-and delegate to Phoenix provider for execution. Supports Git+S3 hybrid storage.
+and support Git+S3 hybrid storage. Includes dataset, prompt, and trace management.
 
 Directory Structure:
     .experiments/{experiment-name}/
@@ -12,16 +12,28 @@ Directory Structure:
     └── results/                 # Optional: metrics summaries
 
 Commands:
+    # Experiment lifecycle
     rem experiments create <name> --agent <agent> --evaluator <evaluator>
     rem experiments list
     rem experiments show <name>
     rem experiments run <name> [--version <tag>]
-    rem experiments diff <name> v1.0.0 v2.0.0
+
+    # Dataset management
+    rem experiments dataset list
+    rem experiments dataset create <name> --from-csv data.csv
+    rem experiments dataset add <name> --from-csv data.csv
+
+    # Prompt management
+    rem experiments prompt list
+    rem experiments prompt create <name> --system-prompt "..."
+
+    # Trace retrieval
+    rem experiments trace list --project <name>
 """
 
 import asyncio
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 import click
 from loguru import logger
@@ -467,7 +479,7 @@ def run(
             session_id=f"experiment-{config.name}",
         )
 
-        agent = asyncio.run(create_agent(
+        agent_runtime = asyncio.run(create_agent(
             context=context,
             agent_schema_override=agent_schema
         ))
@@ -483,11 +495,15 @@ def run(
                 query = input_data.get("text", input_data.get("prompt", str(input_data)))
 
             # Run agent
-            result = asyncio.run(agent.run(query))
+            result = asyncio.run(agent_runtime.run(query))
 
             # Serialize result (critical for Pydantic models!)
             from rem.agentic.serialization import serialize_agent_result
-            return serialize_agent_result(result)
+            serialized = serialize_agent_result(result)
+            # Ensure we return a dict (Phoenix expects dict output)
+            if isinstance(serialized, str):
+                return {"output": serialized}
+            return serialized if isinstance(serialized, dict) else {"output": str(serialized)}
 
         # Load evaluator schema
         evaluator_name = config.evaluator_schema_ref.name
@@ -605,7 +621,7 @@ def run(
             click.echo(f"   This may take several minutes...")
 
             experiment = client.run_experiment(
-                dataset=dataset_df,
+                dataset=dataset_df,  # type: ignore[arg-type]
                 task=task_fn,
                 evaluators=[evaluator_fn],
                 experiment_name=experiment_name,
@@ -626,17 +642,17 @@ def run(
 
             click.echo(f"\n✓ Experiment complete!")
             if hasattr(experiment, "url"):
-                click.echo(f"  View results: {experiment.url}")
+                click.echo(f"  View results: {experiment.url}")  # type: ignore[attr-defined]
 
             # Save results according to config.results settings
             if config.results.save_metrics_summary:
                 # Get experiment data
                 try:
-                    exp_data = client.get_experiment(experiment.id)
+                    exp_data = client.get_experiment(experiment.id)  # type: ignore[attr-defined]
 
                     # Build metrics summary
                     metrics = {
-                        "experiment_id": experiment.id,
+                        "experiment_id": experiment.id,  # type: ignore[attr-defined]
                         "experiment_name": experiment_name,
                         "agent": config.agent_schema_ref.name,
                         "evaluator": config.evaluator_schema_ref.name,
@@ -678,5 +694,431 @@ def run(
 
     except Exception as e:
         logger.error(f"Failed to run experiment: {e}")
+        click.echo(f"Error: {e}", err=True)
+        raise click.Abort()
+
+
+# =============================================================================
+# DATASET COMMANDS
+# =============================================================================
+
+
+@experiments.group()
+def dataset():
+    """Dataset management commands."""
+    pass
+
+
+@dataset.command("list")
+def dataset_list():
+    """List all datasets.
+
+    Example:
+        rem experiments dataset list
+    """
+    from rem.services.phoenix import PhoenixClient
+
+    try:
+        client = PhoenixClient()
+        datasets = client.list_datasets()
+
+        if not datasets:
+            click.echo("No datasets found")
+            return
+
+        click.echo(f"\nDatasets ({len(datasets)} total):\n")
+        click.echo(f"{'Name':<40} {'Examples':>10} {'Created':<12}")
+        click.echo("-" * 65)
+
+        for ds in datasets:
+            name = ds.get("name", "")[:40]
+            count = ds.get("example_count", 0)
+            created = ds.get("created_at", "")[:10]
+            click.echo(f"{name:<40} {count:>10} {created:<12}")
+
+    except Exception as e:
+        logger.error(f"Failed to list datasets: {e}")
+        click.echo(f"Error: {e}", err=True)
+        raise click.Abort()
+
+
+@dataset.command("create")
+@click.argument("name")
+@click.option("--from-csv", type=click.Path(exists=True, path_type=Path), help="Create from CSV file")
+@click.option("--input-keys", help="Comma-separated input column names")
+@click.option("--output-keys", help="Comma-separated output column names (reference/ground truth)")
+@click.option("--metadata-keys", help="Comma-separated metadata column names (difficulty, type, etc.)")
+@click.option("--description", help="Dataset description")
+def dataset_create(
+    name: str,
+    from_csv: Optional[Path],
+    input_keys: Optional[str],
+    output_keys: Optional[str],
+    metadata_keys: Optional[str],
+    description: Optional[str],
+):
+    """Create a dataset (golden set).
+
+    Two modes:
+    1. From CSV: --from-csv golden.csv --input-keys query --output-keys expected
+    2. Manual (empty): Will create empty dataset to populate later
+
+    Examples:
+        # From CSV (SME golden set)
+        rem experiments dataset create rem-lookup-golden \\
+            --from-csv golden-lookup.csv \\
+            --input-keys query \\
+            --output-keys expected_label,expected_type \\
+            --metadata-keys difficulty,query_type
+
+        # Empty dataset (populate later)
+        rem experiments dataset create rem-test --description "Test dataset"
+    """
+    from rem.services.phoenix import PhoenixClient
+
+    try:
+        client = PhoenixClient()
+
+        if from_csv:
+            # Create from CSV
+            if not input_keys or not output_keys:
+                click.echo("Error: --input-keys and --output-keys required for CSV", err=True)
+                raise click.Abort()
+
+            dataset = client.create_dataset_from_csv(
+                name=name,
+                csv_file_path=from_csv,
+                input_keys=input_keys.split(","),
+                output_keys=output_keys.split(","),
+                metadata_keys=metadata_keys.split(",") if metadata_keys else None,
+                description=description,
+            )
+
+            click.echo(f"✓ Created dataset '{dataset.name}' from CSV with {len(dataset)} examples")
+
+        else:
+            # Create empty dataset
+            dataset = client.create_dataset_from_data(
+                name=name,
+                inputs=[],
+                outputs=[],
+                description=description,
+            )
+
+            click.echo(f"✓ Created empty dataset '{dataset.name}'")
+            click.echo("  Use 'rem experiments dataset add' to add examples")
+
+    except Exception as e:
+        logger.error(f"Failed to create dataset: {e}")
+        click.echo(f"Error: {e}", err=True)
+        raise click.Abort()
+
+
+@dataset.command("add")
+@click.argument("dataset_name")
+@click.option("--from-csv", type=click.Path(exists=True, path_type=Path), required=True,
+              help="CSV file with examples")
+@click.option("--input-keys", required=True, help="Comma-separated input column names")
+@click.option("--output-keys", required=True, help="Comma-separated output column names")
+@click.option("--metadata-keys", help="Comma-separated metadata column names")
+def dataset_add(
+    dataset_name: str,
+    from_csv: Path,
+    input_keys: str,
+    output_keys: str,
+    metadata_keys: Optional[str],
+):
+    """Add examples to an existing dataset.
+
+    Example:
+        rem experiments dataset add rem-lookup-golden \\
+            --from-csv new-examples.csv \\
+            --input-keys query \\
+            --output-keys expected_label,expected_type
+    """
+    from rem.services.phoenix import PhoenixClient
+    import pandas as pd
+
+    try:
+        client = PhoenixClient()
+
+        # Load CSV
+        df = pd.read_csv(from_csv)
+
+        # Extract data
+        inputs = cast(list[dict[str, Any]], df[input_keys.split(",")].to_dict("records"))
+        outputs = cast(list[dict[str, Any]], df[output_keys.split(",")].to_dict("records"))
+        metadata = None
+        if metadata_keys:
+            metadata = cast(list[dict[str, Any]], df[metadata_keys.split(",")].to_dict("records"))
+
+        # Add to dataset
+        dataset = client.add_examples_to_dataset(
+            dataset=dataset_name,
+            inputs=inputs,
+            outputs=outputs,
+            metadata=metadata,
+        )
+
+        click.echo(f"✓ Added {len(inputs)} examples to dataset '{dataset.name}'")
+        click.echo(f"  Total examples: {len(dataset)}")
+
+    except Exception as e:
+        logger.error(f"Failed to add examples: {e}")
+        click.echo(f"Error: {e}", err=True)
+        raise click.Abort()
+
+
+# =============================================================================
+# PROMPT COMMANDS
+# =============================================================================
+
+
+@experiments.group()
+def prompt():
+    """Prompt management commands."""
+    pass
+
+
+@prompt.command("create")
+@click.argument("name")
+@click.option("--system-prompt", "-s", required=True, help="System prompt text")
+@click.option("--description", "-d", help="Prompt description")
+@click.option("--model-provider", default="OPENAI", help="Model provider (OPENAI, ANTHROPIC)")
+@click.option("--model-name", "-m", help="Model name (e.g., gpt-4o, claude-sonnet-4-5)")
+@click.option("--type", "-t", "prompt_type", default="Agent", help="Prompt type (Agent or Evaluator)")
+def prompt_create(
+    name: str,
+    system_prompt: str,
+    description: Optional[str],
+    model_provider: str,
+    model_name: Optional[str],
+    prompt_type: str,
+):
+    """Create a prompt.
+
+    Examples:
+        # Create agent prompt
+        rem experiments prompt create hello-world \\
+            --system-prompt "You are a helpful assistant." \\
+            --model-name gpt-4o
+
+        # Create evaluator prompt
+        rem experiments prompt create correctness-evaluator \\
+            --system-prompt "Evaluate the correctness of responses." \\
+            --type Evaluator \\
+            --model-provider ANTHROPIC \\
+            --model-name claude-sonnet-4-5
+    """
+    from rem.services.phoenix import PhoenixClient
+    from rem.services.phoenix.prompt_labels import PhoenixPromptLabels
+    from phoenix.client import Client
+    from phoenix.client.types.prompts import PromptVersion
+    from phoenix.client.__generated__ import v1
+
+    try:
+        # Set default model if not specified
+        if not model_name:
+            model_name = "gpt-4o" if model_provider == "OPENAI" else "claude-sonnet-4-5-20250929"
+
+        # Get config
+        phoenix_client = PhoenixClient()
+        config = phoenix_client.config
+
+        # Create client
+        client = Client(
+            base_url=config.base_url,
+            api_key=config.api_key
+        )
+
+        # Create prompt messages
+        messages = [
+            v1.PromptMessage(
+                role="system",
+                content=system_prompt
+            )
+        ]
+
+        # Create PromptVersion
+        version = PromptVersion(
+            messages,
+            model_name=model_name,
+            description="v1.0",
+            model_provider=model_provider  # type: ignore[arg-type]
+        )
+
+        # Create the prompt
+        result = client.prompts.create(
+            name=name,
+            version=version,
+            prompt_description=description or f"{prompt_type} prompt: {name}"
+        )
+
+        click.echo(f"✓ Created prompt '{name}' (ID: {result.id})")
+
+        # Try to get the prompt ID for label assignment
+        try:
+            import httpx
+            query = """
+            query {
+              prompts(first: 1, filterBy: {name: {equals: "%s"}}) {
+                edges {
+                  node {
+                    id
+                    name
+                  }
+                }
+              }
+            }
+            """ % name
+
+            response = httpx.post(
+                f"{config.base_url}/graphql",
+                json={"query": query},
+                headers={"authorization": f"Bearer {config.api_key}"},
+                timeout=10,
+            )
+            graphql_result = response.json()
+            prompts = graphql_result.get("data", {}).get("prompts", {}).get("edges", [])
+
+            if prompts:
+                prompt_id = prompts[0]["node"]["id"]
+
+                # Assign labels
+                if not config.base_url:
+                    raise ValueError("Phoenix base_url is required")
+                labels_helper = PhoenixPromptLabels(
+                    base_url=config.base_url, api_key=config.api_key
+                )
+
+                # Assign REM + type label
+                label_names = ["REM", prompt_type]
+                labels_helper.assign_prompt_labels(prompt_id, label_names)
+                click.echo(f"✓ Assigned labels: {', '.join(label_names)}")
+        except Exception as e:
+            click.echo(f"⚠ Warning: Could not assign labels: {e}")
+
+        click.echo(f"\nView in UI: {config.base_url}")
+
+    except Exception as e:
+        logger.error(f"Failed to create prompt: {e}")
+        click.echo(f"Error: {e}", err=True)
+        raise click.Abort()
+
+
+@prompt.command("list")
+def prompt_list():
+    """List all prompts.
+
+    Example:
+        rem experiments prompt list
+    """
+    import httpx
+    from rem.services.phoenix import PhoenixClient
+
+    try:
+        phoenix_client = PhoenixClient()
+        config = phoenix_client.config
+
+        query = """
+        query {
+          prompts(first: 100) {
+            edges {
+              node {
+                id
+                name
+                description
+                createdAt
+              }
+            }
+          }
+        }
+        """
+
+        response = httpx.post(
+            f"{config.base_url}/graphql",
+            json={"query": query},
+            headers={"authorization": f"Bearer {config.api_key}"},
+            timeout=10,
+        )
+
+        result = response.json()
+        prompts = result.get("data", {}).get("prompts", {}).get("edges", [])
+
+        if not prompts:
+            click.echo("No prompts found")
+            return
+
+        click.echo(f"\nPrompts ({len(prompts)} total):\n")
+        click.echo(f"{'Name':<40} {'Created':<20}")
+        click.echo("-" * 65)
+
+        for edge in prompts:
+            node = edge["node"]
+            name = node.get("name", "")[:40]
+            created = node.get("createdAt", "")[:19]
+            click.echo(f"{name:<40} {created:<20}")
+
+    except Exception as e:
+        logger.error(f"Failed to list prompts: {e}")
+        click.echo(f"Error: {e}", err=True)
+        raise click.Abort()
+
+
+# =============================================================================
+# TRACE COMMANDS
+# =============================================================================
+
+
+@experiments.group()
+def trace():
+    """Trace retrieval commands."""
+    pass
+
+
+@trace.command("list")
+@click.option("--project", "-p", help="Filter by project name")
+@click.option("--days", "-d", default=7, help="Number of days to look back")
+@click.option("--limit", "-l", default=20, help="Maximum traces to return")
+def trace_list(
+    project: Optional[str],
+    days: int,
+    limit: int,
+):
+    """List recent traces.
+
+    Example:
+        rem experiments trace list --project rem-agents --days 7 --limit 50
+    """
+    from rem.services.phoenix import PhoenixClient
+    from datetime import datetime, timedelta
+
+    try:
+        client = PhoenixClient()
+
+        start_time = datetime.now() - timedelta(days=days)
+
+        traces_df = client.get_traces(
+            project_name=project,
+            start_time=start_time,
+            limit=limit,
+        )
+
+        if len(traces_df) == 0:
+            click.echo("No traces found")
+            return
+
+        click.echo(f"\nRecent Traces ({len(traces_df)} results):\n")
+        click.echo(f"{'Span ID':<15} {'Name':<30} {'Start Time':<20}")
+        click.echo("-" * 70)
+
+        for _, row in traces_df.head(limit).iterrows():
+            span_id = str(row.get("context.span_id", ""))[:12]
+            name = str(row.get("name", ""))[:30]
+            start = str(row.get("start_time", ""))[:19]
+            click.echo(f"{span_id:<15} {name:<30} {start:<20}")
+
+    except Exception as e:
+        logger.error(f"Failed to list traces: {e}")
         click.echo(f"Error: {e}", err=True)
         raise click.Abort()

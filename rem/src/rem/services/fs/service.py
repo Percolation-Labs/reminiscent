@@ -147,7 +147,15 @@ class FileSystemService:
         internal_key = f"{tenant_id}/files/{file_id}/{file_name}"
         storage_uri = ""
 
-        if settings.s3.bucket_name:
+        # Use storage.provider setting to determine storage backend
+        if settings.storage.provider == "s3":
+            # S3 storage
+            if not settings.s3.bucket_name:
+                raise ValueError(
+                    "STORAGE__PROVIDER is set to 's3' but S3__BUCKET_NAME is not configured. "
+                    "Either set S3__BUCKET_NAME or change STORAGE__PROVIDER to 'local'."
+                )
+
             session = aioboto3.Session()
             async with session.client(
                 "s3",
@@ -163,9 +171,11 @@ class FileSystemService:
                 )
                 storage_uri = f"s3://{settings.s3.bucket_name}/{internal_key}"
         else:
-            fs_root = Path.home() / ".rem" / "fs"
-            fs_root.mkdir(parents=True, exist_ok=True)
-            file_path = fs_root / internal_key
+            # Local filesystem storage (default)
+            # Expand ~ to home directory
+            base_path = Path(settings.storage.base_path).expanduser()
+            base_path.mkdir(parents=True, exist_ok=True)
+            file_path = base_path / internal_key
             file_path.parent.mkdir(parents=True, exist_ok=True)
             file_path.write_bytes(content)
             storage_uri = f"file://{file_path}"

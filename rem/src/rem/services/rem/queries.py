@@ -13,33 +13,30 @@ Design Pattern:
 
 # LOOKUP Query
 # Delegates to rem_lookup() PostgreSQL function
+# Returns raw JSONB data for LLM consumption
 LOOKUP_QUERY = """
 SELECT
-    entity_key,
     entity_type,
-    entity_id,
-    user_id,
-    content_summary,
-    metadata
+    data
 FROM rem_lookup($1, $2, $3)
 """
 # Parameters:
 # $1: entity_key (str)
 # $2: tenant_id (str)
 # $3: user_id (str | None)
+# Returns:
+# - entity_type: Table name (e.g., "resources", "users")
+# - data: Complete entity record as JSONB
 
 
 # FUZZY Query
 # Delegates to rem_fuzzy() PostgreSQL function
+# Returns raw JSONB data with similarity scores
 FUZZY_QUERY = """
 SELECT
-    entity_key,
     entity_type,
-    entity_id,
-    user_id,
-    content_summary,
-    metadata,
-    similarity_score
+    similarity_score,
+    data
 FROM rem_fuzzy($1, $2, $3, $4, $5)
 """
 # Parameters:
@@ -48,17 +45,20 @@ FROM rem_fuzzy($1, $2, $3, $4, $5)
 # $3: threshold (float)
 # $4: limit (int)
 # $5: user_id (str | None)
+# Returns:
+# - entity_type: Table name (e.g., "resources", "files")
+# - similarity_score: Fuzzy match score (0.0-1.0)
+# - data: Complete entity record as JSONB
 
 
 # SEARCH Query
 # Delegates to rem_search() PostgreSQL function
+# Returns raw JSONB data with similarity scores
 SEARCH_QUERY = """
 SELECT
-    entity_key,
     entity_type,
-    entity_id,
     similarity_score,
-    content_summary
+    data
 FROM rem_search($1, $2, $3, $4, $5, $6, $7, $8)
 """
 # Parameters:
@@ -70,6 +70,10 @@ FROM rem_search($1, $2, $3, $4, $5, $6, $7, $8)
 # $6: min_similarity (float)
 # $7: limit (int)
 # $8: user_id (str | None)
+# Returns:
+# - entity_type: Table name (e.g., "resources", "moments")
+# - similarity_score: Vector similarity (0.0-1.0)
+# - data: Complete entity record as JSONB
 
 
 # TRAVERSE Query
@@ -83,14 +87,15 @@ SELECT
     rel_type,
     rel_weight,
     path
-FROM rem_traverse($1, $2, $3, $4, $5)
+FROM rem_traverse($1, $2, $3, $4, $5, $6)
 """
 # Parameters:
 # $1: start_key (str)
 # $2: tenant_id (str)
-# $3: max_depth (int)
-# $4: rel_types (list[str] | None)
-# $5: user_id (str | None)
+# $3: user_id (str | None)
+# $4: max_depth (int)
+# $5: rel_type (str | None) - single type, not array
+# $6: keys_only (bool)
 
 
 # SQL Query Builder
@@ -162,7 +167,7 @@ def get_search_params(
     Note: provider parameter is required (no default) - should come from settings.
     """
     return (
-        query_embedding,
+        str(query_embedding),
         table_name,
         field_name,
         tenant_id,
@@ -177,9 +182,15 @@ def get_search_params(
 def get_traverse_params(
     start_key: str,
     tenant_id: str,
+    user_id: str | None,
     max_depth: int = 1,
-    rel_types: list[str] | None = None,
-    user_id: str | None = None,
+    rel_type: str | None = None,
+    keys_only: bool = False,
 ) -> tuple:
-    """Get parameters for TRAVERSE query."""
-    return (start_key, tenant_id, max_depth, rel_types, user_id)
+    """
+    Get parameters for TRAVERSE query.
+
+    Note: rel_type is singular (not array) - PostgreSQL function filters by single type.
+    If you need multiple types, call traverse multiple times or update the function.
+    """
+    return (start_key, tenant_id, user_id, max_depth, rel_type, keys_only)

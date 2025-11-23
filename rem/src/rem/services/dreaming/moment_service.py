@@ -7,7 +7,7 @@ with temporal boundaries and metadata.
 """
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
@@ -17,9 +17,9 @@ from loguru import logger
 
 from ...agentic.providers.pydantic_ai import create_agent
 from ...agentic.serialization import serialize_agent_result
-from ...models.entities.moment import Moment
+from ...models.entities.moment import Moment, Person
 from ...models.entities.resource import Resource
-from ...models.entities.session import Session
+from ...models.entities.message import Message
 from ...services.postgres.repository import Repository
 from ...services.postgres.service import PostgresService
 
@@ -56,11 +56,11 @@ async def construct_moments(
     Returns:
         Statistics about moment construction
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+    cutoff = datetime.utcnow() - timedelta(hours=lookback_hours)
 
     # Create repositories
     resource_repo = Repository(Resource, "resources", db=db)
-    session_repo = Repository(Session, "sessions", db=db)
+    message_repo = Repository(Message, "messages", db=db)
     moment_repo = Repository(Moment, "moments", db=db)
 
     # Query recent resources
@@ -68,17 +68,17 @@ async def construct_moments(
         filters={
             "user_id": user_id,
         },
-        order_by="resource_timestamp DESC",
+        order_by="created_at DESC",
         limit=limit,
     )
 
     # Filter by timestamp (SQL doesn't support comparisons in find yet)
     resources = [
-        r for r in resources if r.resource_timestamp and r.resource_timestamp >= cutoff
+        r for r in resources if r.created_at and r.created_at >= cutoff
     ]
 
-    # Query recent sessions
-    sessions = await session_repo.find(
+    # Query recent messages (grouped by session_id for context)
+    messages = await message_repo.find(
         filters={
             "user_id": user_id,
         },
@@ -87,14 +87,14 @@ async def construct_moments(
     )
 
     # Filter by timestamp
-    sessions = [s for s in sessions if s.created_at >= cutoff]
+    messages = [m for m in messages if m.created_at >= cutoff]
 
-    if not resources and not sessions:
+    if not resources and not messages:
         return {
             "user_id": user_id,
             "lookback_hours": lookback_hours,
             "resources_queried": 0,
-            "sessions_queried": 0,
+            "messages_queried": 0,
             "moments_created": 0,
             "graph_edges_added": 0,
             "status": "no_data",
@@ -105,6 +105,7 @@ async def construct_moments(
         Path(__file__).parent.parent.parent
         / "schemas"
         / "agents"
+        / "core"
         / "moment-builder.yaml"
     )
 
@@ -118,38 +119,42 @@ async def construct_moments(
     input_data = {
         "resources": [
             {
-                "id": r.id,
+                "id": str(r.id),
                 "name": r.name,
                 "category": r.category,
                 "content": r.content,
-                "resource_timestamp": (
-                    r.resource_timestamp.isoformat() if r.resource_timestamp else None
+                "created_at": (
+                    r.created_at.isoformat() if r.created_at else None
                 ),
             }
             for r in resources
         ],
-        "sessions": [
+        "messages": [
             {
-                "id": s.id,
-                "query": s.query,
-                "response": s.response,
-                "created_at": s.created_at.isoformat(),
-                "metadata": s.metadata,
+                "id": str(m.id),
+                "session_id": m.session_id,
+                "message_type": m.message_type,
+                "content": m.content,
+                "created_at": m.created_at.isoformat(),
             }
-            for s in sessions
+            for m in messages
         ],
     }
 
     # Create and run MomentBuilder agent
-    agent = await create_agent(
+    agent_runtime = await create_agent(
         agent_schema_override=agent_schema,
-        model_override=default_model,
+        model_override=default_model,  # type: ignore[arg-type]
     )
 
-    result = await agent.run(json.dumps(input_data, indent=2))
+    result = await agent_runtime.run(json.dumps(input_data, indent=2))
 
     # Serialize result (critical for Pydantic models!)
     output_data = serialize_agent_result(result.output)
+
+    # Type guard: ensure we have a dict
+    if not isinstance(output_data, dict):
+        raise ValueError(f"Expected dict from MomentBuilder agent, got {type(output_data)}")
 
     # Extract moments
     moments_data = output_data.get("moments", [])
@@ -164,8 +169,8 @@ async def construct_moments(
     total_edges = 0
 
     for moment_data in moments_data:
-        # Map resource_timestamp/resource_ends_timestamp to starts_timestamp/ends_timestamp
-        starts_ts_str = moment_data.get("resource_timestamp")
+        # Map created_at/resource_ends_timestamp to starts_timestamp/ends_timestamp
+        starts_ts_str = moment_data.get("created_at")
         ends_ts_str = moment_data.get("resource_ends_timestamp")
 
         if not starts_ts_str:
@@ -196,7 +201,7 @@ async def construct_moments(
                         "entity_type": "resource",
                         "extraction_method": "moment_builder_agent",
                     },
-                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "created_at": datetime.utcnow().isoformat(),
                 }
             )
 
@@ -211,7 +216,7 @@ async def construct_moments(
                         "entity_type": "session",
                         "extraction_method": "moment_builder_agent",
                     },
-                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "created_at": datetime.utcnow().isoformat(),
                 }
             )
 
@@ -226,7 +231,7 @@ async def construct_moments(
             starts_timestamp=starts_ts,
             ends_timestamp=ends_ts,
             present_persons=[
-                {"id": p["id"], "name": p["name"], "role": p.get("comment")}
+                Person(id=p["id"], name=p["name"], role=p.get("comment"))
                 for p in moment_data.get("present_persons", [])
             ],
             emotion_tags=moment_data.get("emotion_tags", []),
@@ -234,8 +239,8 @@ async def construct_moments(
             summary=moment_data.get("content"),  # Use content as summary
             source_resource_ids=source_resource_ids,
             graph_edges=graph_edges,
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
         )
 
         # Save to database (embeddings auto-generated by embedding worker)
@@ -251,7 +256,7 @@ async def construct_moments(
         "user_id": user_id,
         "lookback_hours": lookback_hours,
         "resources_queried": len(resources),
-        "sessions_queried": len(sessions),
+        "messages_queried": len(messages),
         "moments_created": len(created_moments),
         "graph_edges_added": total_edges,
         "analysis_summary": analysis_summary,

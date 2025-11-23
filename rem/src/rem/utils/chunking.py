@@ -52,7 +52,7 @@ def chunk_text(text: str) -> list[str]:
         return []
 
     chunks = []
-    current_chunk = []
+    current_chunk: list[str] = []
     current_size = 0
 
     # Split by paragraphs (double newline) first

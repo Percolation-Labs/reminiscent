@@ -6,7 +6,7 @@ raw HTTP requests (no OpenAI SDK dependency).
 """
 
 import os
-from typing import Optional
+from typing import Optional, cast
 
 import httpx
 import requests
@@ -54,7 +54,7 @@ def generate_embedding(
             data = response.json()
             embedding = data["data"][0]["embedding"]
             logger.info(f"Successfully generated embedding (dimension: {len(embedding)})")
-            return embedding
+            return cast(list[float], embedding)
 
         except Exception as e:
             logger.error(f"Failed to generate embedding from OpenAI: {e}", exc_info=True)
@@ -109,7 +109,7 @@ async def generate_embedding_async(
                 logger.info(
                     f"Successfully generated embedding (dimension: {len(embedding)})"
                 )
-                return embedding
+                return cast(list[float], embedding)
 
         except Exception as e:
             logger.error(f"Failed to generate embedding from OpenAI: {e}", exc_info=True)

@@ -65,22 +65,22 @@ from rem.settings import settings
 try:
     import polars as pl
 except ImportError:
-    pl = None
+    pl = None  # type: ignore[assignment]
 
 try:
     import pandas as pd
 except ImportError:
-    pd = None
+    pd = None  # type: ignore[assignment]
 
 try:
     import yaml
 except ImportError:
-    yaml = None
+    yaml = None  # type: ignore[assignment]
 
 try:
     from PIL import Image
 except ImportError:
-    Image = None
+    Image = None  # type: ignore[assignment]
 
 try:
     import pyarrow as pa
@@ -281,7 +281,7 @@ class S3Provider:
         except ClientError:
             return False
 
-    def open(self, uri: str, mode: str = "rb", version_id: str | None = None) -> BinaryIO:
+    def open(self, uri: str, mode: str = "rb", version_id: str | None = None) -> BytesIO | FileLikeWritable:
         """
         Open S3 object as file-like object.
 
@@ -508,14 +508,14 @@ class S3Provider:
             if isinstance(data, dict):
                 if not yaml:
                     raise ImportError("PyYAML required for YAML support")
-                content = yaml.safe_dump(data)
-                return self._client.put_object(Bucket=bucket, Key=prefix, Body=content)
+                yaml_str = yaml.safe_dump(data)
+                return self._client.put_object(Bucket=bucket, Key=prefix, Body=yaml_str.encode('utf-8'))
             raise TypeError(f"YAML requires dict, got {type(data)}")
 
         if suffix == ".json":
             if isinstance(data, dict):
-                content = json.dumps(data)
-                return self._client.put_object(Bucket=bucket, Key=prefix, Body=content)
+                json_str = json.dumps(data)
+                return self._client.put_object(Bucket=bucket, Key=prefix, Body=json_str.encode('utf-8'))
             raise TypeError(f"JSON requires dict, got {type(data)}")
 
         # Image formats
@@ -597,7 +597,7 @@ class S3Provider:
             List of S3 URIs
         """
         results = self.glob(uri, file_type=file_type, search=search, **kwargs)
-        return [obj.uri for obj in results]
+        return [obj.uri for obj in results if obj.uri is not None]
 
     def glob(
         self, uri: str, file_type: str = "*", search: str = "**/", **kwargs

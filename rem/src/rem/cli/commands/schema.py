@@ -121,8 +121,8 @@ def validate(models: Path):
 
     click.echo(f"✓ Discovered {len(discovered)} models")
 
-    errors = []
-    warnings = []
+    errors: list[str] = []
+    warnings: list[str] = []
 
     for model_name, model in discovered.items():
         table_name = generator.infer_table_name(model)
@@ -133,23 +133,20 @@ def validate(models: Path):
             warnings.append(f"{model_name}: No natural key field, using 'id'")
 
         # Check for embeddable fields
-        embeddable = [
-            name
-            for name, info in model.model_fields.items()
-            if generator.infer_entity_key_field  # Placeholder for should_embed_field
-        ]
+        # TODO: Implement should_embed_field check
+        embeddable: list[str] = []  # Placeholder - needs implementation
 
         click.echo(f"  {model_name} -> {table_name} (key: {entity_key})")
 
     if warnings:
         click.echo("\nWarnings:")
         for warning in warnings:
-            click.echo(f"  ⚠ {warning}", fg="yellow")
+            click.echo(click.style(f"  ⚠ {warning}", fg="yellow"))
 
     if errors:
         click.echo("\nErrors:")
         for error in errors:
-            click.echo(f"  ✗ {error}", fg="red")
+            click.echo(click.style(f"  ✗ {error}", fg="red"))
         raise click.Abort()
 
     click.echo("\n✓ All models valid")
@@ -175,8 +172,8 @@ def indexes(output: Path):
     generator = SchemaGenerator()
 
     # Load existing schemas (would need to be persisted or regenerated)
-    click.echo("⚠ Note: This requires schemas to be generated first", fg="yellow")
-    click.echo("⚠ Run 'rem db schema generate' before 'rem db schema indexes'", fg="yellow")
+    click.echo(click.style("⚠ Note: This requires schemas to be generated first", fg="yellow"))
+    click.echo(click.style("⚠ Run 'rem db schema generate' before 'rem db schema indexes'", fg="yellow"))
 
 
 def register_commands(schema_group):

@@ -1,0 +1,48 @@
+REM System Architecture Document
+
+Overview
+The REM (Resources Entities Moments) system is a cloud-native memory architecture for agentic AI workloads. This document describes the core components and design principles.
+
+Architecture
+REM uses a multi-index organization pattern:
+- Resources: Chunked, embedded content from documents and conversations
+- Entities: Domain knowledge nodes with properties and relationships
+- Moments: Temporal narratives and time-bound events
+
+Key Features
+1. Vector embeddings for semantic search using pgvector
+2. Graph edges for knowledge relationships
+3. Temporal indexing for chronological queries
+4. Natural language entity labels instead of UUIDs
+
+Technical Stack
+- PostgreSQL 18 with pgvector extension
+- FastAPI for REST and streaming endpoints
+- Pydantic AI for agent orchestration
+- AWS EKS for cloud deployment
+
+Design Principles
+- Lean, stubs-first implementation
+- Strict separation of concerns
+- DRY (Don't Repeat Yourself)
+- Pydantic 2.0 models for all data structures
+- UTC-naive datetime convention throughout
+
+Query Language
+REM provides five query modes:
+- LOOKUP: O(1) retrieval by entity label
+- FUZZY: Typo-tolerant search with pg_trgm
+- SEARCH: Semantic vector search
+- TRAVERSE: Recursive graph traversal
+- SQL: Direct SQL queries for complex operations
+
+Memory Evolution
+The system progresses through dreaming stages:
+- Stage 0: Raw resources only (0% answerable)
+- Stage 1: Entity extraction (20% answerable)
+- Stage 2: Moments generation (50% answerable)
+- Stage 3: Affinity matching (80% answerable)
+- Stage 4: Full query capabilities (100% answerable)
+
+Deployment
+REM deploys on AWS EKS with Karpenter autoscaling, CloudNativePG for database management, and ArgoCD for GitOps continuous delivery.

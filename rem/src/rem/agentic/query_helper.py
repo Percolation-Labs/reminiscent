@@ -17,7 +17,7 @@ class REMQueryOutput(BaseModel):
     """
     REM Query Agent structured output.
 
-    Matches the schema defined in schemas/agents/rem-query-agent.yaml
+    Matches the schema defined in schemas/agents/core/rem-query-agent.yaml
     """
 
     query: str
@@ -51,17 +51,17 @@ async def ask_rem(
         #     reasoning=""
         # )
     """
-    # Create context
-    context = AgentContext(
-        user_id=user_id,
-        default_model=llm_model,
-    )
+    # Create context (only pass default_model if llm_model is provided)
+    context_kwargs = {"user_id": user_id}
+    if llm_model is not None:
+        context_kwargs["default_model"] = llm_model
+    context = AgentContext(**context_kwargs)
 
     # Load agent from YAML schema
     agent = await create_agent_from_schema_file(
         schema_name_or_path="rem-query-agent",
         context=context,
-        model_override=llm_model,
+        model_override=llm_model,  # type: ignore[arg-type]
     )
 
     # Run query

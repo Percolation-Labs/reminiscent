@@ -253,12 +253,12 @@ def create_phoenix_evaluator(
         phoenix_model_name = model_name
 
     # Create appropriate Phoenix LLM wrapper based on provider
+    llm: OpenAIModel | AnthropicModel
     if provider.lower() == "anthropic":
-        # Anthropic models don't support both temperature and top_p
+        # Anthropic models don't support top_p parameter
         llm = AnthropicModel(
             model=phoenix_model_name,
             temperature=0.0,
-            top_p=None  # Don't send top_p to Anthropic API
         )
     else:
         # Default to OpenAI for other providers (gpt-4, etc.)
@@ -668,7 +668,7 @@ def run_evaluation_experiment(
     )
 
     logger.success(
-        f"Experiment complete. View results: {experiment.url if hasattr(experiment, 'url') else 'N/A'}"
+        f"Experiment complete. View results: {experiment.url if hasattr(experiment, 'url') else 'N/A'}"  # type: ignore[attr-defined]
     )
 
     return experiment

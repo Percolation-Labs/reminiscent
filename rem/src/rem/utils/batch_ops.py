@@ -171,7 +171,7 @@ def prepare_record_for_upsert(
             continue
 
         field_info = model.model_fields.get(field_name)
-        if field_info and field_info.is_required():
+        if field_info is not None and field_info.is_required():
             # Keep required fields even if None (will error if truly NULL)
             cleaned_data[field_name] = field_value
         elif field_value is not None:

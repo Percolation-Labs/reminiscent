@@ -20,7 +20,7 @@ import pytest
 import yaml
 
 from rem.models.entities import Resource
-from rem.services.postgres import PostgresService
+from rem.services.postgres import PostgresService, Repository
 from rem.utils.model_helpers import get_entity_key_field, get_embeddable_fields
 
 
@@ -44,13 +44,9 @@ async def postgres_service() -> PostgresService:
     """
     Create PostgresService instance.
     """
-    connection_string = "postgresql://rem:rem@localhost:5050/rem"
-    pg = PostgresService(connection_string=connection_string)
-
+    pg = PostgresService()
     await pg.connect()
-
     yield pg
-
     await pg.disconnect()
 
 
@@ -60,7 +56,7 @@ class TestBatchUpsertIntegration:
     async def test_load_seed_data(self, resources_seed_data):
         """Test loading seed data from YAML."""
         assert len(resources_seed_data) == 5
-        assert resources_seed_data[0]["name"] == "getting-started-guide"
+        assert resources_seed_data[0]["name"] == "docs://getting-started.md"
         assert resources_seed_data[0]["tenant_id"] == "acme-corp"
         assert "content" in resources_seed_data[0]
 
@@ -75,13 +71,13 @@ class TestBatchUpsertIntegration:
             if "ordinal" not in data:
                 data["ordinal"] = 0
 
-            # Parse timestamp
+            # Parse timestamp (convert to timezone-naive to match CoreModel)
             if "timestamp" in data and isinstance(data["timestamp"], str):
                 from datetime import datetime
 
                 data["timestamp"] = datetime.fromisoformat(
                     data["timestamp"].replace("Z", "+00:00")
-                )
+                ).replace(tzinfo=None)
 
             resource = Resource(**data)
             resources.append(resource)
@@ -93,21 +89,16 @@ class TestBatchUpsertIntegration:
         assert entity_key_field == "name"
         assert "content" in embeddable_fields
 
-        # Batch upsert
-        result = await postgres_service.batch_upsert(
-            records=resources,
-            model=Resource,
-            table_name="resources",
-            entity_key_field=entity_key_field,
-            embeddable_fields=embeddable_fields,
-            batch_size=100,
-            generate_embeddings=False,  # Stub for now
-        )
+        # Batch upsert using Repository pattern
+        repo = Repository(Resource, "resources", db=postgres_service)
+        upserted = await repo.upsert(resources)
 
-        # Verify results
-        assert result["upserted_count"] == 5
-        assert result["kv_store_populated"] == 5  # 1:1 via triggers
-        assert result["batches_processed"] == 1  # All in one batch
+        # Verify results (Repository.upsert returns the records, not a dict)
+        assert len(upserted) == 5
+
+        # Verify all resources were upserted (have IDs)
+        for resource in upserted:
+            assert resource.id is not None
 
     async def test_deterministic_id_generation(self, resources_seed_data):
         """Test that resources with same URI + ordinal get same ID."""
@@ -198,11 +189,11 @@ class TestSeedDataLoaderUtil:
             if "ordinal" not in data:
                 data["ordinal"] = 0
 
-            # Parse timestamp
+            # Parse timestamp (convert to timezone-naive to match CoreModel)
             if "timestamp" in data and isinstance(data["timestamp"], str):
                 data["timestamp"] = datetime.fromisoformat(
                     data["timestamp"].replace("Z", "+00:00")
-                )
+                ).replace(tzinfo=None)
 
             resource = Resource(**data)
             resources.append(resource)
@@ -212,7 +203,7 @@ class TestSeedDataLoaderUtil:
 
         # Check first resource
         first = resources[0]
-        assert first.name == "getting-started-guide"
+        assert first.name == "docs://getting-started.md"
         assert first.tenant_id == "acme-corp"
         assert first.ordinal == 0
 
@@ -246,7 +237,7 @@ if __name__ == "__main__":
         if "timestamp" in item and isinstance(item["timestamp"], str):
             item["timestamp"] = datetime.fromisoformat(
                 item["timestamp"].replace("Z", "+00:00")
-            )
+            ).replace(tzinfo=None)
 
         resource = Resource(**item)
         resources.append(resource)

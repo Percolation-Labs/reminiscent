@@ -156,7 +156,7 @@ cp postman-collection.json experiments/rem-001/validation/sme-examples/
 **Option B: Production Data**
 ```bash
 # Export validated production queries
-rem eval trace list --project rem-production --days 30 --output prod-queries.csv
+rem experiments trace list --project rem-production --days 30 --output prod-queries.csv
 # Manual review and curation
 cp curated-queries.csv experiments/rem-001/validation/production/
 ```
@@ -237,7 +237,7 @@ rem ask ask_rem "LOOKUP person:sarah-chen" --case-ref $CASE_REF
 
 ```bash
 # 1. Create golden dataset
-rem eval dataset create rem-lookup-ask_rem-golden \
+rem experiments dataset create rem-lookup-ask_rem-golden \
   --from-csv experiments/rem-001/outputs/questions.csv \
   --input-keys input \
   --output-keys reference \
@@ -247,7 +247,7 @@ rem eval dataset create rem-lookup-ask_rem-golden \
 # Edit schemas/evaluators/ask_rem-correctness.yaml
 
 # 3. Run baseline experiment
-rem eval experiment run rem-lookup-ask_rem-golden \
+rem experiments experiment run rem-lookup-ask_rem-golden \
   --experiment rem-lookup-ask_rem-v1 \
   --agent ask_rem \
   --evaluator ask_rem-correctness \
@@ -260,13 +260,13 @@ rem eval experiment run rem-lookup-ask_rem-golden \
 
 ```bash
 # V1 baseline
-rem eval experiment run ... --experiment rem-lookup-ask_rem-v1
+rem experiments experiment run ... --experiment rem-lookup-ask_rem-v1
 
 # V2 after prompt improvements
-rem eval experiment run ... --experiment rem-lookup-ask_rem-v2
+rem experiments experiment run ... --experiment rem-lookup-ask_rem-v2
 
 # V3 after tool fixes
-rem eval experiment run ... --experiment rem-lookup-ask_rem-v3
+rem experiments experiment run ... --experiment rem-lookup-ask_rem-v3
 
 # Compare in Phoenix UI
 open http://localhost:6006
@@ -311,14 +311,14 @@ validation/sme-examples/expert-mappings.yaml
 **Workflow**:
 ```bash
 # Export production traces
-rem eval trace list --project rem-production --days 30 --limit 1000 \
+rem experiments trace list --project rem-production --days 30 --limit 1000 \
   --output prod-traces.csv
 
 # Manual curation (validate correctness)
 # Keep only queries with verified correct outputs
 
 # Create test dataset
-rem eval dataset create rem-production-regression \
+rem experiments dataset create rem-production-regression \
   --from-csv curated-prod-queries.csv \
   --input-keys query \
   --output-keys expected_output
@@ -373,7 +373,7 @@ rem engram export rem-engrams-high-quality \
   --format phoenix
 
 # Create dataset
-rem eval dataset create rem-search-ask_rem-golden \
+rem experiments dataset create rem-search-ask_rem-golden \
   --from-engrams engrams.csv \
   --input-keys query,context \
   --output-keys entities,relationships \
@@ -400,7 +400,7 @@ Golden Set Composition:
 cp sme-examples/*.json validation/sme-examples/
 
 # 2. Export production data
-rem eval trace list --project rem-prod --output prod.csv
+rem experiments trace list --project rem-prod --output prod.csv
 
 # 3. Generate engrams
 rem engram export rem-high-quality --output engrams.csv
@@ -413,7 +413,7 @@ python scripts/merge_golden_sets.py \
   --output golden-set.csv
 
 # 5. Create Phoenix dataset
-rem eval dataset create rem-comprehensive-golden \
+rem experiments dataset create rem-comprehensive-golden \
   --from-csv golden-set.csv \
   --input-keys query,context \
   --output-keys reference
@@ -505,11 +505,11 @@ Examples:
 **Usage**:
 ```bash
 # Automatic labeling
-rem eval dataset create rem-lookup-ask_rem-golden ...
+rem experiments dataset create rem-lookup-ask_rem-golden ...
 # Labels: rem, golden-set, rem-lookup (auto-applied)
 
 # Custom labels
-rem eval dataset create ... --labels production,high-priority
+rem experiments dataset create ... --labels production,high-priority
 ```
 
 ---
@@ -671,7 +671,7 @@ Agent is stable enough for formal Phoenix tracking.
 ### Step 1: Create Golden Dataset
 
 ```bash
-rem eval dataset create rem-lookup-ask_rem-golden \
+rem experiments dataset create rem-lookup-ask_rem-golden \
   --from-csv experiments/rem-001/outputs/questions.csv \
   --input-keys input \
   --output-keys reference \
@@ -766,7 +766,7 @@ json_schema_extra:
 ### Step 3: Run Baseline Experiment
 
 ```bash
-rem eval experiment run rem-lookup-ask_rem-golden \
+rem experiments experiment run rem-lookup-ask_rem-golden \
   --experiment rem-lookup-ask_rem-v1 \
   --agent ask_rem \
   --evaluator ask_rem-correctness \
@@ -792,7 +792,7 @@ open http://localhost:6006
 
 ```bash
 # After improvements (v2)
-rem eval experiment run rem-lookup-ask_rem-golden \
+rem experiments experiment run rem-lookup-ask_rem-golden \
   --experiment rem-lookup-ask_rem-v2 \
   --agent ask_rem \
   --evaluator ask_rem-correctness \
@@ -816,11 +816,11 @@ rem eval experiment run rem-lookup-ask_rem-golden \
 
 ```bash
 # Step 1: Export previous experiment results
-rem eval experiment export rem-lookup-ask_rem-v1 \
+rem experiments experiment export rem-lookup-ask_rem-v1 \
   --output /tmp/v1-results.csv
 
 # Step 2: Run new evaluator on exported results
-rem eval experiment run \
+rem experiments experiment run \
   --from-results /tmp/v1-results.csv \
   --experiment rem-lookup-ask_rem-v1-reeval \
   --evaluator ask_rem-completeness-v2 \
@@ -833,17 +833,17 @@ rem eval experiment run \
 
 ```bash
 # Baseline (old evaluator)
-rem eval experiment run rem-lookup-ask_rem-golden \
+rem experiments experiment run rem-lookup-ask_rem-golden \
   --experiment rem-eval-comparison-v1 \
   --agent ask_rem \
   --evaluator ask_rem-correctness-v1
 
 # Export results
-rem eval experiment export rem-eval-comparison-v1 \
+rem experiments experiment export rem-eval-comparison-v1 \
   --output /tmp/agent-outputs.csv
 
 # Re-evaluate with new evaluator
-rem eval experiment run \
+rem experiments experiment run \
   --from-results /tmp/agent-outputs.csv \
   --experiment rem-eval-comparison-v2 \
   --evaluator ask_rem-correctness-v2
@@ -860,24 +860,24 @@ rem eval experiment run \
 
 ```bash
 # Run agent once
-rem eval experiment run rem-lookup-ask_rem-golden \
+rem experiments experiment run rem-lookup-ask_rem-golden \
   --experiment rem-multi-eval-baseline \
   --agent ask_rem
 
 # Export results
-rem eval experiment export rem-multi-eval-baseline \
+rem experiments experiment export rem-multi-eval-baseline \
   --output /tmp/baseline.csv
 
 # Re-evaluate with different evaluators
-rem eval experiment run --from-results /tmp/baseline.csv \
+rem experiments experiment run --from-results /tmp/baseline.csv \
   --experiment rem-correctness-eval \
   --evaluator ask_rem-correctness
 
-rem eval experiment run --from-results /tmp/baseline.csv \
+rem experiments experiment run --from-results /tmp/baseline.csv \
   --experiment rem-completeness-eval \
   --evaluator ask_rem-completeness
 
-rem eval experiment run --from-results /tmp/baseline.csv \
+rem experiments experiment run --from-results /tmp/baseline.csv \
   --experiment rem-faithfulness-eval \
   --evaluator ask_rem-faithfulness
 
@@ -914,9 +914,9 @@ input,reference,difficulty,query_type,entity_type
 **Versioning**:
 ```bash
 # Version golden sets when making significant changes
-rem eval dataset create rem-lookup-golden-v1 ...  # Initial
-rem eval dataset create rem-lookup-golden-v2 ...  # Added edge cases
-rem eval dataset create rem-lookup-golden-v3 ...  # Production failures
+rem experiments dataset create rem-lookup-golden-v1 ...  # Initial
+rem experiments dataset create rem-lookup-golden-v2 ...  # Added edge cases
+rem experiments dataset create rem-lookup-golden-v3 ...  # Production failures
 ```
 
 ### Evaluator Design
@@ -1011,11 +1011,11 @@ rem ask ask_rem "LOOKUP person:sarah-chen" --case-ref $CASE_REF
 # Judge: Does it match validation/golden-set/sarah-chen.json?
 
 # 4. Phoenix
-rem eval dataset create rem-lookup-ask_rem-golden \
+rem experiments dataset create rem-lookup-ask_rem-golden \
   --from-csv experiments/rem-lookup-001/outputs/questions.csv \
   --input-keys input --output-keys reference
 
-rem eval experiment run rem-lookup-ask_rem-golden \
+rem experiments experiment run rem-lookup-ask_rem-golden \
   --experiment rem-lookup-ask_rem-v1 \
   --agent ask_rem \
   --evaluator ask_rem-correctness
@@ -1033,13 +1033,13 @@ rem dreaming full --tenant-id acme --generate-test-cases --quality-level 4
 rem engram export rem-engrams-mature-mixed --output engrams.csv --format phoenix
 
 # 3. Create dataset
-rem eval dataset create rem-search-ask_rem-golden \
+rem experiments dataset create rem-search-ask_rem-golden \
   --from-engrams engrams.csv \
   --input-keys query,context \
   --output-keys entities,relationships
 
 # 4. Run experiment
-rem eval experiment run rem-search-ask_rem-golden \
+rem experiments experiment run rem-search-ask_rem-golden \
   --experiment rem-search-ask_rem-v1 \
   --agent ask_rem \
   --evaluator ask_rem-retrieval-precision,ask_rem-retrieval-recall
@@ -1051,10 +1051,10 @@ rem eval experiment run rem-search-ask_rem-golden \
 
 ```bash
 # 1. Baseline experiment (already run)
-# rem eval experiment run ... --experiment rem-v1
+# rem experiments experiment run ... --experiment rem-v1
 
 # 2. Export baseline results
-rem eval experiment export rem-lookup-ask_rem-v1 --output /tmp/v1.csv
+rem experiments experiment export rem-lookup-ask_rem-v1 --output /tmp/v1.csv
 
 # 3. Update prompt
 vim schemas/agents/ask-rem.yaml
@@ -1063,7 +1063,7 @@ vim schemas/agents/ask-rem.yaml
 rem ask ask_rem "LOOKUP person:sarah-chen" --case-ref rem-test
 
 # 5. Run full experiment with new prompt
-rem eval experiment run rem-lookup-ask_rem-golden \
+rem experiments experiment run rem-lookup-ask_rem-golden \
   --experiment rem-lookup-ask_rem-v2 \
   --agent ask_rem \
   --evaluator ask_rem-correctness
@@ -1080,7 +1080,7 @@ rem eval experiment run rem-lookup-ask_rem-golden \
 cp sme-postman-collection.json validation/sme-examples/
 
 # 2. Export production data
-rem eval trace list --project rem-prod --days 30 --output prod.csv
+rem experiments trace list --project rem-prod --days 30 --output prod.csv
 
 # 3. Generate engrams
 rem engram export rem-high-quality --output engrams.csv
@@ -1094,14 +1094,14 @@ python scripts/merge_golden_sets.py \
   --output golden-hybrid.csv
 
 # 5. Create Phoenix dataset
-rem eval dataset create rem-comprehensive-golden \
+rem experiments dataset create rem-comprehensive-golden \
   --from-csv golden-hybrid.csv \
   --input-keys query,context \
   --output-keys reference \
   --metadata-keys source,difficulty
 
 # 6. Run experiment
-rem eval experiment run rem-comprehensive-golden \
+rem experiments experiment run rem-comprehensive-golden \
   --experiment rem-comprehensive-v1 \
   --agent ask_rem \
   --evaluator ask_rem-correctness,ask_rem-completeness,ask_rem-faithfulness

@@ -288,6 +288,14 @@ class AudioProvider(ContentProvider):
             RuntimeError: If transcription fails or pydub not available
             ValueError: If OpenAI API key missing
         """
+        # Handle empty or invalid content
+        if not content or len(content) < 44:  # WAV header is minimum 44 bytes
+            logger.warning("Audio content too small to be valid WAV file")
+            return {
+                "text": "[Invalid or empty audio file]",
+                "metadata": {"error": "invalid_content", "size": len(content)},
+            }
+
         # Check for OpenAI API key
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
@@ -745,9 +753,9 @@ class ImageProvider(ContentProvider):
                         # Generate CLIP embedding
                         result = embedder.embed_image(tmp_path)
                         if result:
-                            clip_embedding = result.embedding
-                            clip_dimensions = result.dimensions
-                            clip_tokens = result.tokens_used
+                            clip_embedding = result.embedding  # type: ignore[attr-defined]
+                            clip_dimensions = result.dimensions  # type: ignore[attr-defined]
+                            clip_tokens = result.tokens_used  # type: ignore[attr-defined]
                             logger.info(
                                 f"CLIP embedding generated: {clip_dimensions} dims, {clip_tokens} tokens"
                             )

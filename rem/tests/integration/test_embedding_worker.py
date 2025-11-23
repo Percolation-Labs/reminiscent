@@ -42,8 +42,7 @@ def resources_seed_data(seed_data_path: Path) -> list[dict]:
 @pytest.fixture
 async def postgres_service() -> PostgresService:
     """Create PostgresService instance without embedding worker."""
-    connection_string = "postgresql://rem:rem@localhost:5050/rem"
-    pg = PostgresService(connection_string=connection_string, embedding_worker=None)
+    pg = PostgresService()
     await pg.connect()
     yield pg
     await pg.disconnect()
@@ -128,23 +127,21 @@ class TestEmbeddingWorker:
 
                     data["timestamp"] = datetime.fromisoformat(
                         data["timestamp"].replace("Z", "+00:00")
-                    )
+                    ).replace(tzinfo=None)
                 resource = Resource(**data)
                 resources.append(resource)
 
-            # Batch upsert with embeddings enabled
-            embeddable_fields = get_embeddable_fields(Resource)
-            result = await postgres_service.batch_upsert(
-                records=resources,
-                model=Resource,
-                table_name="resources",
-                entity_key_field="uri",
-                embeddable_fields=embeddable_fields,
-                generate_embeddings=True,
+            # Batch upsert using Repository pattern with embedding generation
+            from rem.services.postgres import Repository
+            repo = Repository(Resource, "resources", db=postgres_service)
+            upserted = await repo.upsert(
+                resources,
+                embeddable_fields=["content"],
+                generate_embeddings=True
             )
 
-            # Verify tasks were queued
-            assert result["embeddings_generated"] == 2  # 2 resources * 1 field each
+            # Verify resources were upserted
+            assert len(upserted) == 2
 
             # Wait for worker to process tasks
             await asyncio.sleep(2)
@@ -211,7 +208,8 @@ class TestBatchUpsertWithWorker:
 
     async def test_upsert_without_worker(self, postgres_service, resources_seed_data):
         """Test that upsert works without embedding worker (backward compat)."""
-        # No embedding worker set
+        # Clear embedding worker to test backward compatibility
+        postgres_service.embedding_worker = None
         assert postgres_service.embedding_worker is None
 
         # Convert YAML to Resource models
@@ -224,23 +222,17 @@ class TestBatchUpsertWithWorker:
 
                 data["timestamp"] = datetime.fromisoformat(
                     data["timestamp"].replace("Z", "+00:00")
-                )
+                ).replace(tzinfo=None)
             resource = Resource(**data)
             resources.append(resource)
 
-        # Batch upsert with embeddings enabled but no worker
-        result = await postgres_service.batch_upsert(
-            records=resources,
-            model=Resource,
-            table_name="resources",
-            entity_key_field="uri",
-            embeddable_fields=["content"],
-            generate_embeddings=True,  # Should be ignored without worker
-        )
+        # Batch upsert using Repository pattern (no embeddings worker)
+        from rem.services.postgres import Repository
+        repo = Repository(Resource, "resources", db=postgres_service)
+        upserted = await repo.upsert(resources)
 
-        # Should complete successfully but no embeddings generated
-        assert result["upserted_count"] == 1
-        assert result["embeddings_generated"] == 0  # No worker = no embeddings queued
+        # Should complete successfully
+        assert len(upserted) == 1
 
 
 if __name__ == "__main__":

@@ -408,7 +408,7 @@ Test loading specific schema versions from Git.
 
 ```bash
 # Tag hello-world schema
-git add schemas/agents/hello-world.yaml
+git add schemas/agents/examples/hello-world.yaml
 git commit -m "feat: hello-world agent v1.0.0"
 git tag -a schemas/hello-world/v1.0.0 -m "hello-world v1.0.0: Initial version"
 git push origin main --tags
@@ -558,7 +558,7 @@ echo $ANTHROPIC_API_KEY
 echo $OPENAI_API_KEY
 
 # Check agent schema exists
-ls -la schemas/agents/hello-world.yaml
+ls -la schemas/agents/examples/hello-world.yaml
 
 # Check evaluator schema exists
 ls -la schemas/evaluators/hello-world/default.yaml

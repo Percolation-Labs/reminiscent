@@ -1,33 +1,42 @@
 """
 Pydantic AI agent factory with dynamic JsonSchema to Pydantic model conversion.
 
-Known Issues
-1. Cerebras Qwen Strict Mode Incompatibility
-   - Cerebras qwen-3-32b requires additionalProperties=false for all object fields
-   - Cannot use dict[str, Any] for flexible parameters (breaks Qwen compatibility)
-   - Cannot use minimum/maximum constraints on number fields (Qwen rejects these)
-   - Workaround: Use cerebras:llama-3.3-70b instead (fully compatible)
-   - Future fix: Redesign REM agent to use discriminated union instead of dict
+AgentRuntime Pattern:
+    The create_agent() factory returns an AgentRuntime object containing:
+    - agent: The Pydantic AI Agent instance
+    - temperature: Resolved temperature (schema override or settings default)
+    - max_iterations: Resolved max iterations (schema override or settings default)
 
-Key Design Pattern
-1. JsonSchema → Pydantic Model (json-schema-to-pydantic library)
-2. Agent schema contains both system prompt AND output schema
-3. MCP tools loaded dynamically from schema metadata
-4. Result type can be stripped of description to avoid duplication with system prompt
-5. OTEL instrumentation conditional based on settings
+    This ensures runtime configuration is determined once at agent creation,
+    not re-computed at every call site.
 
-Unique Design
-- Agent schemas are JSON Schema with embedded metadata:
-  - description: System prompt for agent
-  - properties: Output schema fields
-  - json_schema_extra.tools: MCP tool configurations
-  - json_schema_extra.resources: MCP resource configurations
+Known Issues:
+    1. Cerebras Qwen Strict Mode Incompatibility
+       - Cerebras qwen-3-32b requires additionalProperties=false for all object fields
+       - Cannot use dict[str, Any] for flexible parameters (breaks Qwen compatibility)
+       - Cannot use minimum/maximum constraints on number fields (Qwen rejects these)
+       - Workaround: Use cerebras:llama-3.3-70b instead (fully compatible)
+       - Future fix: Redesign REM agent to use discriminated union instead of dict
 
-- Dynamic model creation from schema using json-schema-to-pydantic
-- Tools and resources loaded from MCP servers via schema config
-- Stripped descriptions to avoid LLM schema bloat
+Key Design Pattern:
+    1. JsonSchema → Pydantic Model (json-schema-to-pydantic library)
+    2. Agent schema contains both system prompt AND output schema
+    3. MCP tools loaded dynamically from schema metadata
+    4. Result type can be stripped of description to avoid duplication with system prompt
+    5. OTEL instrumentation conditional based on settings
 
-TODO: Model Cache Implementation (Critical for Production Scale)
+Unique Design:
+    - Agent schemas are JSON Schema with embedded metadata:
+      - description: System prompt for agent
+      - properties: Output schema fields
+      - json_schema_extra.tools: MCP tool configurations
+      - json_schema_extra.resources: MCP resource configurations
+    - Dynamic model creation from schema using json-schema-to-pydantic
+    - Tools and resources loaded from MCP servers via schema config
+    - Stripped descriptions to avoid LLM schema bloat
+
+TODO:
+    Model Cache Implementation (Critical for Production Scale)
     Current bottleneck: Every agent.run() call creates a new Agent instance with
     model initialization overhead. At scale (100+ requests/sec), this becomes expensive.
 
@@ -129,6 +138,41 @@ except ImportError:
 
 from ..context import AgentContext
 from ...settings import settings
+
+
+class AgentRuntime:
+    """
+    Agent runtime configuration bundle with delegation pattern.
+
+    Contains the agent instance and its resolved runtime parameters
+    (temperature, max_iterations) determined from schema overrides + settings defaults.
+
+    Delegates run() and iter() calls to the inner agent with automatic UsageLimits.
+    This allows callers to use AgentRuntime as a drop-in replacement for Agent.
+    """
+
+    def __init__(self, agent: Agent[None, Any], temperature: float, max_iterations: int):
+        self.agent = agent
+        self.temperature = temperature
+        self.max_iterations = max_iterations
+
+    async def run(self, *args, **kwargs):
+        """Delegate to agent.run() with automatic UsageLimits."""
+        from pydantic_ai import UsageLimits
+
+        # Only apply usage_limits if not already provided
+        if "usage_limits" not in kwargs:
+            kwargs["usage_limits"] = UsageLimits(request_limit=self.max_iterations)
+        return await self.agent.run(*args, **kwargs)
+
+    def iter(self, *args, **kwargs):
+        """Delegate to agent.iter() with automatic UsageLimits."""
+        from pydantic_ai import UsageLimits
+
+        # Only apply usage_limits if not already provided
+        if "usage_limits" not in kwargs:
+            kwargs["usage_limits"] = UsageLimits(request_limit=self.max_iterations)
+        return self.agent.iter(*args, **kwargs)
 
 
 def _create_model_from_schema(agent_schema: dict[str, Any]) -> type[BaseModel]:
@@ -317,8 +361,9 @@ async def create_agent_from_schema_file(
     Create agent from schema file (YAML/JSON).
 
     Handles path resolution automatically:
-    - "contract-analyzer" → searches schemas/agents/contract-analyzer.yaml
-    - "agents/cv-parser" → searches schemas/agents/cv-parser.yaml
+    - "contract-analyzer" → searches schemas/agents/examples/contract-analyzer.yaml
+    - "moment-builder" → searches schemas/agents/core/moment-builder.yaml
+    - "rem" → searches schemas/agents/rem.yaml
     - "/absolute/path.yaml" → loads directly
     - "relative/path.yaml" → loads relative to cwd
 
@@ -356,7 +401,7 @@ async def create_agent(
     model_override: KnownModelName | Model | None = None,
     result_type: type[BaseModel] | None = None,
     strip_model_description: bool = True,
-) -> Agent:
+) -> AgentRuntime:
     """
     Create agent from context with dynamic schema loading.
 
@@ -425,11 +470,15 @@ async def create_agent(
     # Extract schema fields
     system_prompt = agent_schema.get("description", "") if agent_schema else ""
     metadata = agent_schema.get("json_schema_extra", {}) if agent_schema else {}
-    tool_configs = metadata.get("tools", [])
+    mcp_server_configs = metadata.get("mcp_servers", [])
     resource_configs = metadata.get("resources", [])
 
+    # Extract temperature and max_iterations from schema metadata (with fallback to settings defaults)
+    temperature = metadata.get("override_temperature", settings.llm.default_temperature)
+    max_iterations = metadata.get("override_max_iterations", settings.llm.default_max_iterations)
+
     logger.info(
-        f"Creating agent: model={model}, tools={len(tool_configs)}, resources={len(resource_configs)}"
+        f"Creating agent: model={model}, mcp_servers={len(mcp_server_configs)}, resources={len(resource_configs)}"
     )
 
     # Set agent resource attributes for OTEL (before creating agent)
@@ -438,19 +487,43 @@ async def create_agent(
 
         set_agent_resource_attributes(agent_schema=agent_schema)
 
-    # Build list of Tool instances from tool and resource configs
+    # Build list of tools from MCP server (in-process, no subprocess)
     tools = []
-    if tool_configs:
-        # TODO: Load MCP tools dynamically
-        # from ..mcp.tool_wrapper import build_mcp_tools
-        # tools = await build_mcp_tools(tool_configs)
-        pass
+    if mcp_server_configs:
+        for server_config in mcp_server_configs:
+            server_type = server_config.get("type")
+            server_id = server_config.get("id", "mcp-server")
+
+            if server_type == "local":
+                # Import MCP server directly (in-process)
+                module_path = server_config.get("module", "rem.mcp_server")
+
+                try:
+                    # Dynamic import of MCP server module
+                    import importlib
+                    mcp_module = importlib.import_module(module_path)
+                    mcp_server = mcp_module.mcp
+
+                    # Extract tools from MCP server (get_tools is async)
+                    from ..mcp.tool_wrapper import create_mcp_tool_wrapper
+
+                    # Await async get_tools() call
+                    mcp_tools_dict = await mcp_server.get_tools()
+
+                    for tool_name, tool_func in mcp_tools_dict.items():
+                        wrapped_tool = create_mcp_tool_wrapper(tool_name, tool_func, user_id=context.user_id if context else None)
+                        tools.append(wrapped_tool)
+                        logger.debug(f"Loaded MCP tool: {tool_name}")
+
+                    logger.info(f"Loaded {len(mcp_tools_dict)} tools from MCP server: {server_id} (in-process)")
+
+                except Exception as e:
+                    logger.error(f"Failed to load MCP server {server_id}: {e}", exc_info=True)
+            else:
+                logger.warning(f"Unsupported MCP server type: {server_type}")
 
     if resource_configs:
         # TODO: Convert resources to tools (MCP convenience syntax)
-        # from ..mcp.tool_wrapper import build_resource_tools
-        # resource_tools = build_resource_tools(resource_configs)
-        # tools.extend(resource_tools)
         pass
 
     # Create dynamic result_type from schema if not provided
@@ -474,6 +547,8 @@ async def create_agent(
             output_type=wrapped_result_type,
             tools=tools,
             instrument=settings.otel.enabled,  # Conditional OTEL instrumentation
+            model_settings={"temperature": temperature},
+            retries=settings.llm.max_retries,
         )
     else:
         agent = Agent(
@@ -481,6 +556,8 @@ async def create_agent(
             system_prompt=system_prompt,
             tools=tools,
             instrument=settings.otel.enabled,
+            model_settings={"temperature": temperature},
+            retries=settings.llm.max_retries,
         )
 
     # TODO: Set agent context attributes for OTEL spans
@@ -488,4 +565,8 @@ async def create_agent(
     #     from ..otel import set_agent_context_attributes
     #     set_agent_context_attributes(context)
 
-    return agent
+    return AgentRuntime(
+        agent=agent,
+        temperature=temperature,
+        max_iterations=max_iterations,
+    )

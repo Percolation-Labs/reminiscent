@@ -13,14 +13,22 @@ Requires:
 - Seed data with graph edges
 """
 
+import os
 import pytest
 from pathlib import Path
 import yaml
 from datetime import datetime
 
 from rem.models.entities import Resource
-from rem.services.postgres import PostgresService
+from rem.services.postgres import PostgresService, Repository
 from rem.services.rem.query import REMQueryService
+
+
+# Skip embedding tests if no API key
+requires_openai_key = pytest.mark.skipif(
+    not os.getenv("OPENAI_API_KEY"),
+    reason="SEARCH tests require OPENAI_API_KEY for embedding generation"
+)
 
 
 @pytest.fixture
@@ -66,19 +74,23 @@ async def populated_database(postgres_service, resources_seed_data):
         if "timestamp" in data and isinstance(data["timestamp"], str):
             data["timestamp"] = datetime.fromisoformat(
                 data["timestamp"].replace("Z", "+00:00")
-            )
+            ).replace(tzinfo=None)  # Strip timezone, assume UTC
         resource = Resource(**data)
         resources.append(resource)
 
-    # Batch upsert
-    await postgres_service.batch_upsert(
-        records=resources,
-        model=Resource,
-        table_name="resources",
-        entity_key_field="uri",
+    # Batch upsert using Repository pattern with embeddings
+    repo = Repository(Resource, "resources", db=postgres_service)
+    await repo.upsert(
+        resources,
         embeddable_fields=["content"],
-        generate_embeddings=False,  # Skip for these tests
+        generate_embeddings=True,  # Generate embeddings for SEARCH tests
     )
+
+    # Wait for embedding generation to complete
+    import asyncio
+    await asyncio.sleep(10.0)  # Give background workers time to process embeddings
+    # Note: Embeddings are generated asynchronously by background workers
+    # In test environments, workers may be slower due to API rate limits
 
     return resources
 
@@ -89,7 +101,7 @@ class TestREMQuerySQL:
     async def test_sql_select(self, rem_query_service, populated_database):
         """Test SQL SELECT query."""
         result = await rem_query_service.execute(
-            'SQL SELECT name, category FROM resources WHERE category = \'documentation\' LIMIT 3'
+            'SELECT name, category FROM resources WHERE category = \'documentation\' LIMIT 3'
         )
 
         assert result.operation == "SQL"
@@ -99,12 +111,15 @@ class TestREMQuerySQL:
     async def test_sql_with_tenant(self, rem_query_service, populated_database):
         """Test SQL with tenant filter."""
         result = await rem_query_service.execute(
-            "SQL SELECT * FROM resources WHERE tenant_id = 'acme-corp'",
-            tenant_id="acme-corp",
+            "SELECT * FROM resources WHERE tenant_id = 'acme-corp'",
+            user_id="acme-corp",
         )
 
         assert result.operation == "SQL"
-        assert result.count == 5  # All our seed data
+        # Check that we got results (not checking exact count since data accumulates)
+        assert result.count >= 5  # At least our seed data
+        # Verify all results have correct tenant_id
+        assert all(r["tenant_id"] == "acme-corp" for r in result.results)
 
 
 class TestREMQueryLOOKUP:
@@ -114,7 +129,7 @@ class TestREMQueryLOOKUP:
         """Test exact KV store lookup."""
         result = await rem_query_service.execute(
             'LOOKUP "docs://getting-started.md" IN resources',
-            tenant_id="acme-corp",
+            user_id="acme-corp",
         )
 
         assert result.operation == "LOOKUP"
@@ -126,7 +141,7 @@ class TestREMQueryLOOKUP:
         """Test lookup for nonexistent key."""
         result = await rem_query_service.execute(
             'LOOKUP "docs://nonexistent.md" IN resources',
-            tenant_id="acme-corp",
+            user_id="acme-corp",
         )
 
         assert result.operation == "LOOKUP"
@@ -136,7 +151,7 @@ class TestREMQueryLOOKUP:
         """Test lookup across all entity types."""
         result = await rem_query_service.execute(
             'LOOKUP "docs://getting-started.md"',
-            tenant_id="acme-corp",
+            user_id="acme-corp",
         )
 
         assert result.operation == "LOOKUP"
@@ -150,7 +165,7 @@ class TestREMQueryFUZZYLOOKUP:
         """Test fuzzy lookup with partial match."""
         result = await rem_query_service.execute(
             'FUZZY LOOKUP "getting start" IN resources THRESHOLD 0.2',
-            tenant_id="acme-corp",
+            user_id="acme-corp",
         )
 
         assert result.operation == "FUZZY LOOKUP"
@@ -163,7 +178,7 @@ class TestREMQueryFUZZYLOOKUP:
         """Test fuzzy lookup with typo."""
         result = await rem_query_service.execute(
             'FUZZY LOOKUP "arcitecture" IN resources THRESHOLD 0.3',
-            tenant_id="acme-corp",
+            user_id="acme-corp",
         )
 
         assert result.operation == "FUZZY LOOKUP"
@@ -175,7 +190,7 @@ class TestREMQueryFUZZYLOOKUP:
         """Test fuzzy lookup with high threshold (no matches)."""
         result = await rem_query_service.execute(
             'FUZZY LOOKUP "completely-different" IN resources THRESHOLD 0.8',
-            tenant_id="acme-corp",
+            user_id="acme-corp",
         )
 
         assert result.operation == "FUZZY LOOKUP"
@@ -183,18 +198,29 @@ class TestREMQueryFUZZYLOOKUP:
         assert result.count <= 1
 
 
+@pytest.mark.skipif(
+    not os.getenv("OPENAI_API_KEY"),
+    reason="SEARCH tests require OPENAI_API_KEY for embedding generation"
+)
 class TestREMQuerySEARCH:
     """Test SEARCH operation (vector similarity)."""
 
     async def test_search_basic(self, rem_query_service, populated_database):
         """Test basic semantic search."""
+        # Additional wait for embeddings to be fully generated
+        # Background workers may take time to process the queue
+        import asyncio
+        await asyncio.sleep(3.0)
+
         result = await rem_query_service.execute(
             'SEARCH "getting started" FROM resources LIMIT 5',
-            tenant_id="acme-corp",
+            user_id="acme-corp",
         )
 
         assert result.operation == "SEARCH"
-        assert result.count >= 1
+        # Should find at least one result with embeddings generated
+        assert result.count >= 1, \
+            f"Expected at least 1 result, got {result.count}. Embeddings may not have been generated in time."
         assert result.count <= 5
         assert result.metadata["search_text"] == "getting started"
         assert result.metadata["limit"] == 5
@@ -203,7 +229,7 @@ class TestREMQuerySEARCH:
         """Test search with default table."""
         result = await rem_query_service.execute(
             'SEARCH "database architecture" LIMIT 3',
-            tenant_id="acme-corp",
+            user_id="acme-corp",
         )
 
         assert result.operation == "SEARCH"
@@ -219,7 +245,7 @@ class TestREMQueryTRAVERSE:
         # First get the ID of getting-started doc
         lookup = await rem_query_service.execute(
             'LOOKUP "docs://getting-started.md" IN resources',
-            tenant_id="acme-corp",
+            user_id="acme-corp",
         )
 
         assert lookup.count == 1
@@ -228,7 +254,7 @@ class TestREMQueryTRAVERSE:
         # Traverse outbound from getting-started
         result = await rem_query_service.execute(
             f'TRAVERSE "{entity_id}" OUTBOUND DEPTH 1',
-            tenant_id="acme-corp",
+            user_id="acme-corp",
         )
 
         assert result.operation == "TRAVERSE"
@@ -241,34 +267,39 @@ class TestREMQueryTRAVERSE:
         """Test traversal with edge type filter."""
         lookup = await rem_query_service.execute(
             'LOOKUP "docs://getting-started.md" IN resources',
-            tenant_id="acme-corp",
+            user_id="acme-corp",
         )
 
         entity_id = str(lookup.results[0]["entity_id"])
 
         result = await rem_query_service.execute(
             f'TRAVERSE "{entity_id}" OUTBOUND DEPTH 1 TYPE "references"',
-            tenant_id="acme-corp",
+            user_id="acme-corp",
         )
 
         assert result.operation == "TRAVERSE"
         assert result.metadata["edge_type"] == "references"
-        # Should only find "references" type edges
+        # Should only find "references" type edges (excluding root node at depth=0)
         if result.count > 0:
-            assert all(r["edge_type"] == "references" for r in result.results)
+            # Filter out root node (depth=0 has no edge_type)
+            edges = [r for r in result.results if (r.get("depth") is not None and r.get("depth") > 0)]
+            # If there are edges beyond root, they should all be "references"
+            if edges:
+                assert all(r.get("edge_type") == "references" for r in edges), \
+                    f"Not all edges have type 'references': {[(r.get('depth'), r.get('edge_type'), r.get('rel_type')) for r in edges]}"
 
     async def test_traverse_multi_hop(self, rem_query_service, populated_database):
         """Test multi-hop graph traversal."""
         lookup = await rem_query_service.execute(
             'LOOKUP "docs://getting-started.md" IN resources',
-            tenant_id="acme-corp",
+            user_id="acme-corp",
         )
 
         entity_id = str(lookup.results[0]["entity_id"])
 
         result = await rem_query_service.execute(
             f'TRAVERSE "{entity_id}" OUTBOUND DEPTH 2',
-            tenant_id="acme-corp",
+            user_id="acme-corp",
         )
 
         assert result.operation == "TRAVERSE"
@@ -280,7 +311,7 @@ class TestREMQueryTRAVERSE:
         """Test bidirectional graph traversal."""
         lookup = await rem_query_service.execute(
             'LOOKUP "docs://architecture/database.md" IN resources',
-            tenant_id="acme-corp",
+            user_id="acme-corp",
         )
 
         if lookup.count > 0:
@@ -288,7 +319,7 @@ class TestREMQueryTRAVERSE:
 
             result = await rem_query_service.execute(
                 f'TRAVERSE "{entity_id}" BOTH DEPTH 1',
-                tenant_id="acme-corp",
+                user_id="acme-corp",
             )
 
             assert result.operation == "TRAVERSE"

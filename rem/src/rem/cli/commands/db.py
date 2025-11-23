@@ -15,9 +15,11 @@ import hashlib
 import subprocess
 import time
 from pathlib import Path
+from typing import Type
 
 import click
 from loguru import logger
+from pydantic import BaseModel
 
 
 def get_connection_string() -> str:
@@ -44,13 +46,13 @@ def get_connection_string() -> str:
     return conn_str
 
 
-def run_sql_file(file_path: Path, conn_str: str) -> tuple[bool, str, float]:
+async def run_sql_file_async(file_path: Path, db) -> tuple[bool, str, float]:
     """
-    Execute a SQL file using psql.
+    Execute a SQL file using psycopg3 (synchronous, handles multi-statement SQL).
 
     Args:
         file_path: Path to SQL file
-        conn_str: PostgreSQL connection string
+        db: PostgresService instance (used to get connection info)
 
     Returns:
         Tuple of (success, output, execution_time_ms)
@@ -61,22 +63,31 @@ def run_sql_file(file_path: Path, conn_str: str) -> tuple[bool, str, float]:
     start_time = time.time()
 
     try:
-        result = subprocess.run(
-            ["psql", conn_str, "-f", str(file_path), "-v", "ON_ERROR_STOP=1"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
+        # Read SQL file
+        sql_content = file_path.read_text(encoding="utf-8")
+
+        # Use psycopg3 for reliable multi-statement execution
+        # This is the synchronous PostgreSQL driver, perfect for migrations
+        import psycopg
+        from ...settings import settings
+
+        # Use connection string from settings
+        conn_str = settings.postgres.connection_string
+
+        # Execute using synchronous psycopg (not async)
+        # This properly handles multi-statement SQL scripts
+        with psycopg.connect(conn_str) as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql_content)
+            conn.commit()
 
         execution_time = (time.time() - start_time) * 1000
-        return True, result.stdout + result.stderr, execution_time
+        return True, f"Successfully executed {file_path.name}", execution_time
 
-    except subprocess.CalledProcessError as e:
+    except Exception as e:
         execution_time = (time.time() - start_time) * 1000
-        error_output = e.stderr or e.stdout or str(e)
+        error_output = str(e)
         return False, error_output, execution_time
-    except FileNotFoundError:
-        return False, "psql command not found. Ensure PostgreSQL client is installed.", 0
 
 
 def calculate_checksum(file_path: Path) -> str:
@@ -131,6 +142,18 @@ def migrate(
         rem db migrate --models            # Entity tables only
         rem db migrate --background-indexes  # Background HNSW indexes
     """
+    asyncio.run(_migrate_async(install_only, models_only, background_indexes, connection, sql_dir))
+
+
+async def _migrate_async(
+    install_only: bool,
+    models_only: bool,
+    background_indexes: bool,
+    connection: str | None,
+    sql_dir: Path | None,
+):
+    """Async implementation of migrate command."""
+    from ...services.postgres import get_postgres_service
     # Find SQL directory - use package SQL if not specified
     if sql_dir is None:
         import importlib.resources
@@ -147,12 +170,9 @@ def migrate(
                 # Last resort: current directory
                 sql_dir = Path("sql")
 
-    conn_str = connection or get_connection_string()
-
     click.echo("REM Database Migration")
     click.echo("=" * 60)
     click.echo(f"SQL Directory: {sql_dir}")
-    click.echo(f"Connection: {conn_str.split('password')[0]}...")
     click.echo()
 
     # Discover migrations from migrations/ directory
@@ -188,46 +208,58 @@ def migrate(
                 click.secho(f"✗ {filename} not found", fg="red")
                 raise click.Abort()
 
-    # Apply migrations
-    total_time = 0
-    all_success = True
-
-    for filename, description in migrations:
-        file_path = sql_dir / filename
-        checksum = calculate_checksum(file_path)
-
-        click.echo(f"Applying: {description} ({filename})")
-        click.echo(f"  Checksum: {checksum[:16]}...")
-
-        success, output, exec_time = run_sql_file(file_path, conn_str)
-        total_time += exec_time
-
-        if success:
-            click.secho(f"  ✓ Applied in {exec_time:.0f}ms", fg="green")
-            # Show any NOTICE messages from the output
-            for line in output.split("\n"):
-                if "NOTICE:" in line or "✓" in line:
-                    notice = line.split("NOTICE:")[-1].strip()
-                    if notice:
-                        click.echo(f"    {notice}")
-        else:
-            click.secho(f"  ✗ Failed", fg="red")
-            click.echo()
-            click.secho("Error output:", fg="red")
-            click.secho(output, fg="red")
-            all_success = False
-            break
-
-        click.echo()
-
-    # Summary
-    click.echo("=" * 60)
-    if all_success:
-        click.secho(f"✓ All migrations applied successfully", fg="green")
-        click.echo(f"  Total time: {total_time:.0f}ms")
-    else:
-        click.secho(f"✗ Migration failed", fg="red")
+    # Connect to database
+    db = get_postgres_service()
+    if not db:
+        click.secho("Error: PostgreSQL is disabled in settings.", fg="red")
         raise click.Abort()
+        
+    await db.connect()
+
+    try:
+        # Apply migrations
+        total_time = 0.0
+        all_success = True
+
+        for filename, description in migrations:
+            file_path = sql_dir / filename
+            checksum = calculate_checksum(file_path)
+
+            click.echo(f"Applying: {description} ({filename})")
+            click.echo(f"  Checksum: {checksum[:16]}...")
+
+            success, output, exec_time = await run_sql_file_async(file_path, db)
+            total_time += exec_time
+
+            if success:
+                click.secho(f"  ✓ Applied in {exec_time:.0f}ms", fg="green")
+                # Show any NOTICE messages from the output
+                for line in output.split("\n"):
+                    if "NOTICE:" in line or "✓" in line:
+                        notice = line.split("NOTICE:")[-1].strip()
+                        if notice:
+                            click.echo(f"    {notice}")
+            else:
+                click.secho(f"  ✗ Failed", fg="red")
+                click.echo()
+                click.secho("Error output:", fg="red")
+                click.secho(output, fg="red")
+                all_success = False
+                break
+
+            click.echo()
+
+        # Summary
+        click.echo("=" * 60)
+        if all_success:
+            click.secho(f"✓ All migrations applied successfully", fg="green")
+            click.echo(f"  Total time: {total_time:.0f}ms")
+        else:
+            click.secho(f"✗ Migration failed", fg="red")
+            raise click.Abort()
+
+    finally:
+        await db.disconnect()
 
 
 @click.command()
@@ -245,53 +277,63 @@ def status(connection: str | None):
     - Execution times
     - Last applied timestamps
     """
-    conn_str = connection or get_connection_string()
+    asyncio.run(_status_async(connection))
 
+
+async def _status_async(connection: str | None):
+    """Async implementation of status command."""
+    from ...services.postgres import get_postgres_service
+
+    click.echo()
     click.echo("REM Migration Status")
     click.echo("=" * 60)
 
-    # Query migration status
-    query = "SELECT * FROM migration_status();"
+    db = get_postgres_service()
+    if not db:
+        click.secho("Error: PostgreSQL is disabled in settings.", fg="red")
+        raise click.Abort()
 
     try:
-        result = subprocess.run(
-            ["psql", conn_str, "-c", query, "-t", "-A", "-F", "|"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
+        await db.connect()
 
-        lines = result.stdout.strip().split("\n")
-        if not lines or not lines[0]:
-            click.echo("No migrations found")
+        # Query migration status
+        query = "SELECT * FROM migration_status();"
+
+        try:
+            rows = await db.fetch(query)
+
+            if not rows:
+                click.echo("No migrations found")
+                click.echo()
+                click.secho("Run: rem db migrate", fg="yellow")
+                return
+
+            # Display results
             click.echo()
-            click.secho("Run: rem db migrate --install", fg="yellow")
-            return
+            for row in rows:
+                migration_type = row.get("migration_type", "unknown")
+                count = row.get("count", 0)
+                last_applied = row.get("last_applied", "never")
+                total_time = row.get("total_time_ms", 0)
 
-        # Parse and display results
-        click.echo()
-        for line in lines:
-            if "|" not in line:
-                continue
-
-            parts = line.split("|")
-            if len(parts) >= 4:
-                migration_type, count, last_applied, total_time = parts
                 click.echo(f"{migration_type.upper()}:")
                 click.echo(f"  Count: {count}")
                 click.echo(f"  Last Applied: {last_applied}")
                 click.echo(f"  Total Time: {total_time}ms")
                 click.echo()
 
-    except subprocess.CalledProcessError as e:
-        error = e.stderr or e.stdout or str(e)
-        if "does not exist" in error or "relation" in error:
-            click.secho("✗ Migration table not found", fg="red")
-            click.echo()
-            click.secho("Run: rem db migrate --install", fg="yellow")
-        else:
-            click.secho(f"✗ Error: {error}", fg="red")
-        raise click.Abort()
+        except Exception as e:
+            error_str = str(e)
+            if "does not exist" in error_str or "relation" in error_str or "function" in error_str:
+                click.secho("✗ Migration tracking not found", fg="red")
+                click.echo()
+                click.secho("Run: rem db migrate", fg="yellow")
+            else:
+                click.secho(f"✗ Error: {error_str}", fg="red")
+            raise click.Abort()
+
+    finally:
+        await db.disconnect()
 
 
 @click.command()
@@ -411,7 +453,7 @@ async def _load_async(file_path: Path, user_id: str, dry_run: bool):
                 logger.warning(f"Unknown table: {table_name}, skipping")
                 continue
 
-            model_class = MODEL_MAP[table_name]
+            model_class = MODEL_MAP[table_name]  # Type is inferred from MODEL_MAP
 
             for row_data in rows:
                 # Add user_id and tenant_id (set to user_id for backward compat)
@@ -425,9 +467,12 @@ async def _load_async(file_path: Path, user_id: str, dry_run: bool):
                         for edge in row_data["graph_edges"]
                     ]
 
-                # Create model instance and upsert
+                # Create model instance and upsert via repository
+                from ...services.postgres.repository import Repository
+
                 instance = model_class(**row_data)
-                await pg.upsert(instance, model_class, table_name, entity_key_field=key_field)
+                repo = Repository(model_class, table_name, pg)  # Type inferred from MODEL_MAP
+                await repo.upsert(instance)  # type: ignore[arg-type]
                 total_loaded += 1
 
                 # Log based on model type

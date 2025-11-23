@@ -2,7 +2,45 @@
 
 Cloud-native unified memory infrastructure for agentic AI systems built with Pydantic AI, FastAPI, and FastMCP.
 
-## Killer Features
+## Architecture Overview
+
+```mermaid
+graph TD
+    API[FastAPI<br/>Chat + MCP] --> AGENTS[JSON Schema<br/>Agents]
+    AGENTS --> TOOLS[MCP Tools<br/>5 Tools]
+
+    TOOLS --> QUERY[REM Query<br/>Dialect]
+    QUERY --> DB[(PostgreSQL<br/>+pgvector)]
+
+    FILES[File Processor] --> DREAM[Dreaming<br/>Workers]
+    DREAM --> DB
+
+    AGENTS --> OTEL[OpenTelemetry]
+    OTEL --> PHOENIX[Arize<br/>Phoenix]
+
+    EVAL[Evaluation<br/>Framework] --> PHOENIX
+
+    classDef api fill:#4A90E2,stroke:#2E5C8A,color:#fff
+    classDef agent fill:#7B68EE,stroke:#483D8B,color:#fff
+    classDef db fill:#50C878,stroke:#2E7D4E,color:#fff
+    classDef obs fill:#9B59B6,stroke:#6C3483,color:#fff
+
+    class API,TOOLS api
+    class AGENTS agent
+    class DB,QUERY db
+    class OTEL,PHOENIX,EVAL obs
+```
+
+**Key Components:**
+
+- **API Layer**: OpenAI-compatible chat completions + MCP server (not separate deployments)
+- **Agentic Framework**: JSON Schema-based agents with no-code configuration
+- **Database Layer**: PostgreSQL 18 with pgvector for multi-index memory (KV + Vector + Graph)
+- **REM Query Dialect**: Custom query language with O(1) lookups, semantic search, graph traversal
+- **Ingestion & Dreaming**: Background workers for content extraction and progressive index enrichment (0% → 100% answerable)
+- **Observability & Evals**: OpenTelemetry tracing + Arize Phoenix + LLM-as-a-Judge evaluation framework
+
+## Features
 
 | Feature | Description | Benefits |
 |---------|-------------|----------|
@@ -19,218 +57,304 @@ Cloud-native unified memory infrastructure for agentic AI systems built with Pyd
 | **Streaming Everything** | SSE for chat, background workers for embeddings, async throughout | Real-time responses, non-blocking operations, scalable |
 | **Zero Vendor Lock-in** | Raw HTTP clients (no OpenAI SDK), swappable providers, open standards | Not tied to any vendor, easy to migrate, full control |
 
-## Installation
+## Quick Start
 
-### 🚀 Published to PyPI
+Choose your path:
 
-**Package:** `remdb` | **PyPI:** https://pypi.org/project/remdb/ | **CLI Command:** `rem`
+- **Option 1: Package Users** (Recommended for non-developers) - PyPI package + dockerized database
+- **Option 2: Developers** - Clone repo, local development with uv
+
+---
+
+## Option 1: Package Users (Recommended)
+
+**Best for**: Using REM as a service (API + CLI) without modifying code.
+
+### Step 1: Start Database and API with Docker Compose
 
 ```bash
-# Install from PyPI (includes CLI + library)
+# Create a project directory
+mkdir my-rem-project && cd my-rem-project
+
+# Download docker-compose file from public gist
+curl -O https://gist.githubusercontent.com/percolating-sirsh/d117b673bc0edfdef1a5068ccd3cf3e5/raw/docker-compose.prebuilt.yml
+
+# IMPORTANT: Export API keys BEFORE running docker compose
+# Docker Compose reads env vars at startup - exporting them after won't work!
+
+# Required: OpenAI for embeddings (text-embedding-3-small)
+export OPENAI_API_KEY="sk-..."
+
+# Recommended: At least one chat completion provider
+export ANTHROPIC_API_KEY="sk-ant-..."           # Claude Sonnet 4.5 (high quality)
+export CEREBRAS_API_KEY="csk-..."               # Cerebras (fast, cheap inference)
+
+# Start PostgreSQL + API
+docker compose -f docker-compose.prebuilt.yml up -d
+
+# Verify services are running
+curl http://localhost:8000/health
+```
+
+This starts:
+- **PostgreSQL** with pgvector on port **5051** (connection: `postgresql://rem:rem@localhost:5051/rem`)
+- **REM API** on port **8000** with OpenAI-compatible chat completions + MCP server
+- Uses pre-built Docker image from Docker Hub (no local build required)
+
+### Step 2: Install and Configure CLI (REQUIRED)
+
+**This step is required** before you can use REM - it installs the database schema and configures your LLM API keys.
+
+```bash
+# Install remdb package from PyPI
 pip install remdb[all]
 
-# Verify installation
-rem --help
-
-# Configure REM (interactive wizard)
-rem configure
-
-# Configure and install database tables
-rem configure --install
-
-# Configure + install + register with Claude Desktop
+# Configure REM (defaults to port 5051 for package users)
 rem configure --install --claude-desktop
 ```
 
-### Three Deployment Options
+The interactive wizard will:
+1. **Configure PostgreSQL**: Defaults to `postgresql://rem:rem@localhost:5051/rem` (prebuilt docker-compose)
+   - Just press Enter to accept defaults
+   - Custom database: Enter your own host/port/credentials
+2. **Configure LLM providers**: Enter your OpenAI/Anthropic API keys
+3. **Install database tables**: Creates schema, functions, indexes (**required for CLI/API to work**)
+4. **Register with Claude Desktop**: Adds REM MCP server to Claude
 
-**Option 1: Standalone Docker** (Zero Python installation)
+Configuration saved to `~/.rem/config.yaml` (can edit with `rem configure --edit`)
+
+**Port Guide:**
+- **5051**: Package users with `docker-compose.prebuilt.yml` (pre-built image)
+- **5050**: Developers with `docker-compose.yml` (local build)
+- **Custom**: Your own PostgreSQL database
+
+**Next Steps:**
+- See [CLI Reference](#cli-reference) for all available commands
+- See [REM Query Dialect](#rem-query-dialect) for query examples
+- See [API Endpoints](#api-endpoints) for OpenAI-compatible API usage
+
+### Step 3: Test the Stack
+
 ```bash
-git clone https://github.com/mr-saoirse/remstack.git
-cd remstack/rem
-export ANTHROPIC_API_KEY="your-key"
-docker compose up -d
+# Ingest a test file to populate your knowledge base
+echo "REM is a bio-inspired memory system for agentic AI workloads." > test-doc.txt
+rem process ingest test-doc.txt --user-id test-user --category documentation --tags rem,ai
 
-# Use CLI via docker exec
-docker exec rem-api rem --help
+# Query your ingested data
+rem ask "What do you know about REM from my knowledge base?" --user-id test-user
+
+# Test with a general query (uses agent's built-in knowledge + your data)
+rem ask "What is REM?" --user-id test-user
+
+# Test the API
+curl -X POST http://localhost:8000/api/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-User-Id: test-user" \
+  -d '{
+    "model": "anthropic:claude-sonnet-4-5-20250929",
+    "messages": [{"role": "user", "content": "What is REM?"}],
+    "stream": false
+  }'
 ```
 
-**Option 2: Hybrid** (Recommended for development)
-```bash
-# Docker for PostgreSQL only
-docker compose up postgres -d
+**File Ingestion Commands:**
+- `rem process ingest <file>` - Full ingestion pipeline (storage + parsing + embedding + database)
+- `rem process uri <file>` - READ-ONLY parsing (no database storage, useful for testing parsers)
 
-# Install from PyPI
-pip install remdb[all]
-export POSTGRES__CONNECTION_STRING="postgresql://rem:rem@localhost:5050/rem"
 
-# Use CLI directly (no docker exec!)
-rem --help
-rem ask "What is REM?"
+## See Also
+
+- [REM Query Dialect](#rem-query-dialect) - LOOKUP, SEARCH, TRAVERSE, SQL query types
+- [API Endpoints](#api-endpoints) - OpenAI-compatible chat completions, MCP server
+- [CLI Reference](#cli-reference) - Complete command-line interface documentation
+- [Production Deployment](#production-deployment) - AWS EKS with Kubernetes
+
+**Sample Data**: Test data with users, resources, and moments is at `tests/data/seed/test-user-data.yaml`
+
+---
+
+## REM Query Dialect
+
+REM provides a custom query language designed for **LLM-driven iterated retrieval** with performance guarantees.
+
+### Design Philosophy
+
+Unlike traditional single-shot SQL queries, the REM dialect is optimized for **multi-turn exploration** where LLMs participate in query planning:
+
+- **Iterated Queries**: Queries return partial results that LLMs use to refine subsequent queries
+- **Composable WITH Syntax**: Chain operations together (e.g., `TRAVERSE FROM ... WITH LOOKUP "..."`)
+- **Mixed Indexes**: Combines exact lookups (O(1)), semantic search (vector), and graph traversal
+- **Query Planner Participation**: Results include metadata for LLMs to decide next steps
+
+**Example Multi-Turn Flow**:
+```
+Turn 1: LOOKUP "sarah-chen" → Returns entity + available edge types
+Turn 2: TRAVERSE FROM "sarah-chen" TYPE "authored_by" DEPTH 1 → Returns connected documents
+Turn 3: SEARCH "architecture decisions" WITH TRAVERSE FROM "sarah-chen" → Combines semantic + graph
 ```
 
-**Option 3: Library Usage** (Embed in your projects)
+This enables LLMs to **progressively build context** rather than requiring perfect queries upfront.
+
+See [REM Query Dialect (AST)](#rem-query-dialect-ast) for complete grammar specification.
+
+### Query Types
+
+#### `LOOKUP` - O(1) Exact Label Lookup
+
+Fast exact match on entity labels (natural language identifiers, not UUIDs).
+
+```sql
+LOOKUP "sarah-chen" FROM resources
+LOOKUP "api-design-v2" FROM resources WHERE category = "projects"
+```
+
+**Performance**: O(1) - indexed on `label` column
+**Returns**: Single entity or null
+**Use case**: Fetch specific known entities by human-readable name
+
+#### `FUZZY` - Fuzzy Text Search
+
+Fuzzy matching for partial names or misspellings using PostgreSQL trigram similarity.
+
+```sql
+FUZZY "sara" FROM resources LIMIT 10
+FUZZY "api desgin" FROM resources THRESHOLD 0.3 LIMIT 5
+```
+
+**Performance**: O(n) with pg_trgm GIN index (fast for small-medium datasets)
+**Returns**: Ranked list by similarity score
+**Use case**: Handle typos, partial names, or when exact label is unknown
+
+#### `SEARCH` - Semantic Vector Search
+
+Semantic search using pgvector embeddings with cosine similarity.
+
+```sql
+SEARCH "machine learning architecture" FROM resources LIMIT 10
+SEARCH "contract disputes" FROM resources WHERE tags @> ARRAY['legal'] LIMIT 5
+```
+
+**Performance**: O(log n) with HNSW index
+**Returns**: Ranked list of semantically similar entities
+**Use case**: Find conceptually related content without exact keyword matches
+
+#### `TRAVERSE` - Recursive Graph Traversal
+
+Follow `graph_edges` relationships across the knowledge graph.
+
+```sql
+TRAVERSE FROM "sarah-chen" TYPE "authored_by" DEPTH 2
+TRAVERSE FROM "api-design-v2" TYPE "references,depends_on" DEPTH 3
+```
+
+**Features**:
+- **Polymorphic**: Seamlessly traverses `resources`, `moments`, `users` via `all_graph_edges` view
+- **Filtering**: Filter by one or multiple edge types (comma-separated)
+- **Depth Control**: Configurable recursion depth (default: 2)
+- **Data Model**: Requires `InlineEdge` JSON structure in `graph_edges` column
+
+**Returns**: Graph of connected entities with edge metadata
+**Use case**: Explore relationships, find connected entities, build context
+
+#### Direct SQL Queries
+
+Raw SQL for complex temporal, aggregation, or custom queries.
+
+```sql
+SELECT * FROM resources WHERE created_at > NOW() - INTERVAL '7 days' ORDER BY created_at DESC LIMIT 20
+SELECT category, COUNT(*) as count FROM resources GROUP BY category
+WITH recent AS (SELECT * FROM resources WHERE created_at > NOW() - INTERVAL '1 day') SELECT * FROM recent
+```
+
+**Performance**: Depends on query and indexes
+**Returns**: Raw query results
+**Use case**: Complex filtering, aggregations, temporal queries
+**Allowed**: SELECT, INSERT, UPDATE, WITH (read + data modifications)
+**Blocked**: DROP, DELETE, TRUNCATE, ALTER (destructive operations)
+**Note**: Can be used standalone or with `WITH` syntax for composition
+
+### Graph Edge Format
+
+Edges stored inline using `InlineEdge` pattern with human-readable destination labels.
+
+```json
+{
+  "dst": "sarah-chen",
+  "rel_type": "authored_by",
+  "weight": 1.0,
+  "properties": {
+    "dst_entity_type": "users:engineers/sarah-chen",
+    "created_at": "2025-01-15T10:30:00Z"
+  }
+}
+```
+
+**Destination Entity Type Convention** (`properties.dst_entity_type`):
+
+Format: `<table_schema>:<category>/<key>`
+
+Examples:
+- `"resources:managers/bob"` → Look up bob in resources table with category="managers"
+- `"users:engineers/sarah-chen"` → Look up sarah-chen in users table
+- `"moments:meetings/standup-2024-01"` → Look up in moments table
+- `"resources/api-design-v2"` → Look up in resources table (no category)
+- `"bob"` → Defaults to resources table, no category
+
+**Edge Type Format** (`rel_type`):
+- Use snake_case: `"authored_by"`, `"depends_on"`, `"references"`
+- Be specific but consistent
+- Use passive voice for bidirectional clarity
+
+### Multi-Turn Iterated Retrieval
+
+REM enables agents to conduct multi-turn database conversations:
+
+1. **Initial Query**: Agent runs SEARCH to find candidates
+2. **Refinement**: Agent analyzes results, runs LOOKUP on specific entities
+3. **Context Expansion**: Agent runs TRAVERSE to find related entities
+4. **Temporal Filter**: Agent runs SQL to filter by time range
+5. **Final Answer**: Agent synthesizes knowledge from all queries
+
+**Plan Memos**: Agents track query plans in scratchpad for iterative refinement.
+
+### Query Performance Contracts
+
+| Query Type | Complexity | Index | Use When |
+|------------|-----------|-------|----------|
+| `LOOKUP` | O(1) | B-tree on `label` | You know exact entity name |
+| `FUZZY` | O(n) | GIN on `label` (pg_trgm) | Handling typos/partial matches |
+| `SEARCH` | O(log n) | HNSW on `embedding` | Semantic similarity needed |
+| `TRAVERSE` | O(depth × edges) | B-tree on `graph_edges` | Exploring relationships |
+| `SQL` | Variable | Custom indexes | Complex filtering/aggregation |
+
+### Example: Multi-Query Session
+
 ```python
-from rem.services.rem.service import RemService
-from rem.agentic.context import AgentContext
+# Query 1: Find relevant documents
+SEARCH "API migration planning" FROM resources LIMIT 5
 
-service = RemService()
-context = AgentContext(user_id="user-123", tenant_id="acme-corp")
-result = await service.ask_rem("What resources do we have?", context=context)
+# Query 2: Get specific document
+LOOKUP "tidb-migration-spec" FROM resources
+
+# Query 3: Find related people
+TRAVERSE FROM "tidb-migration-spec" TYPE "authored_by,reviewed_by" DEPTH 1
+
+# Query 4: Recent activity
+SELECT * FROM moments WHERE
+    'tidb-migration' = ANY(topic_tags) AND
+    start_time > NOW() - INTERVAL '30 days'
 ```
 
-## Quick Start
+### Tenant Isolation
 
-### Docker Compose (Recommended)
+All queries automatically scoped by `user_id` for complete data isolation:
 
-```bash
-cd rem
+```sql
+-- Automatically filtered to user's data
+SEARCH "contracts" FROM resources LIMIT 10
 
-# Set up API keys (required)
-export OPENAI_API_KEY=sk-...
-export ANTHROPIC_API_KEY=sk-ant-...
-
-# Or create a .env file (copy from .env.docker template)
-cp .env.docker .env
-# Edit .env and add your API keys
-
-# Start API and PostgreSQL 18
-docker compose up --build
-
-# API will be available at http://localhost:8000
-# PostgreSQL will be available at localhost:5050
-
-# Test chat completions
-curl -X POST http://localhost:8000/api/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "X-Tenant-Id: acme-corp" \
-  -d '{
-    "model": "anthropic:claude-sonnet-4-5-20250929",
-    "messages": [{"role": "user", "content": "What documents did Sarah Chen author?"}],
-    "stream": false
-  }'
-```
-
-### Local Development
-
-```bash
-cd rem
-
-# Install dependencies
-uv sync
-
-# Set up environment variables
-cp .env.example .env
-# Edit .env and add your API keys:
-# LLM__OPENAI_API_KEY=sk-...
-# LLM__ANTHROPIC_API_KEY=sk-ant-...
-
-# Run PostgreSQL separately or use docker compose for just postgres
-docker compose up postgres -d
-
-# Run API server with hot reload
-uv run python -m rem.api.main
-
-# Test chat completions
-curl -X POST http://localhost:8000/api/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "X-Tenant-Id: demo" \
-  -d '{
-    "model": "anthropic:claude-sonnet-4-5-20250929",
-    "messages": [{"role": "user", "content": "Hello"}],
-    "stream": false
-  }'
-```
-
-## Publishing to PyPI
-
-**Prerequisites:**
-```bash
-pip install build twine
-export PYPI_API_KEY="pypi-..."  # Create at https://pypi.org/manage/account/token/
-```
-
-**Quick Publish:**
-```bash
-# Update version in pyproject.toml
-# version = "0.1.x"
-
-# Build and publish using the archived script
-./.claude/archive/publish.sh
-```
-
-The `publish.sh` script handles cleaning, building, and uploading to PyPI automatically. See `.claude/archive/PUBLISH.md` for detailed publishing documentation.
-
-## Architecture
-
-### Core Components
-
-1. **REM Models** (`models/`)
-   - **Core Models**: `CoreModel`, `InlineEdge`, `RemQuery`
-   - **Entities**: `Resource`, `Message`, `User`, `File`, `Moment`
-   - All entities inherit from CoreModel: id, temporal tracking, multi-tenancy, graph connectivity, metadata
-
-2. **Services** (`services/`)
-   - **PostgresService**: CloudNativePG database operations
-   - **RemService**: REM query execution with O(1) guarantees
-   - **FS**: Unified file system (S3 + local) with format detection
-
-3. **Agent System** (`agents/`, `providers/`)
-   - **AgentContext**: Session context from HTTP headers
-   - **AgentQuery**: Standardized query/knowledge/scratchpad structure
-   - **Pydantic AI Factory**: JsonSchema � Pydantic model conversion
-
-4. **MCP Server** (`mcp/`)
-   - FastMCP server with REM query tools and resources
-   - Mounted at `/api/v1/mcp` on FastAPI (not a separate deployment)
-   - Stateless HTTP mode for Kubernetes compatibility
-
-**Important**: The MCP (Model Context Protocol) server is not a separate deployment.
-It is mounted as part of the rem-api FastAPI application.
-
-5. **API** (`api/`)
-   - OpenAI-compatible chat completions (streaming & non-streaming)
-   - Header-based configuration (X-Tenant-Id, X-User-Id, X-Agent-Schema)
-   - FastAPI with middleware stack
-
-## Design Patterns
-
-Key architectural patterns documented inline in code:
-
-1. **Nested Pydantic Settings** - Environment variables with `__` delimiter
-2. **Header to Context Mapping** - HTTP headers → AgentContext fields
-3. **JsonSchema to Pydantic** - Dynamic agent creation from schemas
-4. **Streaming with agent.iter()** - Full execution visibility with tool calls
-5. **Stateless MCP Mounting** - Kubernetes-friendly stateless_http mode
-6. **Schema Description Stripping** - Reduce token usage in LLM schemas
-7. **Response Format Control** - Best-effort JSON extraction
-8. **Discriminated Unions** - Type-safe tool inputs
-9. **Middleware Ordering** - CORS last (runs first)
-10. **Conditional OTEL** - Development-friendly observability
-
-## Settings
-
-All settings via environment variables with `__` delimiter:
-
-```bash
-# LLM
-LLM__DEFAULT_MODEL=anthropic:claude-sonnet-4-5-20250929
-LLM__DEFAULT_TEMPERATURE=0.5
-
-# Auth (disabled by default)
-AUTH__ENABLED=false
-AUTH__OIDC_ISSUER_URL=https://accounts.google.com
-
-# OTEL (disabled by default for local dev)
-OTEL__ENABLED=false
-OTEL__SERVICE_NAME=rem-api
-
-# Postgres
-POSTGRES__CONNECTION_STRING=postgresql://rem:rem@localhost:5432/rem
-
-# S3
-S3__BUCKET_NAME=rem-storage
-S3__REGION=us-east-1
+-- No cross-user data leakage
+TRAVERSE FROM "project-x" TYPE "references" DEPTH 3
 ```
 
 ## API Endpoints
@@ -296,42 +420,37 @@ REM provides a comprehensive command-line interface for all operations.
 
 #### `rem configure` - Interactive Setup Wizard
 
-Set up REM with PostgreSQL, LLM providers, and S3 storage.
+Set up REM with PostgreSQL, LLM providers, and S3 storage. **Defaults to port 5051 (package users).**
 
 ```bash
-# Interactive wizard (creates ~/.rem/config.yaml)
-rem configure
+# Complete setup (recommended for package users)
+rem configure --install --claude-desktop
 
-# Run wizard + install database tables
-rem configure --install
+# This runs:
+# 1. Interactive wizard (creates ~/.rem/config.yaml)
+# 2. Installs database tables (rem db migrate)
+# 3. Registers REM MCP server with Claude Desktop
 
-# Show current configuration
-rem configure --show
-
-# Edit configuration in $EDITOR
-rem configure --edit
-
-# Register with Claude Desktop
-rem configure --claude-desktop
+# Other options:
+rem configure                  # Just run wizard
+rem configure --install        # Wizard + database install
+rem configure --show           # Show current configuration
+rem configure --edit           # Edit configuration in $EDITOR
 ```
 
-#### `rem mcp` - Run MCP Server
-
-Run the FastMCP server for Claude Desktop integration.
-
-```bash
-# Stdio mode (for Claude Desktop)
-rem mcp
-
-# HTTP mode (for testing)
-rem mcp --http --port 8001
-```
+**Default Configuration:**
+- **Package users**: `localhost:5051` (docker-compose.prebuilt.yml with Docker Hub image)
+- **Developers**: Change to `localhost:5050` during wizard (docker-compose.yml with local build)
+- **Custom database**: Enter your own host/port/credentials
 
 **Configuration File:** `~/.rem/config.yaml`
 
 ```yaml
 postgres:
-  connection_string: postgresql://rem:rem@localhost:5432/rem
+  # Package users (prebuilt)
+  connection_string: postgresql://rem:rem@localhost:5051/rem
+  # OR Developers (local build)
+  # connection_string: postgresql://rem:rem@localhost:5050/rem
   pool_min_size: 5
   pool_max_size: 20
 
@@ -346,6 +465,23 @@ s3:
 ```
 
 **Precedence:** Environment variables > Config file > Defaults
+
+**Port Guide:**
+- **5051**: Package users with `docker-compose.prebuilt.yml` (recommended)
+- **5050**: Developers with `docker-compose.yml` (local development)
+- **Custom**: Your own PostgreSQL instance
+
+#### `rem mcp` - Run MCP Server
+
+Run the FastMCP server for Claude Desktop integration.
+
+```bash
+# Stdio mode (for Claude Desktop)
+rem mcp
+
+# HTTP mode (for testing)
+rem mcp --http --port 8001
+```
 
 #### `rem serve` - Start API Server
 
@@ -472,22 +608,34 @@ rem process files \
   --lookback-hours 168
 ```
 
-#### `rem process uri` - Process Single URI
+#### `rem process ingest` - Ingest File into REM
 
-Process a single file URI and extract content.
+Ingest a file into REM with full pipeline (storage + parsing + embedding + database).
 
 ```bash
-# Process local file
-rem process uri \
-  --uri file:///path/to/document.pdf \
+# Ingest local file
+rem process ingest /path/to/document.pdf \
   --user-id user-123 \
-  --tenant-id acme-corp
+  --category legal \
+  --tags contract,2024
 
-# Process S3 file
-rem process uri \
-  --uri s3://bucket/key.docx \
-  --user-id user-123 \
-  --tenant-id acme-corp
+# Ingest with minimal options
+rem process ingest ./meeting-notes.md --user-id user-123
+```
+
+#### `rem process uri` - Parse File (Read-Only)
+
+Parse a file and extract content **without** storing to database (useful for testing parsers).
+
+```bash
+# Parse local file (output to stdout)
+rem process uri /path/to/document.pdf
+
+# Parse and save extracted content to file
+rem process uri /path/to/document.pdf --save output.json
+
+# Parse S3 file
+rem process uri s3://bucket/key.docx --output text
 ```
 
 ### Memory & Knowledge Extraction (Dreaming)
@@ -590,54 +738,61 @@ rem dreaming user-model \
 
 ### Evaluation & Experiments
 
-#### `rem eval dataset` - Dataset Management
+#### `rem experiments` - Experiment Management
 
-Manage Phoenix evaluation datasets (golden sets).
+Manage evaluation experiments with datasets, prompts, and traces.
+
+```bash
+# Create experiment configuration
+rem experiments create my-evaluation \
+  --agent ask_rem \
+  --evaluator rem-lookup-correctness \
+  --description "Baseline evaluation"
+
+# Run experiment
+rem experiments run my-evaluation
+
+# List experiments
+rem experiments list
+rem experiments show my-evaluation
+```
+
+#### `rem experiments dataset` - Dataset Management
 
 ```bash
 # Create dataset from CSV
-rem eval dataset create rem-lookup-golden \
+rem experiments dataset create rem-lookup-golden \
   --from-csv golden.csv \
   --input-keys query \
   --output-keys expected_label,expected_type
 
-# Upload to Phoenix
-rem eval dataset upload rem-lookup-golden \
-  --file dataset.jsonl
+# Add more examples
+rem experiments dataset add rem-lookup-golden \
+  --from-csv more-data.csv \
+  --input-keys query \
+  --output-keys expected_label,expected_type
 
 # List datasets
-rem eval dataset list
+rem experiments dataset list
 ```
 
-#### `rem eval experiment` - Run Experiments
-
-Execute evaluation experiments with agents and evaluators.
+#### `rem experiments prompt` - Prompt Management
 
 ```bash
-# Run experiment on golden set
-rem eval experiment run rem-lookup-golden \
-  --experiment rem-v1 \
-  --agent ask_rem \
-  --evaluator rem-lookup-correctness
+# Create agent prompt
+rem experiments prompt create hello-world \
+  --system-prompt "You are a helpful assistant." \
+  --model-name gpt-4o
 
-# Run with custom Phoenix endpoint
-rem eval experiment run rem-search-golden \
-  --experiment rem-v2 \
-  --agent ask_rem \
-  --evaluator rem-search-correctness \
-  --phoenix-url http://localhost:6006
+# List prompts
+rem experiments prompt list
 ```
 
-#### `rem eval trace` - Trace Retrieval
-
-Retrieve traces from Phoenix for analysis.
+#### `rem experiments trace` - Trace Retrieval
 
 ```bash
-# Get trace by ID
-rem eval trace get trace-abc-123
-
 # List recent traces
-rem eval trace list --limit 10
+rem experiments trace list --project rem-agents --days 7 --limit 50
 ```
 
 #### `rem experiments` - Experiment Config
@@ -725,119 +880,224 @@ export API__RELOAD=true
 rem serve
 ```
 
-## Development
+## Development (For Contributors)
 
-### Docker Compose
+**Best for**: Contributing to REM or customizing the codebase.
 
-```bash
-# Start all services with hot reload
-docker compose up
-
-# Rebuild after dependency changes
-docker compose up --build
-
-# View logs
-docker compose logs -f api
-docker compose logs -f postgres
-
-# Stop all services
-docker compose down
-
-# Stop and remove volumes (deletes database data)
-docker compose down -v
-
-# Connect to PostgreSQL
-psql -h localhost -p 5050 -U rem -d rem
-```
-
-### Database Migrations
-
-Migrations are automatically applied on container startup from `src/rem/sql/migrations/*.sql`:
-- `001_init_schema.sql` - Core schema with all entity tables and indexes
-
-To add new migrations:
-1. Create `src/rem/sql/migrations/002_your_migration.sql`
-2. Restart PostgreSQL container: `docker compose restart postgres`
-
-### Test Data
-
-Sample seed data is available in `tests/data/seed/001_sample_data.yaml` but **not** automatically loaded.
-
-The YAML file contains structured test data for all entity types (users, resources, moments, messages, files, schemas).
-
-To load test data, use Python:
-```python
-import yaml
-from pathlib import Path
-from rem.models.entities import User, Resource, Moment, Message, File, Schema
-
-# Load YAML
-data = yaml.safe_load(Path("tests/data/seed/001_sample_data.yaml").read_text())
-
-# Create entities and insert into database
-# See tests/data/seed/README.md for complete example
-```
-
-See `tests/data/seed/README.md` for complete loading instructions and pytest fixtures.
-
-### Local Development
+### Step 1: Clone Repository
 
 ```bash
-# Install dependencies
-uv sync
+git clone https://github.com/mr-saoirse/remstack.git
+cd remstack/rem
+```
 
-# Run with auto-reload (requires PostgreSQL running)
+### Step 2: Start PostgreSQL Only
+
+```bash
+# Start only PostgreSQL (port 5050 for developers, doesn't conflict with package users on 5051)
+docker compose up postgres -d
+
+# Verify connection
+psql -h localhost -p 5050 -U rem -d rem -c "SELECT version();"
+```
+
+### Step 3: Set Up Development Environment
+
+```bash
+# IMPORTANT: If you previously installed the package and ran `rem configure`,
+# delete the REM configuration directory to avoid conflicts:
+rm -rf ~/.rem/
+
+# Create virtual environment with uv
+uv venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Install in editable mode with all dependencies
+uv pip install -e ".[all]"
+
+# Set LLM API keys
+export OPENAI_API_KEY="sk-..."
+export ANTHROPIC_API_KEY="sk-ant-..."
+export POSTGRES__CONNECTION_STRING="postgresql://rem:rem@localhost:5050/rem"
+
+# Verify CLI
+rem --version
+```
+
+### Step 4: Initialize Database
+
+```bash
+# Apply migrations
+rem db migrate
+
+# Verify tables
+psql -h localhost -p 5050 -U rem -d rem -c "\dt"
+```
+
+### Step 5: Run API Server (Optional)
+
+```bash
+# Start API server with hot reload
 uv run python -m rem.api.main
 
-# Run tests (TODO)
-uv run pytest
-
-# Type check (TODO)
-uv run mypy src/rem
+# API runs on http://localhost:8000
 ```
 
-## Deployment
+### Step 6: Run Tests
 
-See [`manifests/`](../../manifests/) for Pulumi infrastructure and Kubernetes manifests.
+```bash
+# Run non-LLM tests (fast, no API costs)
+uv run pytest tests/integration/ -m "not llm" -v
 
-### Infrastructure (manifests/infra/)
-- EKS cluster with Karpenter
-- Separate NodePools for stateful (on-demand) and stateless (spot) workloads
+# Run all tests (uses API credits)
+uv run pytest tests/integration/ -v
 
-### Platform (manifests/platform/)
-- ArgoCD (GitOps)
-- OpenTelemetry (observability)
-- CloudNativePG (PostgreSQL 18 with pgvector)
-- Arize Phoenix (LLM observability)
+# Type check (saves report to .mypy/ folder)
+../scripts/run_mypy.sh
+```
 
-## Implementation Status
+Type checking reports are saved to `.mypy/report_YYYYMMDD_HHMMSS.txt` (gitignored).
+Current status: 222 errors in 55 files (as of 2025-11-23).
 
-### ✅ Completed
-- [x] **PostgresService** - Fully implemented with batch_upsert, connection pooling, tenant isolation
-- [x] **RemService** - All query types implemented (LOOKUP, FUZZY, SEARCH, SQL, TRAVERSE)
-- [x] **SEARCH Query** - Embedding generation via OpenAI API integrated
-- [x] **MCP Tools** - search_rem, ask_rem_agent, ingest_into_rem, read_resource
-- [x] **MCP Resources** - Schema docs and status resources registered
-- [x] **Models** - All entity models (Resource, Entity, Moment, Message, File, User) complete
-- [x] **Settings** - Nested Pydantic settings with environment variable support
-- [x] **MCP Server** - FastMCP integration with instructions and mounting patterns
-- [x] **Chat Completions** - OpenAI-compatible API (streaming & non-streaming)
-- [x] **Agent Factory** - JSON Schema to Pydantic AI conversion
-- [x] **File System** - S3 and local providers with format detection
-- [x] **Embeddings** - OpenAI embedding generation (sync & async)
+### Environment Variables
 
-### 🚧 In Progress
-- [ ] **REM Query Router** - REST endpoint for direct REM query execution
-- [ ] **CRUD Routers** - Resource and moment creation/update endpoints
-- [ ] **Auth Implementation** - Complete OAuth providers and JWT validation
-- [ ] **Tests** - Unit and integration tests for core services
-- [ ] **SQL Functions** - PostgreSQL functions (rem_lookup, rem_fuzzy, rem_search, rem_traverse)
+All settings via environment variables with `__` delimiter:
 
-### 📝 Design Complete (Stubs Present)
-- [ ] **update_graph_edges** - PostgresService method (stub present)
-- [ ] **vector_search** - PostgresService method (delegated to RemService)
-- [ ] **OAuth routes** - Auth router stubs with redirect handling
-- [ ] **OTEL setup** - Conditional instrumentation pattern defined
+```bash
+# LLM
+LLM__DEFAULT_MODEL=anthropic:claude-sonnet-4-5-20250929
+LLM__DEFAULT_TEMPERATURE=0.5
+
+# Auth (disabled by default)
+AUTH__ENABLED=false
+AUTH__OIDC_ISSUER_URL=https://accounts.google.com
+
+# OTEL (disabled by default for local dev)
+OTEL__ENABLED=false
+OTEL__SERVICE_NAME=rem-api
+
+# Postgres
+POSTGRES__CONNECTION_STRING=postgresql://rem:rem@localhost:5050/rem
+
+# S3
+S3__BUCKET_NAME=rem-storage
+S3__REGION=us-east-1
+```
+
+### Production Deployment (Optional)
+
+For production deployment to AWS EKS with Kubernetes, see the main repository README:
+- **Infrastructure**: [../../manifests/infra/pulumi/eks-yaml/README.md](../../manifests/infra/pulumi/eks-yaml/README.md)
+- **Platform**: [../../manifests/platform/README.md](../../manifests/platform/README.md)
+- **Application**: [../../manifests/application/README.md](../../manifests/application/README.md)
+
+
+## REM Query Dialect (AST)
+
+REM queries follow a structured dialect with formal grammar specification.
+
+### Grammar
+
+```
+Query ::= LookupQuery | FuzzyQuery | SearchQuery | SqlQuery | TraverseQuery
+
+LookupQuery ::= LOOKUP <key:string|list[string]>
+  key         : Single entity name or list of entity names (natural language labels)
+  performance : O(1) per key
+  available   : Stage 1+
+  examples    :
+    - LOOKUP "Sarah"
+    - LOOKUP ["Sarah", "Mike", "Emily"]
+    - LOOKUP "Project Alpha"
+
+FuzzyQuery ::= FUZZY <text:string> [THRESHOLD <t:float>] [LIMIT <n:int>]
+  text        : Search text (partial/misspelled)
+  threshold   : Similarity score 0.0-1.0 (default: 0.5)
+  limit       : Max results (default: 5)
+  performance : Indexed (pg_trgm)
+  available   : Stage 1+
+  example     : FUZZY "sara" THRESHOLD 0.5 LIMIT 10
+
+SearchQuery ::= SEARCH <text:string> [TABLE <table:string>] [WHERE <clause:string>] [LIMIT <n:int>]
+  text        : Semantic query text
+  table       : Target table (default: "resources")
+  clause      : Optional PostgreSQL WHERE clause for hybrid filtering (combines vector + structured)
+  limit       : Max results (default: 10)
+  performance : Indexed (pgvector)
+  available   : Stage 3+
+  examples    :
+    - SEARCH "database migration" TABLE resources LIMIT 10
+    - SEARCH "team discussion" TABLE moments WHERE "moment_type='meeting'" LIMIT 5
+    - SEARCH "project updates" WHERE "created_at >= '2024-01-01'" LIMIT 20
+    - SEARCH "AI research" WHERE "tags @> ARRAY['machine-learning']" LIMIT 10
+
+  Hybrid Query Support: SEARCH combines semantic vector similarity with structured filtering.
+  Use WHERE clause to filter on system fields or entity-specific fields.
+
+SqlQuery ::= <raw_sql:string>
+           | SQL <table:string> [WHERE <clause:string>] [ORDER BY <order:string>] [LIMIT <n:int>]
+
+  Mode 1 (Raw SQL - Recommended):
+    Any query not starting with a REM keyword (LOOKUP, FUZZY, SEARCH, TRAVERSE) is treated as raw SQL.
+    Allowed: SELECT, INSERT, UPDATE, WITH (read + data modifications)
+    Blocked: DROP, DELETE, TRUNCATE, ALTER (destructive operations)
+
+  Mode 2 (Structured - Legacy):
+    SQL prefix with table + WHERE clause (automatic tenant isolation)
+
+  performance : O(n) with indexes
+  available   : Stage 1+
+  dialect     : PostgreSQL (full PostgreSQL syntax support)
+
+  examples    :
+    # Raw SQL (no prefix needed)
+    - SELECT * FROM resources WHERE created_at > NOW() - INTERVAL '7 days' LIMIT 20
+    - SELECT category, COUNT(*) as count FROM resources GROUP BY category
+    - WITH recent AS (SELECT * FROM resources WHERE created_at > NOW() - INTERVAL '1 day') SELECT * FROM recent
+
+    # Structured SQL (legacy, automatic tenant isolation)
+    - SQL moments WHERE "moment_type='meeting'" ORDER BY starts_timestamp DESC LIMIT 10
+    - SQL resources WHERE "metadata->>'status' = 'published'" LIMIT 20
+
+  PostgreSQL Dialect: Full support for:
+  - JSONB operators (->>, ->, @>, etc.)
+  - Array operators (&&, @>, <@, etc.)
+  - CTEs (WITH clauses)
+  - Advanced filtering and aggregations
+
+TraverseQuery ::= TRAVERSE [<edge_types:list>] WITH <initial_query:Query> [DEPTH <d:int>] [ORDER BY <order:string>] [LIMIT <n:int>]
+  edge_types    : Relationship types to follow (e.g., ["manages", "reports-to"], default: all)
+  initial_query : Starting query (typically LOOKUP)
+  depth         : Number of hops (0=PLAN mode, 1=single hop, N=multi-hop, default: 1)
+  order         : Order results (default: "edge.created_at DESC")
+  limit         : Max nodes (default: 9)
+  performance   : O(k) where k = visited nodes
+  available     : Stage 3+
+  examples      :
+    - TRAVERSE manages WITH LOOKUP "Sally" DEPTH 1
+    - TRAVERSE WITH LOOKUP "Sally" DEPTH 0  (PLAN mode: edge analysis only)
+    - TRAVERSE manages,reports-to WITH LOOKUP "Sarah" DEPTH 2 LIMIT 5
+```
+
+### Query Availability by Evolution Stage
+
+| Query Type | Stage 0 | Stage 1 | Stage 2 | Stage 3 | Stage 4 |
+|------------|---------|---------|---------|---------|---------|
+| LOOKUP     | ✗       | ✓       | ✓       | ✓       | ✓       |
+| FUZZY      | ✗       | ✓       | ✓       | ✓       | ✓       |
+| SEARCH     | ✗       | ✗       | ✗       | ✓       | ✓       |
+| SQL        | ✗       | ✓       | ✓       | ✓       | ✓       |
+| TRAVERSE   | ✗       | ✗       | ✗       | ✓       | ✓       |
+
+**Stage 0**: No data, all queries fail.
+
+**Stage 1** (20% answerable): Resources seeded with entity extraction. LOOKUP and FUZZY work for finding entities. SQL works for basic filtering.
+
+**Stage 2** (50% answerable): Moments extracted. SQL temporal queries work. LOOKUP includes moment entities.
+
+**Stage 3** (80% answerable): Affinity graph built. SEARCH and TRAVERSE become available. Multi-hop graph queries work.
+
+**Stage 4** (100% answerable): Mature graph with rich historical data. All query types fully functional with high-quality results.
 
 ## License
 

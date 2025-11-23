@@ -45,8 +45,9 @@ async def seed_graph_data(tenant_id: str) -> dict[str, str]:
             model_class = MODEL_MAP[table_name]
 
             for row_data in rows:
-                # Add tenant_id
-                row_data["tenant_id"] = tenant_id
+                # Add user_id (tenant_id deprecated after migration 006)
+                row_data["user_id"] = tenant_id
+                row_data["tenant_id"] = tenant_id  # Still set for backwards compat
 
                 # Convert graph_edges to InlineEdge format if present
                 if "graph_edges" in row_data:
@@ -69,9 +70,9 @@ async def seed_graph_data(tenant_id: str) -> dict[str, str]:
                 await repo.upsert(instance)
 
         # Return root key (last resource loaded - "Project Plan")
-        # Use uri as entity_key (matches KV store trigger)
+        # Use name as entity_key (matches KV store trigger and model config)
         return {
-            "root": "project-plan",
+            "root": "Project Plan",
             "tenant_id": tenant_id
         }
     finally:
@@ -98,21 +99,28 @@ async def test_recursive_graph_traversal():
     await pg.connect()
 
     try:
+        # Debug: Check if data was inserted into kv_store
+        debug_query = "SELECT * FROM kv_store WHERE user_id = $1"
+        kv_rows = await pg.fetch(debug_query, user_id)
+        print(f"\n--- KV Store Entries for user_id={user_id}: {len(kv_rows)} found ---")
+        for row in kv_rows:
+            print(f"  entity_key={row['entity_key']}, entity_type={row['entity_type']}")
+
         # 2. Execute Traversal (No filter)
         # Max depth 5 to capture the full chain (length 3 edges)
-        # rem_traverse signature: (entity_key, user_id, max_depth, rel_type)
+        # rem_traverse signature: (entity_key, tenant_id, user_id, max_depth, rel_type, keys_only)
         query = """
-            SELECT * FROM rem_traverse($1, $2, $3)
+            SELECT * FROM rem_traverse($1, $2, $3, $4, $5, $6)
         """
-        rows = await pg.fetch(query, root_key, user_id, 5)
+        rows = await pg.fetch(query, root_key, user_id, user_id, 5, None, False)
         
         print(f"\n--- Traversal Result (No Filter): {len(rows)} nodes found ---")
         for row in rows:
             print(f"Depth {row['depth']}: {row['entity_key']} ({row['entity_type']}) via {row['rel_type']}")
 
         results = {row['entity_key']: row for row in rows}
-        # Note: resources use uri as entity_key, moments/users use name
-        assert "meeting-notes" in results  # Resource uri
+        # Note: all entities use name as entity_key (configured via json_schema_extra)
+        assert "Meeting Notes" in results  # Resource name
         assert "Engineering Sync" in results  # Moment name
         assert "Sarah Chen" in results  # User name
 
@@ -122,11 +130,12 @@ async def test_recursive_graph_traversal():
         # Note: rem_traverse takes single rel_type string, not array
         # We need to run multiple queries or update the function
         # For now, test with single rel_type
+        # rem_traverse signature: (entity_key, tenant_id, user_id, max_depth, rel_type, keys_only)
         query_filtered = """
-            SELECT * FROM rem_traverse($1, $2, $3, $4)
+            SELECT * FROM rem_traverse($1, $2, $3, $4, $5, $6)
         """
 
-        rows_filtered = await pg.fetch(query_filtered, root_key, user_id, 5, "referenced_by")
+        rows_filtered = await pg.fetch(query_filtered, root_key, user_id, user_id, 5, "referenced_by", False)
 
         print(f"\n--- Traversal Result (Filtered: referenced_by): {len(rows_filtered)} nodes found ---")
         for row in rows_filtered:
@@ -135,7 +144,7 @@ async def test_recursive_graph_traversal():
         results_filtered = {row['entity_key']: row for row in rows_filtered}
 
         # Should find B via referenced_by
-        assert "meeting-notes" in results_filtered  # Resource uri
+        assert "Meeting Notes" in results_filtered  # Resource name
 
         # Should NOT find C (different rel_type: documented_in)
         assert "Engineering Sync" not in results_filtered, "Engineering Sync should be filtered out (wrong rel_type)"

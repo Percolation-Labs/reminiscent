@@ -54,6 +54,8 @@ coverage.xml
 
 # Type Checking
 .mypy_cache/
+.mypy/
+mypy_report*.txt
 .dmypy.json
 dmypy.json
 .pyre/

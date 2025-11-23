@@ -65,7 +65,7 @@ Schema Caching Status:
 
 import importlib.resources
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
 from loguru import logger
@@ -73,7 +73,9 @@ from loguru import logger
 
 # Standard search paths for agent schemas (in priority order)
 SCHEMA_SEARCH_PATHS = [
-    "schemas/agents/{name}.yaml",
+    "schemas/agents/{name}.yaml",          # Top-level agents (e.g., rem.yaml)
+    "schemas/agents/core/{name}.yaml",     # Core system agents
+    "schemas/agents/examples/{name}.yaml", # Example agents
     "schemas/evaluators/{name}.yaml",
     "schemas/{name}.yaml",
 ]
@@ -95,17 +97,21 @@ def load_agent_schema(schema_name_or_path: str, use_cache: bool = True) -> dict[
     Database schemas (future) will be cached with TTL for invalidation.
 
     Handles path resolution automatically:
-    - "contract-analyzer" → searches schemas/agents/contract-analyzer.yaml
-    - "agents/cv-parser" → searches schemas/agents/cv-parser.yaml
+    - "rem" → searches schemas/agents/rem.yaml (top-level)
+    - "moment-builder" → searches schemas/agents/core/moment-builder.yaml
+    - "contract-analyzer" → searches schemas/agents/examples/contract-analyzer.yaml
+    - "core/moment-builder" → searches schemas/agents/core/moment-builder.yaml
     - "/absolute/path.yaml" → loads directly
     - "relative/path.yaml" → loads relative to cwd
 
     Search Order:
     1. Check cache (if use_cache=True and schema found in FS cache)
     2. Exact path if it exists (absolute or relative)
-    3. Package resources: schemas/agents/{name}.yaml
-    4. Package resources: schemas/evaluators/{name}.yaml
-    5. Package resources: schemas/{name}.yaml
+    3. Package resources: schemas/agents/{name}.yaml (top-level)
+    4. Package resources: schemas/agents/core/{name}.yaml
+    5. Package resources: schemas/agents/examples/{name}.yaml
+    6. Package resources: schemas/evaluators/{name}.yaml
+    7. Package resources: schemas/{name}.yaml
 
     Args:
         schema_name_or_path: Schema name or file path
@@ -130,7 +136,7 @@ def load_agent_schema(schema_name_or_path: str, use_cache: bool = True) -> dict[
         >>> schema = load_agent_schema("rem-lookup-correctness")
     """
     # Normalize the name for cache key
-    cache_key = str(schema_name_or_path).replace('agents/', '').replace('schemas/', '').replace('evaluators/', '')
+    cache_key = str(schema_name_or_path).replace('agents/', '').replace('schemas/', '').replace('evaluators/', '').replace('core/', '').replace('examples/', '')
     if cache_key.endswith('.yaml') or cache_key.endswith('.yml'):
         cache_key = cache_key.rsplit('.', 1)[0]
 
@@ -149,7 +155,7 @@ def load_agent_schema(schema_name_or_path: str, use_cache: bool = True) -> dict[
             schema = yaml.safe_load(f)
         logger.debug(f"Loaded schema with keys: {list(schema.keys())}")
         # Don't cache custom paths (they may change)
-        return schema
+        return cast(dict[str, Any], schema)
 
     # 2. Normalize name for package resource search
     base_name = cache_key
@@ -174,7 +180,7 @@ def load_agent_schema(schema_name_or_path: str, use_cache: bool = True) -> dict[
                     _fs_schema_cache[cache_key] = schema
                     logger.debug(f"Cached schema: {cache_key}")
 
-                return schema
+                return cast(dict[str, Any], schema)
         except Exception as e:
             logger.debug(f"Could not load from {search_path}: {e}")
             continue

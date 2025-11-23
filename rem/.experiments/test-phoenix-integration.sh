@@ -58,7 +58,7 @@ check_prerequisites() {
     info "uv installed"
 
     # Check schemas exist
-    if [[ ! -f "schemas/agents/hello-world.yaml" ]]; then
+    if [[ ! -f "schemas/agents/examples/hello-world.yaml" ]]; then
         error "hello-world agent schema not found"
         exit 1
     fi

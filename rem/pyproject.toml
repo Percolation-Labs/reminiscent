@@ -1,6 +1,6 @@
 [project]
 name = "remdb"
-version = "0.1.9"
+version = "0.2.5"
 description = "Resources Entities Moments - Bio-inspired memory system for agentic AI workloads"
 readme = "README.md"
 authors = [
@@ -81,6 +81,8 @@ dev = [
     # Code Quality
     "ruff>=0.8.0",
     "mypy>=1.13.0",
+    "types-PyYAML>=6.0.0",
+    "pandas-stubs>=2.0.0",
 
     # Development Tools
     "ipython>=8.29.0",
@@ -148,6 +150,7 @@ markers = [
     "unit: marks tests as unit tests",
     "integration: marks tests as integration tests",
     "slow: marks tests as slow running",
+    "llm: marks tests that make LLM API calls (expensive, skip by default with -m 'not llm')",
 ]
 
 [tool.ruff]
@@ -174,9 +177,12 @@ ignore = [
 "__init__.py" = ["F401"]  # Allow unused imports in __init__.py
 
 [tool.mypy]
+plugins = ["pydantic.mypy"]
 python_version = "3.12"
 strict = false
-warn_return_any = true
+
+# Pragmatic type checking - focus on real bugs, not noise
+warn_return_any = false  # Disabled - causes excessive casting noise
 warn_unused_configs = true
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
@@ -185,6 +191,17 @@ no_implicit_optional = true
 warn_redundant_casts = true
 warn_unused_ignores = true
 warn_no_return = true
+
+# Ignore common false positives that don't indicate bugs
+disable_error_code = [
+    "no-any-return",      # Too noisy with JSON APIs, external libraries
+    "import-untyped",     # Can't fix third-party libraries without stubs
+]
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
 
 [[tool.mypy.overrides]]
 module = [
@@ -197,5 +214,9 @@ ignore_missing_imports = true
 
 [dependency-groups]
 dev = [
+    "boto3-stubs>=1.41.2",
+    "pandas-stubs>=2.3.2.250926",
     "pytest>=9.0.1",
+    "types-aiobotocore>=2.25.2",
+    "types-pyyaml>=6.0.12.20250915",
 ]

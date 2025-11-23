@@ -43,8 +43,7 @@ def resources_seed_data(seed_data_path: Path) -> list[dict]:
 @pytest.fixture
 async def postgres_service() -> PostgresService:
     """Create PostgresService instance."""
-    connection_string = "postgresql://rem:rem@localhost:5050/rem"
-    pg = PostgresService(connection_string=connection_string)
+    pg = PostgresService()
     await pg.connect()
     yield pg
     await pg.disconnect()
@@ -99,23 +98,21 @@ async def test_embeddings_e2e_workflow(
         if "timestamp" in data and isinstance(data["timestamp"], str):
             data["timestamp"] = datetime.fromisoformat(
                 data["timestamp"].replace("Z", "+00:00")
-            )
+            ).replace(tzinfo=None)
         resource = Resource(**data)
         resources.append(resource)
 
-    # Batch upsert with embeddings enabled
-    result = await postgres_service.batch_upsert(
-        records=resources,
-        model=Resource,
-        table_name="resources",
-        entity_key_field="uri",
+    # Batch upsert using Repository pattern with embedding generation
+    from rem.services.postgres import Repository
+    repo = Repository(Resource, "resources", db=postgres_service)
+    upserted = await repo.upsert(
+        resources,
         embeddable_fields=["content"],
-        generate_embeddings=True,
+        generate_embeddings=True
     )
 
-    # Verify tasks were queued
-    assert result["upserted_count"] == 3
-    assert result["embeddings_generated"] == 3  # 3 resources * 1 field each
+    # Verify resources were upserted
+    assert len(upserted) == 3
 
     # Wait for worker to process embedding tasks
     print("\nWaiting for background embedding generation...")
@@ -151,7 +148,7 @@ async def test_embeddings_e2e_workflow(
     print("\nExecuting SEARCH query...")
     search_result = await rem_query_service.execute(
         'SEARCH "getting started with REM" FROM resources LIMIT 5',
-        tenant_id="acme-corp",
+        user_id="acme-corp",
     )
 
     print(f"Search returned {search_result.count} results")
@@ -195,7 +192,7 @@ async def test_search_without_embeddings(postgres_service, rem_query_service):
     # Execute SEARCH on empty embeddings table
     result = await rem_query_service.execute(
         'SEARCH "test query" FROM resources LIMIT 5',
-        tenant_id="acme-corp",
+        user_id="acme-corp",
     )
 
     # Should return no results but not error

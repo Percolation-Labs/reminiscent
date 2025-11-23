@@ -13,12 +13,11 @@ Usage:
 """
 
 import json
-from typing import Any, Generic, Type, TypeVar
+from typing import Any, Generic, Type, TypeVar, TYPE_CHECKING
 
 from loguru import logger
 from pydantic import BaseModel
 
-from .service import PostgresService
 from .sql_builder import (
     build_count,
     build_delete,
@@ -28,8 +27,11 @@ from .sql_builder import (
 )
 from ...settings import settings
 
+if TYPE_CHECKING:
+    from .service import PostgresService
 
-def get_postgres_service() -> PostgresService | None:
+
+def get_postgres_service() -> "PostgresService | None":
     """
     Get PostgresService instance with connection string from settings.
 
@@ -37,7 +39,8 @@ def get_postgres_service() -> PostgresService | None:
     """
     if not settings.postgres.enabled:
         return None
-
+    
+    from .service import PostgresService
     return PostgresService()
 
 T = TypeVar("T", bound=BaseModel)
@@ -53,7 +56,7 @@ class Repository(Generic[T]):
         self,
         model_class: Type[T],
         table_name: str | None = None,
-        db: PostgresService | None = None,
+        db: "PostgresService | None" = None,
     ):
         """
         Initialize repository.
@@ -67,7 +70,12 @@ class Repository(Generic[T]):
         self.model_class = model_class
         self.table_name = table_name or f"{model_class.__name__.lower()}s"
 
-    async def upsert(self, records: T | list[T]) -> T | list[T]:
+    async def upsert(
+        self,
+        records: T | list[T],
+        embeddable_fields: list[str] | None = None,
+        generate_embeddings: bool = False,
+    ) -> T | list[T]:
         """
         Upsert single record or list of records (create or update on ID conflict).
 
@@ -76,13 +84,19 @@ class Repository(Generic[T]):
 
         Args:
             records: Single model instance or list of model instances
+            embeddable_fields: Optional list of fields to generate embeddings for
+            generate_embeddings: Whether to queue embedding generation tasks
 
         Returns:
             Single record or list of records with generated IDs (matches input type)
         """
         # Coerce single item to list for uniform processing
         is_single = not isinstance(records, list)
-        records_list = [records] if is_single else records
+        records_list: list[T]
+        if is_single:
+            records_list = [records]  # type: ignore[list-item]
+        else:
+            records_list = records  # Type narrowed by isinstance check
 
         if not settings.postgres.enabled or not self.db:
             logger.debug(f"Postgres disabled, skipping {self.model_class.__name__} upsert")
@@ -92,12 +106,37 @@ class Repository(Generic[T]):
         if not self.db.pool:
             await self.db.connect()
 
+        # Type guard: ensure pool is not None after connect
+        if not self.db.pool:
+            raise RuntimeError("Failed to establish database connection")
+
         for record in records_list:
             sql, params = build_upsert(record, self.table_name, conflict_field="id", return_id=True)
             async with self.db.pool.acquire() as conn:
                 row = await conn.fetchrow(sql, *params)
                 if row and "id" in row:
-                    record.id = row["id"]
+                    record.id = row["id"]  # type: ignore[attr-defined]
+
+        # Queue embedding generation if requested and worker is available
+        if generate_embeddings and embeddable_fields and self.db.embedding_worker:
+            from rem.services.embeddings import EmbeddingTask
+
+            for record in records_list:
+                for field_name in embeddable_fields:
+                    content = getattr(record, field_name, None)
+                    if content and isinstance(content, str):
+                        task = EmbeddingTask(
+                            task_id=f"{record.id}-{field_name}",  # type: ignore[attr-defined]
+                            entity_id=str(record.id),  # type: ignore[attr-defined]
+                            table_name=self.table_name,
+                            field_name=field_name,
+                            content=content,
+                            provider="openai",  # Default provider
+                            model="text-embedding-3-small",  # Default model
+                        )
+                        await self.db.embedding_worker.queue_task(task)
+
+            logger.debug(f"Queued {len(records_list) * len(embeddable_fields)} embedding tasks")
 
         # Return single item or list to match input type
         return records_list[0] if is_single else records_list
@@ -120,6 +159,10 @@ class Repository(Generic[T]):
         # Ensure connection
         if not self.db.pool:
             await self.db.connect()
+
+        # Type guard: ensure pool is not None after connect
+        if not self.db.pool:
+            raise RuntimeError("Failed to establish database connection")
 
         query = f"""
             SELECT * FROM {self.table_name}
@@ -169,6 +212,10 @@ class Repository(Generic[T]):
         # Ensure connection
         if not self.db.pool:
             await self.db.connect()
+
+        # Type guard: ensure pool is not None after connect
+        if not self.db.pool:
+            raise RuntimeError("Failed to establish database connection")
 
         sql, params = build_select(
             self.model_class,
@@ -227,7 +274,9 @@ class Repository(Generic[T]):
         Returns:
             Updated record
         """
-        return await self.create(record)
+        result = await self.upsert(record)
+        # upsert with single record returns single record
+        return result  # type: ignore[return-value]
 
     async def delete(self, record_id: str, tenant_id: str) -> bool:
         """
@@ -247,6 +296,10 @@ class Repository(Generic[T]):
         # Ensure connection
         if not self.db.pool:
             await self.db.connect()
+
+        # Type guard: ensure pool is not None after connect
+        if not self.db.pool:
+            raise RuntimeError("Failed to establish database connection")
 
         sql, params = build_delete(self.table_name, record_id, tenant_id)
 
@@ -271,6 +324,10 @@ class Repository(Generic[T]):
         # Ensure connection
         if not self.db.pool:
             await self.db.connect()
+
+        # Type guard: ensure pool is not None after connect
+        if not self.db.pool:
+            raise RuntimeError("Failed to establish database connection")
 
         sql, params = build_count(self.table_name, filters)
 

@@ -41,16 +41,19 @@ def prompt_postgres_config() -> dict:
 
     # Parse existing config if available
     existing_conn = os.environ.get(
-        "POSTGRES__CONNECTION_STRING", "postgresql://rem:rem@localhost:5432/rem"
+        "POSTGRES__CONNECTION_STRING", "postgresql://rem:rem@localhost:5051/rem"
     )
 
     # Prompt for components
     click.echo(
         "\nEnter PostgreSQL connection details (press Enter to use default):"
     )
+    click.echo("Default: Package users on port 5051 (docker compose -f docker-compose.prebuilt.yml up -d)")
+    click.echo("Developers: Change port to 5050 if using docker-compose.yml (local build)")
+    click.echo("Custom DB: Enter your own host/port below")
 
     host = click.prompt("Host", default="localhost")
-    port = click.prompt("Port", default=5432, type=int)
+    port = click.prompt("Port", default=5051, type=int)
     database = click.prompt("Database name", default="rem")
     username = click.prompt("Username", default="rem")
     password = click.prompt("Password", default="rem", hide_input=True)
@@ -162,7 +165,7 @@ def prompt_additional_env_vars() -> dict:
     click.echo("Additional Environment Variables")
     click.echo("=" * 60)
 
-    env_vars = {}
+    env_vars: dict[str, str] = {}
 
     add_env = click.confirm(
         "Add custom environment variables?", default=False

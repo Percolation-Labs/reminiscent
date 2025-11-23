@@ -167,6 +167,9 @@ class GitService:
                 "Git provider not enabled. Set GIT__ENABLED=true and GIT__DEFAULT_REPO_URL"
             )
 
+        # Type guard: git provider is guaranteed to exist after the check above
+        assert self.fs._git_provider is not None
+
         self.schemas_dir = schemas_dir
         self.experiments_dir = experiments_dir
 
@@ -210,6 +213,9 @@ class GitService:
             Latest v2: v2.1.1
         """
         schema_path = f"{self.schemas_dir}/{schema_name}.yaml"
+
+        # Type guard: git provider exists (validated in __init__)
+        assert self.fs._git_provider is not None
 
         versions = self.fs._git_provider.get_semantic_versions(
             schema_path,
@@ -303,6 +309,9 @@ class GitService:
             ...     print("⚠️  Breaking change: Required field removed")
         """
         schema_path = f"{self.schemas_dir}/{schema_name}.yaml"
+
+        # Type guard: git provider exists (validated in __init__)
+        assert self.fs._git_provider is not None
 
         diff = self.fs._git_provider.diff_versions(
             schema_path,
@@ -430,6 +439,9 @@ class GitService:
             >>> git_svc.sync()
             >>> schema = git_svc.load_schema("cv-parser")  # Gets latest
         """
+        # Type guard: git provider exists (validated in __init__)
+        assert self.fs._git_provider is not None
+
         self.fs._git_provider.clear_cache()
         logger.info("Cleared Git cache - next access will fetch latest changes")
 
@@ -451,4 +463,7 @@ class GitService:
             >>> print(f"Loaded from commit: {commit[:8]}")
             Loaded from commit: abc12345
         """
+        # Type guard: git provider exists (validated in __init__)
+        assert self.fs._git_provider is not None
+
         return self.fs._git_provider.get_current_commit(version)

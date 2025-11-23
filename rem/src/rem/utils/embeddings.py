@@ -21,7 +21,7 @@ Usage:
 """
 
 import os
-from typing import Any
+from typing import Any, cast
 
 import requests
 from tenacity import (
@@ -96,8 +96,12 @@ def generate_embeddings(
     provider = provider.lower()
 
     # Normalize input to list
-    is_single = isinstance(texts, str)
-    text_list = [texts] if is_single else texts
+    if isinstance(texts, str):
+        text_list: list[str] = [texts]
+        is_single = True
+    else:
+        text_list = texts
+        is_single = False
 
     # Validate input
     if not text_list:
@@ -195,7 +199,7 @@ def _generate_openai_embeddings_with_retry(
     def _call_api():
         return _generate_openai_embeddings(model, texts, api_key)
 
-    return _call_api()
+    return cast(list[list[float]], _call_api())
 
 
 def _generate_openai_embeddings(
@@ -295,7 +299,7 @@ def _generate_voyage_embeddings_with_retry(
     def _call_api():
         return _generate_voyage_embeddings(model, texts, api_key)
 
-    return _call_api()
+    return cast(list[list[float]], _call_api())
 
 
 def _generate_voyage_embeddings(

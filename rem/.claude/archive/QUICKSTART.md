@@ -148,7 +148,7 @@ export S3__ENDPOINT_URL="http://minio:9000"
 2. **Upload Files:** Use file processing endpoints
 3. **Create Agent Schemas:** Define custom extractors
 4. **Connect MCP Clients:** http://localhost:8000/api/v1/mcp
-5. **Run Evaluations:** `rem eval --help`
+5. **Run Evaluations:** `rem experiments --help`
 
 ## Troubleshooting
 

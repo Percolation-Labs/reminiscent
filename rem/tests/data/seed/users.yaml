@@ -1,0 +1,47 @@
+# Default test users for CLI and API testing
+#
+# Usage:
+#   rem db load tests/data/seed/users.yaml --user-id test-user
+#
+# This creates a default test user that can be used for:
+# - CLI testing with default --user-id flag
+# - API testing without needing to create users
+# - Background testing in CI/CD pipelines
+# - Demo and walkthrough scenarios
+
+users:
+  - label: "test-user"
+    user_id: "test-user"
+    name: "Test User"
+    email: "test@rem.local"
+    summary: "Default test user for CLI and API testing. Represents a mid-level software engineer with interests in distributed systems and AI."
+    interests:
+      - "software engineering"
+      - "artificial intelligence"
+      - "distributed systems"
+      - "database systems"
+      - "cloud architecture"
+    preferred_topics:
+      - "python"
+      - "postgresql"
+      - "api design"
+      - "kubernetes"
+      - "machine learning"
+    metadata:
+      profile:
+        role: "Software Engineer"
+        experience_level: "intermediate"
+        company: "REM Labs"
+        timezone: "UTC"
+        current_projects:
+          - name: "REM System"
+            description: "Bio-inspired memory infrastructure for AI agents"
+            role: "contributor"
+          - name: "API Migration"
+            description: "Migrating legacy APIs to REM-powered architecture"
+            role: "lead"
+    tags:
+      - "test"
+      - "default"
+      - "cli"
+      - "developer"

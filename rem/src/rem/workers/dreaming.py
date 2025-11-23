@@ -119,12 +119,16 @@ Observability:
 import asyncio
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Optional, TYPE_CHECKING
 from uuid import uuid4
 
 import httpx
 from loguru import logger
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from ..services.postgres import PostgresService
+    from ..services.dreaming.affinity_service import AffinityMode
 
 
 class TaskType(str, Enum):
@@ -191,7 +195,7 @@ class DreamingWorker:
         self.default_model = default_model
         self.lookback_hours = lookback_hours
         self.client = httpx.AsyncClient(base_url=rem_api_url, timeout=300.0)
-        self._db = None  # Lazy-loaded database connection
+        self._db: "PostgresService | None" = None  # Lazy-loaded database connection
 
     async def _ensure_db(self):
         """
@@ -207,6 +211,8 @@ class DreamingWorker:
         if not self._db:
             from rem.services.postgres import get_postgres_service
             self._db = get_postgres_service()
+            if not self._db:
+                raise RuntimeError("PostgreSQL service not available")
             await self._db.connect()
         return self._db
 
@@ -249,7 +255,7 @@ class DreamingWorker:
             db=db,
             default_model=self.default_model,
             time_window_days=time_window_days,
-            max_sessions=max_sessions,
+            max_messages=max_sessions,  # Map max_sessions to max_messages parameter
             max_moments=max_moments,
             max_resources=max_resources,
         )
@@ -289,7 +295,7 @@ class DreamingWorker:
     async def build_affinity(
         self,
         user_id: str,
-        mode: "AffinityMode" = None,
+        mode: Optional["AffinityMode"] = None,
         lookback_hours: Optional[int] = None,
         limit: Optional[int] = None,
         similarity_threshold: float = 0.7,
@@ -311,7 +317,8 @@ class DreamingWorker:
         Returns:
             Statistics about affinity construction
         """
-        from rem.services.dreaming import AffinityMode, build_affinity as _build_affinity
+        from rem.services.dreaming import build_affinity as _build_affinity
+        from rem.services.dreaming.affinity_service import AffinityMode
 
         # Default to SEMANTIC mode if not provided
         if mode is None:
@@ -323,7 +330,7 @@ class DreamingWorker:
         return await _build_affinity(
             user_id=user_id,
             db=db,
-            mode=mode,
+            mode=mode,  # Pass enum member, handled by service
             default_model=self.default_model,
             lookback_hours=lookback,
             limit=limit,
@@ -427,9 +434,8 @@ class DreamingWorker:
             results["moments"] = {"error": str(e)}
 
         # Resource affinity
-        from rem.services.dreaming import AffinityMode
-
-        affinity_mode = AffinityMode.LLM if use_llm_affinity else AffinityMode.SEMANTIC
+        from rem.services.dreaming.affinity_service import AffinityMode as _AffinityMode
+        affinity_mode = _AffinityMode.LLM if use_llm_affinity else _AffinityMode.SEMANTIC
         try:
             results["affinity"] = await self.build_affinity(
                 user_id=user_id,

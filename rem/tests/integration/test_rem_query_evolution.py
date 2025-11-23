@@ -33,7 +33,8 @@ from rem.agentic import ask_rem
 from rem.services.rem.service import RemService
 from rem.models.core import RemQuery, QueryType
 from rem.models.entities import Resource
-from rem.services.postgres import PostgresService
+from rem.services.postgres import get_postgres_service, PostgresService, Repository
+from tests.integration.helpers import seed_resources
 
 
 # Sample data for testing (minimal Project Alpha dataset)
@@ -85,7 +86,7 @@ SAMPLE_RESOURCES = [
 async def postgres_service():
     """Create PostgresService for testing."""
     connection_string = "postgresql://rem:rem@localhost:5050/rem"
-    pg = PostgresService(connection_string=connection_string)
+    pg = get_postgres_service()
     try:
         await pg.connect()
         yield pg
@@ -107,21 +108,10 @@ async def seeded_stage_1(postgres_service):
     Only basic resources with entity extraction.
     No moments, no affinity graph yet.
     """
-    # Create Resource models
-    resources = []
-    for data in SAMPLE_RESOURCES:
-        if "ordinal" not in data:
-            data["ordinal"] = 0
-        resource = Resource(**data)
-        resources.append(resource)
-
-    # Batch upsert
-    await postgres_service.batch_upsert(
-        records=resources,
-        model=Resource,
-        table_name="resources",
-        entity_key_field="uri",
-        embeddable_fields=["content"],
+    # Seed resources using helper
+    resources = await seed_resources(
+        postgres_service,
+        SAMPLE_RESOURCES,
         generate_embeddings=False,
     )
 
@@ -133,6 +123,7 @@ async def seeded_stage_1(postgres_service):
     }
 
 
+@pytest.mark.llm
 class TestStage1QueryEvolution:
     """
     Stage 1: Resources Seeded (20% Answerable)
@@ -280,6 +271,7 @@ class TestStage1QueryEvolution:
         print("\n✓ Category filter query generated")
 
 
+@pytest.mark.llm
 class TestStage2QueryEvolution:
     """
     Stage 2: Moments Extracted (50% Answerable)
@@ -360,6 +352,7 @@ class TestStage2QueryEvolution:
         print("\n✓ Person co-occurrence query generated")
 
 
+@pytest.mark.llm
 class TestStage3QueryEvolution:
     """
     Stage 3: Affinity Graph Built (80% Answerable)
@@ -439,6 +432,7 @@ class TestStage3QueryEvolution:
         print("\n✓ Entity neighborhood query generated")
 
 
+@pytest.mark.llm
 class TestStage4QueryEvolution:
     """
     Stage 4: Mature Graph (100% Answerable)
@@ -499,6 +493,7 @@ class TestComprehensiveEvolutionDemo:
     """Comprehensive demonstration of query evolution across all stages."""
 
     @pytest.mark.asyncio
+    @pytest.mark.llm
     async def test_complete_evolution_flow(self, rem_service, seeded_stage_1):
         """
         Show complete evolution from Stage 1 → Stage 4.

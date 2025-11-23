@@ -61,23 +61,42 @@ class TestProviderInterface:
         # Here we just verify the interface exists
 
     def test_audio_provider_interface(self):
-        """Test AudioProvider follows the interface."""
+        """Test AudioProvider follows the interface with real WAV file."""
         provider = AudioProvider()
 
         # Verify interface
         assert provider.name == "audio"
         assert hasattr(provider, "extract")
 
-        # Test graceful handling without API key
-        content = b"fake audio bytes"
-        metadata = {"size": len(content), "content_type": "audio/wav"}
+        # Get real WAV test file
+        test_data_dir = Path(__file__).parent.parent.parent / "data" / "audio"
+        audio_file = test_data_dir / "test_short_3s.wav"
 
-        result = provider.extract(content, metadata)
+        if audio_file.exists():
+            # Test with real WAV file bytes
+            content = audio_file.read_bytes()
+            metadata = {"size": len(content), "content_type": "audio/wav"}
 
-        # Should return error message gracefully
-        assert "text" in result
-        assert "metadata" in result
-        assert "OPENAI_API_KEY" in result["text"] or "error" in result["metadata"]
+            result = provider.extract(content, metadata)
+
+            # Should return proper structure (with or without API key)
+            assert "text" in result
+            assert "metadata" in result
+            # Without API key, should have error message
+            # With API key, should have transcription
+            assert isinstance(result["text"], str)
+            assert len(result["text"]) > 0
+        else:
+            # Fallback to fake bytes if test file doesn't exist
+            content = b"fake audio bytes"
+            metadata = {"size": len(content), "content_type": "audio/wav"}
+
+            result = provider.extract(content, metadata)
+
+            # Should return error message gracefully
+            assert "text" in result
+            assert "metadata" in result
+            assert "OPENAI_API_KEY" in result["text"] or "error" in result["metadata"]
 
 
 class TestContentServiceIntegration:
@@ -124,32 +143,56 @@ class TestContentServiceIntegration:
         not os.getenv("OPENAI_API_KEY"),
         reason="OPENAI_API_KEY not set"
     )
-    def test_audio_file_processing_with_api_key(self, tmp_path):
+    def test_audio_file_processing_with_api_key(self):
         """
-        Test audio processing with real API key.
+        Test audio processing with real API key and real WAV file.
 
         This test is skipped unless OPENAI_API_KEY is set.
-        It would require a real audio file and make API calls.
+        Uses generated test audio file from tests/data/audio/.
         """
-        # This is a placeholder - real test would need audio file
-        service = ContentService()
-        assert ".wav" in service.providers
+        # Get test audio file
+        test_data_dir = Path(__file__).parent.parent.parent / "data" / "audio"
+        audio_file = test_data_dir / "test_short_3s.wav"
 
-    def test_audio_file_processing_without_api_key(self, tmp_path):
+        # Skip if test file doesn't exist
+        if not audio_file.exists():
+            pytest.skip(f"Test audio file not found: {audio_file}")
+
+        # Process with real API key
+        service = ContentService()
+        result = service.process_uri(str(audio_file))
+
+        # Verify result structure
+        assert result["provider"] == "audio"
+        assert "content" in result
+        assert "metadata" in result
+
+        # Verify transcription result
+        # Should have markdown format with timestamps
+        assert "##" in result["content"] or "text" in result["content"].lower()
+
+        # Verify metadata
+        assert "chunk_count" in result["metadata"] or "duration_seconds" in result["metadata"]
+
+    def test_audio_file_processing_without_api_key(self):
         """Test audio processing without API key (graceful degradation)."""
         # Temporarily remove API key if it exists
         old_key = os.environ.pop("OPENAI_API_KEY", None)
 
         try:
-            # Create fake audio file
-            audio_file = tmp_path / "test.wav"
-            audio_file.write_bytes(b"fake audio data")
+            # Get test audio file (real WAV file, not fake bytes)
+            test_data_dir = Path(__file__).parent.parent.parent / "data" / "audio"
+            audio_file = test_data_dir / "test_short_3s.wav"
+
+            # Skip if test file doesn't exist
+            if not audio_file.exists():
+                pytest.skip(f"Test audio file not found: {audio_file}")
 
             # Process
             service = ContentService()
             result = service.process_uri(str(audio_file))
 
-            # Should handle gracefully
+            # Should handle gracefully with error message
             assert result["provider"] == "audio"
             assert "OPENAI_API_KEY" in result["content"] or "error" in result["metadata"]
 
@@ -213,13 +256,25 @@ class TestProviderConsistency:
         assert "Heading" in text_result["text"]
         assert "metadata" in text_result
 
-        # Audio provider (without API key)
+        # Audio provider with real WAV file
         audio_provider = AudioProvider()
-        audio_result = audio_provider.extract(
-            b"fake",
-            {"size": 4, "content_type": "audio/wav"}
-        )
-        # Should return text (even if error message)
+
+        # Get real WAV test file
+        test_data_dir = Path(__file__).parent.parent.parent / "data" / "audio"
+        audio_file = test_data_dir / "test_short_3s.wav"
+
+        if audio_file.exists():
+            # Use real WAV file bytes
+            audio_bytes = audio_file.read_bytes()
+            audio_result = audio_provider.extract(
+                audio_bytes,
+                {"size": len(audio_bytes), "content_type": "audio/wav"}
+            )
+        else:
+            # Skip if no test file available
+            pytest.skip("Test audio file not found - cannot test audio provider")
+
+        # Should return text (transcription or error message)
         assert "text" in audio_result
         assert isinstance(audio_result["text"], str)
         assert "metadata" in audio_result

@@ -35,10 +35,17 @@ class RemQueryParser:
             raise ValueError("Empty query string")
 
         query_type_str = tokens[0].upper()
+
+        # Try to match REM query types first
         try:
             query_type = QueryType(query_type_str)
         except ValueError:
-            raise ValueError(f"Invalid query type: {query_type_str}")
+            # If not a known REM query type, treat as raw SQL
+            # This supports SELECT, INSERT, UPDATE, DELETE, WITH, DROP, CREATE, ALTER, etc.
+            query_type = QueryType.SQL
+            # Return raw SQL query directly in params
+            params = {"raw_query": query_string.strip()}
+            return query_type, params
 
         params: Dict[str, Any] = {}
         positional_args: List[str] = []

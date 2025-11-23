@@ -216,6 +216,29 @@ tests/data/
 
 **Convention:** All configuration and fixture data uses YAML format (not JSON or Python files). Executable code belongs in `tests/integration/` as proper test files.
 
+### Test Helpers
+
+Test helpers live in `tests/integration/helpers/`:
+- `seed_data.py` - Repository-based seed data functions for all entity types
+- Uses timezone-naive datetimes (UTC assumed)
+- Follows current Repository API patterns
+
+**Example usage:**
+```python
+from tests.integration.helpers import seed_resources
+
+@pytest.fixture
+async def populated_database(postgres_service):
+    resources = await seed_resources(
+        postgres_service,
+        SAMPLE_RESOURCES,
+        generate_embeddings=False,
+    )
+    return resources
+```
+
+See `tests/integration/helpers/README.md` for complete documentation.
+
 ## Test Requirements
 
 ### Prerequisites

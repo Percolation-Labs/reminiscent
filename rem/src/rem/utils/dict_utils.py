@@ -28,7 +28,7 @@ def get_nested_value(data: dict[str, Any], path: str) -> Any:
         None
     """
     keys = path.split(".")
-    value = data
+    value: Any = data
 
     for key in keys:
         if isinstance(value, dict):

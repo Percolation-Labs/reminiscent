@@ -304,7 +304,7 @@ class MigrationService:
         Returns:
             MigrationSafetyResult with validation results
         """
-        mode = safe_mode or settings.migration.safe_mode
+        mode = safe_mode or settings.migration.mode
         errors: list[str] = []
         warnings: list[str] = []
 
@@ -319,7 +319,7 @@ class MigrationService:
                 errors.append(
                     "DROP COLUMN not allowed (MIGRATION__ALLOW_DROP_COLUMNS=false)"
                 )
-            elif settings.migration.warn_on_alter:
+            elif settings.migration.unsafe_alter_warning:
                 warnings.append("Migration contains DROP COLUMN operations")
 
         # Check for DROP TABLE
@@ -330,7 +330,7 @@ class MigrationService:
                 errors.append(
                     "DROP TABLE not allowed (MIGRATION__ALLOW_DROP_TABLES=false)"
                 )
-            elif settings.migration.warn_on_alter:
+            elif settings.migration.unsafe_alter_warning:
                 warnings.append("Migration contains DROP TABLE operations")
 
         # Check for ALTER COLUMN (type changes)
@@ -341,7 +341,7 @@ class MigrationService:
                 errors.append(
                     "ALTER COLUMN TYPE not allowed (MIGRATION__ALLOW_ALTER_COLUMNS=false)"
                 )
-            elif settings.migration.warn_on_alter:
+            elif settings.migration.unsafe_alter_warning:
                 warnings.append("Migration contains ALTER COLUMN TYPE operations")
 
         # Check for RENAME COLUMN
@@ -352,7 +352,7 @@ class MigrationService:
                 errors.append(
                     "RENAME COLUMN not allowed (MIGRATION__ALLOW_RENAME_COLUMNS=false)"
                 )
-            elif settings.migration.warn_on_alter:
+            elif settings.migration.unsafe_alter_warning:
                 warnings.append("Migration contains RENAME COLUMN operations")
 
         # Check for RENAME TABLE / ALTER TABLE RENAME
@@ -367,13 +367,13 @@ class MigrationService:
                 errors.append(
                     "RENAME TABLE not allowed (MIGRATION__ALLOW_RENAME_TABLES=false)"
                 )
-            elif settings.migration.warn_on_alter:
+            elif settings.migration.unsafe_alter_warning:
                 warnings.append("Migration contains RENAME TABLE operations")
 
         # Check for other ALTER operations
         if (
             re.search(r"\bALTER\s+TABLE\b", sql_upper, re.IGNORECASE)
-            and settings.migration.warn_on_alter
+            and settings.migration.unsafe_alter_warning
         ):
             # Only warn if not already warned above
             if not any("ALTER" in w for w in warnings):

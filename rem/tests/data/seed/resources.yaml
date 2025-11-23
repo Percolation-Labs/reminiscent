@@ -2,7 +2,7 @@
 # Used for testing batch upsert, KV store population, and embedding generation
 
 resources:
-  - name: "getting-started-guide"
+  - name: "docs://getting-started.md"
     uri: "docs://getting-started.md"
     content: |
       # Getting Started with REM
@@ -40,9 +40,9 @@ resources:
         name: "semantic-search"
         metadata: {"importance": "high"}
     tenant_id: "acme-corp"
-    user_id: "sarah-chen"
+    user_id: "acme-corp"
 
-  - name: "database-architecture"
+  - name: "docs://architecture/database.md"
     uri: "docs://architecture/database.md"
     content: |
       # Database Architecture
@@ -87,9 +87,9 @@ resources:
         name: "unlogged-tables"
         metadata: {"benefit": "performance"}
     tenant_id: "acme-corp"
-    user_id: "sarah-chen"
+    user_id: "acme-corp"
 
-  - name: "meeting-notes-q4-planning"
+  - name: "slack://meetings/2025-01-10-q4-planning"
     uri: "slack://meetings/2025-01-10-q4-planning"
     content: |
       # Q4 Planning Meeting - January 10, 2025
@@ -137,9 +137,9 @@ resources:
         name: "rem-deployment"
         metadata: {"status": "in-progress"}
     tenant_id: "acme-corp"
-    user_id: "sarah-chen"
+    user_id: "acme-corp"
 
-  - name: "api-quickstart-tutorial"
+  - name: "docs://tutorials/api-quickstart.md"
     uri: "docs://tutorials/api-quickstart.md"
     content: |
       # API Quickstart Tutorial
@@ -220,7 +220,7 @@ resources:
     tenant_id: "acme-corp"
     user_id: "alice-park"
 
-  - name: "karpenter-configuration"
+  - name: "docs://infrastructure/karpenter.md"
     uri: "docs://infrastructure/karpenter.md"
     content: |
       # Karpenter Node Provisioning Configuration

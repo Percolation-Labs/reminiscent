@@ -42,10 +42,8 @@ ENV UV_COMPILE_BYTECODE=1
 COPY pyproject.toml uv.lock README.md ./
 
 # Copy source code (needed for package installation)
+# Schemas are inside src/rem/schemas
 COPY src/ ./src/
-
-# Copy schemas directory (needed for agent schemas)
-COPY schemas/ ./schemas/
 
 # Install dependencies and the rem package into .venv
 # Use --frozen to ensure lock file is up to date
@@ -89,11 +87,8 @@ RUN useradd -m -u 1000 -s /bin/bash rem && \
 # Copy virtual environment from builder
 COPY --from=builder --chown=rem:rem /app/.venv /app/.venv
 
-# Copy source code from builder
+# Copy source code from builder (includes schemas at src/rem/schemas)
 COPY --from=builder --chown=rem:rem /app/src /app/src
-
-# Copy schemas from builder
-COPY --from=builder --chown=rem:rem /app/schemas /app/schemas
 
 # Create Kreuzberg cache directory with write permissions
 # Kreuzberg uses Path.cwd() / ".kreuzberg", so we must create /app/.kreuzberg

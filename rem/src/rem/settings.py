@@ -56,7 +56,8 @@ Example .env file:
     TEAM=rem
 """
 
-from pydantic import Field
+import os
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -64,15 +65,15 @@ class LLMSettings(BaseSettings):
     """
     LLM provider settings for Pydantic AI agents.
 
-    Environment variables:
-        LLM__DEFAULT_MODEL - Default model (format: provider:model-id)
-        LLM__DEFAULT_TEMPERATURE - Temperature for generation
-        LLM__MAX_RETRIES - Max agent request retries
-        LLM__EVALUATOR_MODEL - Model for LLM-as-judge evaluation
-        LLM__OPENAI_API_KEY - OpenAI API key
-        LLM__ANTHROPIC_API_KEY - Anthropic API key
-        LLM__EMBEDDING_PROVIDER - Default embedding provider (openai, cohere, jina, etc.)
-        LLM__EMBEDDING_MODEL - Default embedding model name
+    Environment variables (accepts both prefixed and unprefixed):
+        LLM__DEFAULT_MODEL or DEFAULT_MODEL - Default model (format: provider:model-id)
+        LLM__DEFAULT_TEMPERATURE or DEFAULT_TEMPERATURE - Temperature for generation
+        LLM__MAX_RETRIES or MAX_RETRIES - Max agent request retries
+        LLM__EVALUATOR_MODEL or EVALUATOR_MODEL - Model for LLM-as-judge evaluation
+        LLM__OPENAI_API_KEY or OPENAI_API_KEY - OpenAI API key
+        LLM__ANTHROPIC_API_KEY or ANTHROPIC_API_KEY - Anthropic API key
+        LLM__EMBEDDING_PROVIDER or EMBEDDING_PROVIDER - Default embedding provider (openai, cohere, jina, etc.)
+        LLM__EMBEDDING_MODEL or EMBEDDING_MODEL - Default embedding model name
     """
 
     model_config = SettingsConfigDict(
@@ -100,8 +101,8 @@ class LLMSettings(BaseSettings):
     )
 
     default_max_iterations: int = Field(
-        default=7,
-        description="Default max iterations for agentic calls",
+        default=20,
+        description="Default max iterations for agentic calls (limits total LLM requests per agent.run())",
     )
 
     evaluator_model: str = Field(
@@ -116,12 +117,12 @@ class LLMSettings(BaseSettings):
 
     openai_api_key: str | None = Field(
         default=None,
-        description="OpenAI API key for GPT models",
+        description="OpenAI API key for GPT models (reads from LLM__OPENAI_API_KEY or OPENAI_API_KEY)",
     )
 
     anthropic_api_key: str | None = Field(
         default=None,
-        description="Anthropic API key for Claude models",
+        description="Anthropic API key for Claude models (reads from LLM__ANTHROPIC_API_KEY or ANTHROPIC_API_KEY)",
     )
 
     embedding_provider: str = Field(
@@ -133,6 +134,22 @@ class LLMSettings(BaseSettings):
         default="text-embedding-3-small",
         description="Default embedding model (provider-specific model name)",
     )
+
+    @field_validator("openai_api_key", mode="before")
+    @classmethod
+    def validate_openai_api_key(cls, v):
+        """Fallback to OPENAI_API_KEY if LLM__OPENAI_API_KEY not set (LLM__ takes precedence)."""
+        if v is None:
+            return os.getenv("OPENAI_API_KEY")
+        return v
+
+    @field_validator("anthropic_api_key", mode="before")
+    @classmethod
+    def validate_anthropic_api_key(cls, v):
+        """Fallback to ANTHROPIC_API_KEY if LLM__ANTHROPIC_API_KEY not set (LLM__ takes precedence)."""
+        if v is None:
+            return os.getenv("ANTHROPIC_API_KEY")
+        return v
 
 
 class MCPSettings(BaseSettings):
@@ -234,6 +251,7 @@ class PhoenixSettings(BaseSettings):
 
     Environment variables:
         PHOENIX__ENABLED - Enable Phoenix integration
+        PHOENIX__BASE_URL - Phoenix base URL (for client connections)
         PHOENIX__API_KEY - Phoenix API key (cloud instances)
         PHOENIX__COLLECTOR_ENDPOINT - Phoenix OTLP endpoint
         PHOENIX__PROJECT_NAME - Phoenix project name for trace organization
@@ -249,6 +267,11 @@ class PhoenixSettings(BaseSettings):
     enabled: bool = Field(
         default=False,
         description="Enable Phoenix integration (disabled by default for local dev)",
+    )
+
+    base_url: str = Field(
+        default="http://localhost:6006",
+        description="Phoenix base URL for client connections (default local Phoenix port)",
     )
 
     api_key: str | None = Field(
@@ -422,6 +445,123 @@ class PostgresSettings(BaseSettings):
         description="Statement timeout in milliseconds (30 seconds default)",
     )
 
+    @property
+    def user(self) -> str:
+        from urllib.parse import urlparse
+        return urlparse(self.connection_string).username or "postgres"
+
+    @property
+    def password(self) -> str | None:
+        from urllib.parse import urlparse
+        return urlparse(self.connection_string).password
+
+    @property
+    def database(self) -> str:
+        from urllib.parse import urlparse
+        return urlparse(self.connection_string).path.lstrip("/")
+
+    @property
+    def host(self) -> str:
+        from urllib.parse import urlparse
+        return urlparse(self.connection_string).hostname or "localhost"
+
+    @property
+    def port(self) -> int:
+        from urllib.parse import urlparse
+        return urlparse(self.connection_string).port or 5432
+
+
+class MigrationSettings(BaseSettings):
+    """
+    Migration settings.
+
+    Environment variables:
+        MIGRATION__AUTO_UPGRADE - Automatically run migrations on startup
+        MIGRATION__MODE - Migration safety mode (permissive, additive, strict)
+        MIGRATION__ALLOW_DROP_COLUMNS - Allow DROP COLUMN operations
+        MIGRATION__ALLOW_DROP_TABLES - Allow DROP TABLE operations
+        MIGRATION__ALLOW_ALTER_COLUMNS - Allow ALTER COLUMN TYPE operations
+        MIGRATION__ALLOW_RENAME_COLUMNS - Allow RENAME COLUMN operations
+        MIGRATION__ALLOW_RENAME_TABLES - Allow RENAME TABLE operations
+        MIGRATION__UNSAFE_ALTER_WARNING - Warn on unsafe ALTER operations
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="MIGRATION__",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    auto_upgrade: bool = Field(
+        default=True,
+        description="Automatically run database migrations on startup",
+    )
+    
+    mode: str = Field(
+        default="permissive",
+        description="Migration safety mode: permissive, additive, strict",
+    )
+
+    allow_drop_columns: bool = Field(
+        default=False,
+        description="Allow DROP COLUMN operations (unsafe)",
+    )
+
+    allow_drop_tables: bool = Field(
+        default=False,
+        description="Allow DROP TABLE operations (unsafe)",
+    )
+
+    allow_alter_columns: bool = Field(
+        default=True,
+        description="Allow ALTER COLUMN TYPE operations (can be unsafe)",
+    )
+
+    allow_rename_columns: bool = Field(
+        default=True,
+        description="Allow RENAME COLUMN operations (can be unsafe)",
+    )
+
+    allow_rename_tables: bool = Field(
+        default=True,
+        description="Allow RENAME TABLE operations (can be unsafe)",
+    )
+
+    unsafe_alter_warning: bool = Field(
+        default=True,
+        description="Emit warning on potentially unsafe ALTER operations",
+    )
+
+
+class StorageSettings(BaseSettings):
+    """
+    Storage provider settings.
+
+    Controls which storage backend to use for file uploads and artifacts.
+
+    Environment variables:
+        STORAGE__PROVIDER - Storage provider (local or s3, default: local)
+        STORAGE__BASE_PATH - Base path for local filesystem storage (default: ~/.rem/fs)
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="STORAGE__",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    provider: str = Field(
+        default="local",
+        description="Storage provider: 'local' for filesystem, 's3' for AWS S3",
+    )
+
+    base_path: str = Field(
+        default="~/.rem/fs",
+        description="Base path for local filesystem storage (only used when provider='local')",
+    )
+
 
 class S3Settings(BaseSettings):
     """
@@ -430,12 +570,17 @@ class S3Settings(BaseSettings):
     Uses IRSA (IAM Roles for Service Accounts) for AWS permissions in EKS.
     For local development, can use MinIO or provide access keys.
 
+    Bucket Naming Convention:
+        - Default: rem-io-{environment} (e.g., rem-io-development, rem-io-staging, rem-io-production)
+        - Matches Kubernetes manifest convention for consistency
+        - Override with S3__BUCKET_NAME environment variable
+
     Path Convention:
         Uploads: s3://{bucket}/{version}/uploads/{user_id}/{yyyy}/{mm}/{dd}/{filename}
         Parsed:  s3://{bucket}/{version}/parsed/{user_id}/{yyyy}/{mm}/{dd}/{filename}/{resource}
 
     Environment variables:
-        S3__BUCKET_NAME - S3 bucket name (e.g., rem-io-staging)
+        S3__BUCKET_NAME - S3 bucket name (default: rem-io-development)
         S3__VERSION - API version for paths (default: v1)
         S3__UPLOADS_PREFIX - Uploads directory prefix (default: uploads)
         S3__PARSED_PREFIX - Parsed content directory prefix (default: parsed)
@@ -454,8 +599,8 @@ class S3Settings(BaseSettings):
     )
 
     bucket_name: str = Field(
-        default="rem-storage",
-        description="S3 bucket name",
+        default="rem-io-development",
+        description="S3 bucket name (convention: rem-io-{environment})",
     )
 
     version: str = Field(
@@ -952,6 +1097,53 @@ class GitSettings(BaseSettings):
     )
 
 
+class TestSettings(BaseSettings):
+    """
+    Test environment settings.
+
+    Environment variables:
+        TEST__USER_EMAIL - Test user email (default: test@rem.ai)
+        TEST__USER_ID - Test user UUID (auto-generated from email if not provided)
+
+    The user_id is a deterministic UUID v5 generated from the email address.
+    This ensures consistent IDs across test runs and allows tests to use both
+    email and UUID interchangeably.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="TEST__",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    user_email: str = Field(
+        default="test@rem.ai",
+        description="Test user email address",
+    )
+
+    user_id: str | None = Field(
+        default=None,
+        description="Test user UUID (auto-generated from email if not provided)",
+    )
+
+    @property
+    def effective_user_id(self) -> str:
+        """
+        Get the effective user ID (either explicit or generated from email).
+
+        Returns a deterministic UUID v5 based on the email address if user_id
+        is not explicitly set. This ensures consistent test data across runs.
+        """
+        if self.user_id:
+            return self.user_id
+
+        # Generate deterministic UUID v5 from email
+        # Using DNS namespace as the base (standard practice for email-based UUIDs)
+        import uuid
+        return str(uuid.uuid5(uuid.NAMESPACE_DNS, self.user_email))
+
+
 class Settings(BaseSettings):
     """
     Global application settings.
@@ -964,6 +1156,7 @@ class Settings(BaseSettings):
         ENVIRONMENT - Environment (development, staging, production)
         DOMAIN - Public domain for OAuth discovery
         ROOT_PATH - Root path for reverse proxy (e.g., /rem for ALB routing)
+        TEST__USER_ID - Default user ID for integration tests
     """
 
     model_config = SettingsConfigDict(
@@ -1007,11 +1200,14 @@ class Settings(BaseSettings):
     phoenix: PhoenixSettings = Field(default_factory=PhoenixSettings)
     auth: AuthSettings = Field(default_factory=AuthSettings)
     postgres: PostgresSettings = Field(default_factory=PostgresSettings)
+    migration: MigrationSettings = Field(default_factory=MigrationSettings)
+    storage: StorageSettings = Field(default_factory=StorageSettings)
     s3: S3Settings = Field(default_factory=S3Settings)
     git: GitSettings = Field(default_factory=GitSettings)
     sqs: SQSSettings = Field(default_factory=SQSSettings)
     chunking: ChunkingSettings = Field(default_factory=ChunkingSettings)
     content: ContentSettings = Field(default_factory=ContentSettings)
+    test: TestSettings = Field(default_factory=TestSettings)
 
 
 # Load configuration from ~/.rem/config.yaml before initializing settings
@@ -1028,3 +1224,12 @@ except ImportError:
 
 # Global settings singleton
 settings = Settings()
+
+# Sync API keys to environment for pydantic-ai
+# Pydantic AI providers check environment directly, so we need to ensure
+# API keys from settings (LLM__*_API_KEY) are also available without prefix
+if settings.llm.openai_api_key and not os.getenv("OPENAI_API_KEY"):
+    os.environ["OPENAI_API_KEY"] = settings.llm.openai_api_key
+
+if settings.llm.anthropic_api_key and not os.getenv("ANTHROPIC_API_KEY"):
+    os.environ["ANTHROPIC_API_KEY"] = settings.llm.anthropic_api_key

@@ -6,7 +6,7 @@ comprehensive user profile summaries using LLM analysis.
 """
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
@@ -17,7 +17,7 @@ from ...agentic.providers.pydantic_ai import create_agent
 from ...agentic.serialization import serialize_agent_result
 from ...models.entities.moment import Moment
 from ...models.entities.resource import Resource
-from ...models.entities.session import Session
+from ...models.entities.message import Message
 from ...models.entities.user import User
 from ...services.postgres.repository import Repository
 from ...services.postgres.service import PostgresService
@@ -28,18 +28,18 @@ async def update_user_model(
     db: PostgresService,
     default_model: str = "gpt-4o",
     time_window_days: int = 30,
-    max_sessions: int = 100,
+    max_messages: int = 100,
     max_moments: int = 20,
     max_resources: int = 20,
 ) -> dict[str, Any]:
     """
     Update user model from recent activity.
 
-    Reads recent sessions, moments, and resources to generate
+    Reads recent messages, moments, and resources to generate
     a comprehensive user profile summary using LLM analysis.
 
     Process:
-    1. Query PostgreSQL for recent sessions, moments, resources for this user
+    1. Query PostgreSQL for recent messages, moments, resources for this user
     2. Load UserProfileBuilder agent schema
     3. Generate user profile using LLM
     4. Update User entity with profile data and metadata
@@ -50,17 +50,17 @@ async def update_user_model(
         db: Database service (already connected)
         default_model: LLM model for analysis (default: gpt-4o)
         time_window_days: Days to look back for activity (default: 30)
-        max_sessions: Max sessions to analyze
+        max_messages: Max messages to analyze
         max_moments: Max moments to include
         max_resources: Max resources to include
 
     Returns:
         Statistics about user model update
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(days=time_window_days)
+    cutoff = datetime.utcnow() - timedelta(days=time_window_days)
 
     # Create repositories
-    session_repo = Repository(Session, "sessions", db=db)
+    message_repo = Repository(Message, "messages", db=db)
     moment_repo = Repository(Moment, "moments", db=db)
     resource_repo = Repository(Resource, "resources", db=db)
     user_repo = Repository(User, "users", db=db)
@@ -68,13 +68,14 @@ async def update_user_model(
     # Build filters using user_id
     filters = {"user_id": user_id}
 
-    # Query recent sessions
-    sessions = await session_repo.find(
+    # Query recent messages
+    messages = await message_repo.find(
         filters=filters,
         order_by="created_at DESC",
-        limit=max_sessions,
+        limit=max_messages,
     )
-    sessions = [s for s in sessions if s.created_at >= cutoff]
+    # Filter by cutoff (both are UTC-naive)
+    messages = [m for m in messages if m.created_at >= cutoff]
 
     # Query recent moments
     moments = await moment_repo.find(
@@ -82,23 +83,23 @@ async def update_user_model(
         order_by="starts_timestamp DESC",
         limit=max_moments,
     )
+    # Filter by cutoff (both are UTC-naive)
     moments = [m for m in moments if m.starts_timestamp >= cutoff]
 
     # Query recent resources
     resources = await resource_repo.find(
         filters=filters,
-        order_by="resource_timestamp DESC",
+        order_by="created_at DESC",
         limit=max_resources,
     )
-    resources = [
-        r for r in resources if r.resource_timestamp and r.resource_timestamp >= cutoff
-    ]
+    # Filter by cutoff (both are UTC-naive)
+    resources = [r for r in resources if r.created_at and r.created_at >= cutoff]
 
-    if not sessions and not moments and not resources:
+    if not messages and not moments and not resources:
         return {
             "user_id": user_id,
             "time_window_days": time_window_days,
-            "sessions_analyzed": 0,
+            "messages_analyzed": 0,
             "moments_included": 0,
             "resources_included": 0,
             "user_updated": False,
@@ -107,7 +108,7 @@ async def update_user_model(
 
     logger.info(
         f"Building user profile for {user_id}: "
-        f"{len(sessions)} sessions, {len(moments)} moments, {len(resources)} resources"
+        f"{len(messages)} messages, {len(moments)} moments, {len(resources)} resources"
     )
 
     # Load UserProfileBuilder agent schema
@@ -115,6 +116,7 @@ async def update_user_model(
         Path(__file__).parent.parent.parent
         / "schemas"
         / "agents"
+        / "core"
         / "user-profile-builder.yaml"
     )
 
@@ -128,25 +130,25 @@ async def update_user_model(
     input_data = {
         "user_id": user_id,
         "time_window_days": time_window_days,
-        "sessions": [
+        "messages": [
             {
-                "id": s.id,
-                "query": s.query[:500],  # Limit for token efficiency
-                "response": s.response[:500] if s.response else "",
-                "created_at": s.created_at.isoformat(),
-                "metadata": s.metadata,
+                "id": str(m.id),
+                "session_id": m.session_id,
+                "message_type": m.message_type,
+                "content": m.content[:500] if m.content else "",  # Limit for token efficiency
+                "created_at": m.created_at.isoformat(),
             }
-            for s in sessions
+            for m in messages
         ],
         "moments": [
             {
-                "id": m.id,
+                "id": str(m.id),
                 "name": m.name,
                 "moment_type": m.moment_type,
                 "emotion_tags": m.emotion_tags,
                 "topic_tags": m.topic_tags,
                 "present_persons": [
-                    {"id": p.id, "name": p.name, "role": p.role}
+                    {"id": str(p.id), "name": p.name, "role": p.role}
                     for p in m.present_persons
                 ],
                 "starts_timestamp": m.starts_timestamp.isoformat(),
@@ -156,12 +158,12 @@ async def update_user_model(
         ],
         "resources": [
             {
-                "id": r.id,
+                "id": str(r.id),
                 "name": r.name,
                 "category": r.category,
                 "content": r.content[:1000] if r.content else "",  # First 1000 chars
-                "resource_timestamp": (
-                    r.resource_timestamp.isoformat() if r.resource_timestamp else None
+                "created_at": (
+                    r.created_at.isoformat() if r.created_at else None
                 ),
             }
             for r in resources
@@ -169,34 +171,41 @@ async def update_user_model(
     }
 
     # Create and run UserProfileBuilder agent
-    agent = await create_agent(
+    agent_runtime = await create_agent(
         agent_schema_override=agent_schema,
-        model_override=default_model,
+        model_override=default_model,  # type: ignore[arg-type]
     )
 
-    result = await agent.run(json.dumps(input_data, indent=2))
+    result = await agent_runtime.run(json.dumps(input_data, indent=2))
 
     # Serialize result (critical for Pydantic models!)
-    profile_data = serialize_agent_result(result.output)
+    raw_result = serialize_agent_result(result.output)
+
+    # Ensure result is a dict (agent should always return structured data)
+    if not isinstance(raw_result, dict):
+        raise ValueError(f"Expected dict from user profile agent, got {type(raw_result)}")
+
+    profile_data: dict[str, Any] = raw_result
 
     logger.info(
         f"Generated user profile. Summary: {profile_data.get('summary', '')[:100]}..."
     )
 
     # Get or create User entity
-    user = await user_repo.get_by_id(user_id, user_id)
+    # Use find() with user_id filter instead of get_by_id() since user_id is a string, not UUID
+    existing_users = await user_repo.find(filters={"user_id": user_id}, limit=1)
+    user = existing_users[0] if existing_users else None
 
     if not user:
-        # Create new user
+        # Create new user (id will be auto-generated as UUID)
         user = User(
-            id=user_id,
             tenant_id=user_id,  # Set tenant_id = user_id
             user_id=user_id,
             name=user_id,  # Default to user_id, can be updated later
             metadata={},
             graph_edges=[],
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
         )
 
     # Update user metadata with full profile
@@ -204,7 +213,7 @@ async def update_user_model(
     user.metadata.update(
         {
             "profile": profile_data,
-            "profile_generated_at": datetime.now(timezone.utc).isoformat(),
+            "profile_generated_at": datetime.utcnow().isoformat(),
             "profile_time_window_days": time_window_days,
         }
     )
@@ -219,7 +228,7 @@ async def update_user_model(
     user.preferred_topics = profile_data.get("recommended_tags", [])
 
     # Determine activity level based on data volume
-    total_activity = len(sessions) + len(moments) + len(resources)
+    total_activity = len(messages) + len(moments) + len(resources)
     if total_activity >= 50:
         user.activity_level = "active"
     elif total_activity >= 10:
@@ -227,7 +236,7 @@ async def update_user_model(
     else:
         user.activity_level = "inactive"
 
-    user.last_active_at = datetime.now(timezone.utc)
+    user.last_active_at = datetime.utcnow()
 
     # Build graph edges to key resources and moments
     from .utils import merge_graph_edges
@@ -238,7 +247,7 @@ async def update_user_model(
     for resource in resources[:5]:
         graph_edges.append(
             {
-                "dst": resource.id,
+                "dst": str(resource.id),  # Convert UUID to string
                 "rel_type": "recently_worked_on",
                 "weight": 0.8,
                 "properties": {
@@ -246,7 +255,7 @@ async def update_user_model(
                     "dst_name": resource.name,
                     "dst_category": resource.category,
                 },
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": datetime.utcnow().isoformat(),
             }
         )
 
@@ -254,7 +263,7 @@ async def update_user_model(
     for moment in moments[:5]:
         graph_edges.append(
             {
-                "dst": moment.id,
+                "dst": str(moment.id),  # Convert UUID to string
                 "rel_type": "participated_in",
                 "weight": 0.9,
                 "properties": {
@@ -262,13 +271,13 @@ async def update_user_model(
                     "dst_name": moment.name,
                     "dst_moment_type": moment.moment_type,
                 },
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": datetime.utcnow().isoformat(),
             }
         )
 
     # Merge edges with existing
     user.graph_edges = merge_graph_edges(user.graph_edges or [], graph_edges)
-    user.updated_at = datetime.now(timezone.utc)
+    user.updated_at = datetime.utcnow()
 
     # Save user
     await user_repo.upsert(user)
@@ -276,7 +285,7 @@ async def update_user_model(
     return {
         "user_id": user_id,
         "time_window_days": time_window_days,
-        "sessions_analyzed": len(sessions),
+        "messages_analyzed": len(messages),
         "moments_included": len(moments),
         "resources_included": len(resources),
         "current_projects": len(profile_data.get("current_projects", [])),

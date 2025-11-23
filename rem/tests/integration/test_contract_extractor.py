@@ -1,6 +1,7 @@
 """
 Integration tests for the Contract Extractor agent.
 """
+from rem.settings import settings
 import asyncio
 from pathlib import Path
 import pytest
@@ -31,20 +32,21 @@ async def postgres_service() -> PostgresService:
     pg = PostgresService()
     await pg.connect()
 
-    # Ensure a clean database state for each test
-    # Drop all tables and then re-run install scripts
+    # Ensure a clean database state for each test by truncating data
+    # Do NOT drop schema as it removes functions/tables for other tests
     cleanup_sql_commands = [
-        "DROP SCHEMA public CASCADE",
-        "CREATE SCHEMA public",
+        "TRUNCATE TABLE resources CASCADE",
+        "TRUNCATE TABLE users CASCADE",
+        "TRUNCATE TABLE moments CASCADE",
+        "TRUNCATE TABLE files CASCADE",
+        "TRUNCATE TABLE messages CASCADE",
     ]
     for cmd in cleanup_sql_commands:
-        await pg.execute_ddl(cmd)
-
-    # Read and execute 001_install.sql
-    install_sql_path = Path("src/rem/sql/migrations/001_install.sql")
-    with open(install_sql_path, "r") as f:
-        install_sql = f.read()
-    await pg.execute_ddl(install_sql)
+        try:
+            await pg.execute_ddl(cmd)
+        except Exception as e:
+            # Tables might not exist yet, that's ok
+            pass
 
     # Read and execute 002_install_models.sql
     install_models_sql_path = Path("src/rem/sql/migrations/002_install_models.sql")
@@ -72,17 +74,15 @@ async def test_ingest_contract_pdf(postgres_service: PostgresService, monkeypatc
     monkeypatch.setattr(settings.chunking, "min_chunk_size", 1)
     monkeypatch.setattr(settings.chunking, "chunk_size", 10)
 
-    user_id = "test-user"
-    tenant_id = "test-tenant"
+    user_id=settings.test.effective_user_id
     contract_path = Path("tests/data/content-examples/pdf/service_contract.pdf")
 
     assert contract_path.exists(), "Contract PDF not found"
 
-    # Ingest the file
+    # Ingest the file (tenant_id removed - using user_id for partitioning)
     result = await ingest_into_rem(
         file_uri=str(contract_path.absolute()),
         user_id=user_id,
-        tenant_id=tenant_id,
         is_local_server=True,
     )
 
@@ -130,7 +130,7 @@ async def test_run_contract_extractor_agent(monkeypatch):
     monkeypatch.setattr("pydantic_ai.agent.Agent.run", AsyncMock(return_value=mock_result_instance))
 
     # Load the agent schema
-    schema_path = Path("src/rem/schemas/agents/contract-extractor.yaml")
+    schema_path = Path("src/rem/schemas/agents/examples/contract-extractor.yaml")
     assert schema_path.exists(), "Contract extractor schema not found"
     with open(schema_path, "r") as f:
         agent_schema = yaml.safe_load(f)
@@ -142,8 +142,8 @@ async def test_run_contract_extractor_agent(monkeypatch):
     by and between ACME Corp., a Delaware corporation ("Client"), and Innovate LLC, a California limited liability company ("Provider").
     """
 
-    # Create agent context
-    context = AgentContext(user_id="test-user", tenant_id="test-tenant")
+    # Create agent context (tenant_id deprecated, using user_id)
+    context = AgentContext(user_id=settings.test.effective_user_id)
 
     # Create the agent
     agent = await create_agent(

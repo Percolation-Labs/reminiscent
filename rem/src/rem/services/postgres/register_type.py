@@ -265,14 +265,16 @@ BEGIN
             tenant_id,
             user_id,
             metadata,
+            graph_edges,
             updated_at
         ) VALUES (
-            NEW.{entity_key_field},
+            NEW.{entity_key_field}::VARCHAR,
             '{table_name}',
             NEW.id,
             NEW.tenant_id,
             NEW.user_id,
             NEW.metadata,
+            COALESCE(NEW.graph_edges, '[]'::jsonb),
             CURRENT_TIMESTAMP
         )
         ON CONFLICT (tenant_id, entity_key)
@@ -280,6 +282,7 @@ BEGIN
             entity_id = EXCLUDED.entity_id,
             user_id = EXCLUDED.user_id,
             metadata = EXCLUDED.metadata,
+            graph_edges = EXCLUDED.graph_edges,
             updated_at = CURRENT_TIMESTAMP;
 
         RETURN NEW;

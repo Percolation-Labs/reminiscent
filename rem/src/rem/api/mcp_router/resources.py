@@ -48,8 +48,8 @@ Chunked, embedded content from documents, files, conversations.
 
 Fields:
 - id: UUID (auto-generated)
-- tenant_id: Tenant identifier
-- user_id: Optional user ownership
+- user_id: User identifier (primary data scoping field)
+- tenant_id: Tenant identifier (legacy, set to user_id)
 - name: Resource name/label (used for LOOKUP)
 - content: Main text content
 - category: Optional category (document, conversation, etc.)
@@ -70,8 +70,8 @@ Temporal narratives and time-bound events.
 
 Fields:
 - id: UUID (auto-generated)
-- tenant_id: Tenant identifier
-- user_id: Optional user ownership
+- user_id: User identifier (primary data scoping field)
+- tenant_id: Tenant identifier (legacy, set to user_id)
 - name: Moment name/label (used for LOOKUP)
 - moment_type: Type (meeting, coding_session, conversation, etc.)
 - resource_timestamp: Start time
@@ -89,8 +89,8 @@ Conversation messages with agents.
 
 Fields:
 - id: UUID (auto-generated)
-- tenant_id: Tenant identifier
-- user_id: Optional user ownership
+- user_id: User identifier (primary data scoping field)
+- tenant_id: Tenant identifier (legacy, set to user_id)
 - role: Message role (user, assistant, system)
 - content: Message text
 - session_id: Conversation session identifier
@@ -102,7 +102,8 @@ System users with authentication.
 
 Fields:
 - id: UUID (auto-generated)
-- tenant_id: Tenant identifier
+- user_id: User identifier (primary data scoping field)
+- tenant_id: Tenant identifier (legacy, set to user_id)
 - name: User name
 - email: User email
 - metadata: JSONB flexible metadata dict
@@ -113,8 +114,8 @@ File uploads with S3 storage.
 
 Fields:
 - id: UUID (auto-generated)
-- tenant_id: Tenant identifier
-- user_id: Optional user ownership
+- user_id: User identifier (primary data scoping field)
+- tenant_id: Tenant identifier (legacy, set to user_id)
 - name: File name
 - s3_key: S3 object key
 - s3_bucket: S3 bucket name
@@ -144,7 +145,7 @@ Parameters:
 
 Example:
 ```
-rem_query(query_type="lookup", entity_key="Sarah Chen", tenant_id="acme")
+rem_query(query_type="lookup", entity_key="Sarah Chen", user_id="user-123")
 ```
 
 Returns:
@@ -165,7 +166,7 @@ Parameters:
 
 Example:
 ```
-rem_query(query_type="fuzzy", query_text="sara", threshold=0.7, tenant_id="acme")
+rem_query(query_type="fuzzy", query_text="sara", threshold=0.7, user_id="user-123")
 ```
 
 Returns:
@@ -190,7 +191,7 @@ rem_query(
     query_type="search",
     query_text="database migration",
     table_name="resources",
-    tenant_id="acme"
+    user_id="user-123"
 )
 ```
 
@@ -212,13 +213,13 @@ rem_query(
     query_type="sql",
     table_name="moments",
     where_clause="moment_type='meeting' AND resource_timestamp > '2025-01-01'",
-    tenant_id="acme"
+    user_id="user-123"
 )
 ```
 
 Returns:
 - Matching rows from table
-- Automatically scoped to tenant
+- Automatically scoped to user_id
 
 ## TRAVERSE
 Multi-hop graph traversal with depth control.
@@ -238,7 +239,7 @@ rem_query(
     start_key="Sarah Chen",
     max_depth=2,
     rel_type="manages",
-    tenant_id="acme"
+    user_id="user-123"
 )
 ```
 

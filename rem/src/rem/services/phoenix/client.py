@@ -51,7 +51,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, TYPE_CHECKING
+from typing import Any, Callable, TYPE_CHECKING, cast
 
 import pandas as pd
 from loguru import logger
@@ -264,15 +264,15 @@ class PhoenixClient:
             df = pd.read_csv(csv_file_path)
 
             # Extract inputs
-            inputs = df[input_keys].to_dict("records")
+            inputs = cast(list[dict[str, Any]], df[input_keys].to_dict("records"))
 
             # Extract outputs
-            outputs = df[output_keys].to_dict("records")
+            outputs = cast(list[dict[str, Any]], df[output_keys].to_dict("records"))
 
             # Extract metadata if specified
             metadata = None
             if metadata_keys:
-                metadata = df[metadata_keys].to_dict("records")
+                metadata = cast(list[dict[str, Any]], df[metadata_keys].to_dict("records"))
 
             return self.create_dataset_from_data(
                 name=name,
@@ -312,7 +312,7 @@ class PhoenixClient:
                 metadata = [{} for _ in inputs]
 
             updated_dataset = self._client.datasets.add_examples_to_dataset(
-                dataset_name=dataset,
+                dataset,  # Positional argument instead of keyword
                 inputs=inputs,
                 outputs=outputs,
                 metadata=metadata,
@@ -419,7 +419,7 @@ class PhoenixClient:
             # Run experiment
             experiment = self._client.experiments.run_experiment(
                 dataset=dataset,
-                task=task,
+                task=task,  # type: ignore[arg-type]
                 evaluators=evaluators or [],
                 experiment_name=experiment_name,
                 experiment_description=experiment_description,
@@ -428,7 +428,7 @@ class PhoenixClient:
 
             logger.success(f"Experiment complete: {experiment_name or 'unnamed'}")
             if hasattr(experiment, "url"):
-                logger.info(f"View results: {experiment.url}")
+                logger.info(f"View results: {experiment.url}")  # type: ignore[attr-defined]
 
             # Update ExperimentConfig if provided
             if experiment_config:
@@ -478,13 +478,13 @@ class PhoenixClient:
         """
         try:
             # Build query
-            query_params = {}
+            query_params: dict[str, Any] = {}
             if project_name:
                 query_params["project_name"] = project_name
             if start_time:
-                query_params["start_time"] = start_time
+                query_params["start_time"] = start_time.isoformat()
             if end_time:
-                query_params["end_time"] = end_time
+                query_params["end_time"] = end_time.isoformat()
             if root_spans_only:
                 query_params["root_spans_only"] = True
             if trace_id:
@@ -493,7 +493,7 @@ class PhoenixClient:
                 query_params["span_id"] = span_id
 
             # Query traces
-            traces_df = self._client.query_spans(limit=limit, **query_params)
+            traces_df = self._client.query_spans(limit=limit, **query_params)  # type: ignore[attr-defined]
 
             logger.debug(f"Retrieved {len(traces_df)} traces")
             return traces_df
@@ -618,11 +618,11 @@ class PhoenixClient:
         """
         try:
             # Get experiment object
-            experiment = self._client.experiments.get_experiment(experiment_id)
+            experiment = self._client.experiments.get_experiment(experiment_id)  # type: ignore[misc]
 
             # Extract task runs
             task_runs = []
-            for run in experiment.runs:
+            for run in experiment.runs:  # type: ignore[attr-defined]
                 task_runs.append({
                     "input": run.input,
                     "output": run.output,
@@ -632,14 +632,14 @@ class PhoenixClient:
 
             # Build response
             exp_data = {
-                "id": experiment.id,
-                "name": experiment.name,
-                "dataset_id": experiment.dataset_id,
-                "experiment_metadata": experiment.metadata or {},
+                "id": experiment.id,  # type: ignore[attr-defined]
+                "name": experiment.name,  # type: ignore[attr-defined]
+                "dataset_id": experiment.dataset_id,  # type: ignore[attr-defined]
+                "experiment_metadata": experiment.metadata or {},  # type: ignore[attr-defined]
                 "task_runs": task_runs,
             }
 
-            logger.info(f"Retrieved experiment '{experiment.name}' with {len(task_runs)} task runs")
+            logger.info(f"Retrieved experiment '{experiment.name}' with {len(task_runs)} task runs")  # type: ignore[attr-defined]
             return exp_data
 
         except Exception as e:
@@ -670,7 +670,7 @@ class PhoenixClient:
             explanation: Optional explanation text
         """
         try:
-            self._client.add_span_annotation(
+            self._client.add_span_annotation(  # type: ignore[attr-defined]
                 span_id=span_id,
                 name=annotation_name,
                 annotator_kind=annotator_kind,

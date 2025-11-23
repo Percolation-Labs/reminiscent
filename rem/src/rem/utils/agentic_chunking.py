@@ -364,7 +364,7 @@ def _chunk_by_lines(text: str, max_tokens: int, model: str | None) -> list[str]:
     """
     chunks = []
     lines = text.split("\n")
-    current_chunk = []
+    current_chunk: list[str] = []
     current_tokens = 0
 
     logger.debug(f"Line-based chunking: {len(lines)} lines, max_tokens={max_tokens}")

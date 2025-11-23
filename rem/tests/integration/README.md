@@ -7,11 +7,11 @@ Integration tests for REM data pipeline, query system, and agentic workflows.
 ```bash
 # Complete teardown and spin-up (validates init scripts)
 docker compose down -v && docker compose up -d postgres
-pytest tests/integration/test_seed_data_population.py -v
+pytest tests/integration/test_rem_query.py -v
 
 # With detailed logging
 docker compose down -v && docker compose up -d postgres
-pytest tests/integration/test_seed_data_population.py -v --log-cli-level=INFO
+pytest tests/integration/ -v --log-cli-level=INFO
 
 # Run all integration tests
 pytest tests/integration/ -v
@@ -21,46 +21,65 @@ pytest tests/integration/ -v
 
 ## Test Categories
 
-### 🔥 CRITICAL: Seed Data Population
+### Seed Data Helpers
 
-**File:** `test_seed_data_population.py`
+**Location:** `tests/integration/helpers/seed_data.py`
 
-The most important integration tests - validates the complete data ingestion pipeline.
+Centralized helper functions for populating test data using the Repository pattern.
 
-**What it tests:**
-- ✅ Standard seed data loading (users, resources, moments, files, messages, schemas)
-- ✅ Engram YAML processing (memory documents with attached moments)
-- ✅ Dual indexing (SQL + KV store + embeddings structure)
-- ✅ Graph edges with human-friendly labels
-- ✅ Comprehensive diagnostics
+**Available Helpers:**
+- `seed_resources(postgres_service, resources_data, generate_embeddings=False)`
+- `seed_users(postgres_service, users_data)`
+- `seed_moments(postgres_service, moments_data)`
+- `seed_messages(postgres_service, messages_data)`
+- `seed_files(postgres_service, files_data)`
+- `seed_schemas(postgres_service, schemas_data)`
 
-**Three tests:**
-1. `test_load_standard_seed_data` - Loads entities from YAML, validates KV store
-2. `test_process_engram_files` - Processes engram YAML files, creates Resources and Moments
-3. `test_data_diagnostics` - **MASTER TEST** - Complete end-to-end validation
+**Example Usage:**
+```python
+from tests.integration.helpers import seed_resources
 
-**Run this first** - all other tests depend on data being properly ingested.
-
-```bash
-# Verify setup first
-python tests/integration/verify_setup.py
-
-# Run master diagnostic test
-pytest tests/integration/test_seed_data_population.py::test_data_diagnostics -v --log-cli-level=INFO
+@pytest.fixture
+async def populated_database(postgres_service):
+    resources = await seed_resources(
+        postgres_service,
+        SAMPLE_RESOURCES,
+        generate_embeddings=False,
+    )
+    return resources
 ```
 
-**Test data created:**
-- 3 users (Sarah Chen, Mike Rodriguez, Alex Kim)
-- 6 resources (3 standard + 3 engrams)
-- 9 moments (3 standard + 6 from engrams)
-- 4 messages, 3 files, 3 schemas
-- ~28 KV store entries
-- Graph edges on all resources and moments
+**Key Features:**
+- Uses Repository pattern (`Repository(Model, table_name, db=service)`)
+- Automatically handles timezone stripping (makes datetimes timezone-naive, assumes UTC)
+- Sets default values (e.g., `ordinal=0` for resources)
+- Returns list of created entities
 
-**Engram files:**
-- `team_standup_meeting.yaml` - Meeting with 3 moments (progress, API, blocker)
-- `personal_reflection.yaml` - Personal diary with 3 moments
-- `product_idea_voice_memo.yaml` - Voice memo with location metadata
+See `helpers/README.md` for complete documentation.
+
+### Timezone Handling
+
+**CRITICAL:** All datetimes in REM are timezone-naive and assume UTC.
+
+**Why:**
+- Consistent datetime handling across the system
+- Avoids timezone mismatch errors
+- Simplifies datetime arithmetic and comparisons
+
+**Implementation:**
+All seed data helpers automatically strip timezone information:
+
+```python
+# Parse ISO timestamp and strip timezone
+if "timestamp" in data and isinstance(data["timestamp"], str):
+    dt = datetime.fromisoformat(data["timestamp"].replace("Z", "+00:00"))
+    data["timestamp"] = dt.replace(tzinfo=None)  # Strip timezone, assume UTC
+```
+
+**When writing tests:**
+- Always use `datetime.now()` (not `datetime.now(timezone.utc)`)
+- Strip timezone from parsed ISO strings: `.replace(tzinfo=None)`
+- Never compare timezone-aware and timezone-naive datetimes
 
 ### Query System Tests
 
@@ -160,13 +179,13 @@ pytest tests/integration/ -v
 ### Specific Test File
 
 ```bash
-pytest tests/integration/test_seed_data_population.py -v
+pytest tests/integration/test_rem_query.py -v
 ```
 
 ### Specific Test Function
 
 ```bash
-pytest tests/integration/test_seed_data_population.py::test_data_diagnostics -v
+pytest tests/integration/test_rem_query.py::TestREMQuerySQL::test_sql_select -v
 ```
 
 ### With Logging
@@ -184,7 +203,7 @@ pytest tests/integration/ -v -m "not slow"
 ## Test Isolation
 
 Each test file uses `fresh_database` fixture to:
-1. Clear all data for `tenant_id="acme-corp"`
+1. Clear all data for `user_id="acme-corp"`
 2. Ensure clean slate for each test run
 3. Prevent test pollution
 
@@ -225,7 +244,7 @@ docker exec -i rem-postgres psql -U rem -d rem < sql/migrations/002_install_mode
 docker exec rem-postgres psql -U rem -d rem -c "\\dftS"
 
 # Check KV store has entries
-docker exec rem-postgres psql -U rem -d rem -c "SELECT COUNT(*) FROM kv_store WHERE tenant_id = 'acme-corp';"
+docker exec rem-postgres psql -U rem -d rem -c "SELECT COUNT(*) FROM kv_store WHERE user_id = 'acme-corp';"
 
 # Manually populate for testing
 docker exec rem-postgres psql -U rem -d rem << 'EOF'
@@ -257,7 +276,7 @@ present_persons:
 docker exec rem-postgres psql -U rem -d rem << 'EOF'
 SELECT name, jsonb_array_length(graph_edges) as edge_count
 FROM resources
-WHERE tenant_id = 'acme-corp'
+WHERE user_id = 'acme-corp'
 AND jsonb_array_length(COALESCE(graph_edges, '[]'::jsonb)) > 0
 ORDER BY edge_count DESC;
 EOF
@@ -311,8 +330,8 @@ Tests run in GitHub Actions on every push:
 
 ## Key Files
 
-- `test_seed_data_population.py` - **CRITICAL** data ingestion tests
-- `verify_setup.py` - Quick health check script
+- `test_rem_query.py` - REM query system tests (LOOKUP, SEARCH, TRAVERSE, SQL)
+- `helpers/seed_data.py` - Seed data helper functions
 - `conftest.py` - Shared fixtures and configuration
 - `../data/seed/README.md` - Seed data documentation
 
@@ -352,10 +371,10 @@ docker compose down -v && docker compose up -d postgres
 docker exec rem-postgres psql -U rem -d rem -c "SELECT * FROM migration_status();"
 
 # Check KV store entries (auto-populated by triggers)
-docker exec rem-postgres psql -U rem -d rem -c "SELECT entity_key, entity_type FROM kv_store LIMIT 10;"
+docker exec rem-postgres psql -U rem -d rem -c "SELECT entity_key, entity_type FROM kv_store WHERE user_id = 'acme-corp' LIMIT 10;"
 
-# Manual cleanup for specific tenant
-docker exec rem-postgres psql -U rem -d rem -c "DELETE FROM users WHERE tenant_id = 'acme-corp';"
+# Manual cleanup for specific user
+docker exec rem-postgres psql -U rem -d rem -c "DELETE FROM users WHERE user_id = 'acme-corp';"
 ```
 
 **Note:** KV store is **automatically populated by triggers** on INSERT/UPDATE/DELETE. Manual rebuild is **only needed** after:
@@ -371,20 +390,17 @@ docker exec rem-postgres psql -U rem -d rem -c "SELECT * FROM rebuild_kv_store()
 ### Testing
 
 ```bash
-# Full teardown/spin-up + seed data test (recommended)
-docker compose down -v && docker compose up -d postgres && sleep 15 && pytest tests/integration/test_seed_data_population.py -v
+# Full teardown/spin-up + integration tests (recommended)
+docker compose down -v && docker compose up -d postgres && sleep 15 && pytest tests/integration/ -v
 
 # Or wait for healthcheck explicitly
 docker compose down -v
 docker compose up -d postgres
 until docker exec rem-postgres pg_isready -U rem -d rem; do sleep 1; done
-pytest tests/integration/test_seed_data_population.py -v
+pytest tests/integration/ -v
 
-# Verify database setup
-python tests/integration/verify_setup.py
-
-# Run specific test
-pytest tests/integration/test_seed_data_population.py::test_data_diagnostics -v
+# Run specific test file
+pytest tests/integration/test_rem_query.py -v
 
 # Run all integration tests
 pytest tests/integration/ -v
@@ -399,4 +415,4 @@ pytest tests/integration/ -v
 
 ---
 
-**Remember:** Run `test_seed_data_population.py` first. Everything else depends on it.
+**Remember:** Use the seed data helpers in `tests/integration/helpers/` for consistent test data population.

@@ -1,0 +1,159 @@
+# Test data for test-user
+# Includes Sarah Chen entity and related resources
+
+- table: users
+  rows:
+    - label: "test-user"
+      user_id: "9e7dc22b-13bb-5cea-8aee-f6b8e6dc962f"
+      name: "Test User"
+      email: "test@rem.local"
+      summary: "Default test user for CLI and API testing"
+      tags:
+        - "test"
+        - "default"
+
+    - label: "sarah-chen"
+      user_id: "9e7dc22b-13bb-5cea-8aee-f6b8e6dc962f"
+      name: "Sarah Chen"
+      email: "sarah.chen@rem.local"
+      summary: "Senior Software Engineer specializing in distributed systems and database architecture. Currently leading the REM migration project."
+      metadata:
+        profile:
+          role: "Senior Software Engineer"
+          experience_level: "senior"
+          company: "REM Labs"
+          specializations:
+            - "distributed systems"
+            - "database architecture"
+            - "postgresql"
+            - "kubernetes"
+          current_projects:
+            - "REM System"
+            - "Database Migration"
+      graph_edges:
+        - dst: "bob-smith"
+          rel_type: "manages"
+          weight: 1.0
+          properties:
+            dst_entity_type: "users:engineers/bob-smith"
+            relationship_start: "2024-01-15"
+        - dst: "api-design-v2"
+          rel_type: "authored"
+          weight: 0.9
+          properties:
+            dst_entity_type: "resources:documents/api-design-v2"
+      tags:
+        - "engineer"
+        - "senior"
+        - "manager"
+
+    - label: "bob-smith"
+      user_id: "9e7dc22b-13bb-5cea-8aee-f6b8e6dc962f"
+      name: "Bob Smith"
+      email: "bob.smith@rem.local"
+      summary: "Software Engineer working on API development and testing"
+      metadata:
+        profile:
+          role: "Software Engineer"
+          experience_level: "intermediate"
+          company: "REM Labs"
+      graph_edges:
+        - dst: "sarah-chen"
+          rel_type: "reports_to"
+          weight: 1.0
+          properties:
+            dst_entity_type: "users:engineers/sarah-chen"
+      tags:
+        - "engineer"
+        - "developer"
+
+- table: resources
+  rows:
+    - label: "api-design-v2"
+      user_id: "9e7dc22b-13bb-5cea-8aee-f6b8e6dc962f"
+      uri: "docs://architecture/api-design-v2.md"
+      content: |
+        # API Design V2 Specification
+
+        Author: Sarah Chen
+        Date: 2024-03-15
+        Status: Approved
+
+        ## Overview
+        This document outlines the V2 API design for the REM system.
+
+        ## Key Changes
+        - RESTful endpoints for all operations
+        - GraphQL support for complex queries
+        - WebSocket streaming for real-time updates
+        - OpenAPI 3.1 specification
+
+        ## Authentication
+        - JWT-based authentication
+        - OAuth 2.0 provider integration
+        - API key support for service accounts
+
+        ## Rate Limiting
+        - 1000 requests per minute per user
+        - Burst allowance of 100 requests
+      category: "documents"
+      graph_edges:
+        - dst: "sarah-chen"
+          rel_type: "authored_by"
+          weight: 1.0
+          properties:
+            dst_entity_type: "users:engineers/sarah-chen"
+        - dst: "api-migration-project"
+          rel_type: "part_of"
+          weight: 0.9
+          properties:
+            dst_entity_type: "resources:projects/api-migration-project"
+      tags:
+        - "architecture"
+        - "api"
+        - "design"
+        - "specification"
+
+    - label: "api-migration-project"
+      user_id: "9e7dc22b-13bb-5cea-8aee-f6b8e6dc962f"
+      uri: "projects://api-migration"
+      content: |
+        # API Migration Project
+
+        Lead: Sarah Chen
+        Team: Sarah Chen, Bob Smith, Alice Johnson
+        Timeline: Q1 2024 - Q3 2024
+        Status: In Progress (60% complete)
+
+        ## Objectives
+        - Migrate legacy REST API to V2 design
+        - Implement GraphQL support
+        - Add real-time streaming capabilities
+        - Improve authentication and security
+
+        ## Progress
+        - ✅ API design approved
+        - ✅ Authentication system implemented
+        - 🔄 GraphQL schema development
+        - ⏳ WebSocket streaming (planned)
+
+        ## Key Documents
+        - API Design V2 Specification
+        - Migration Guide
+        - Testing Strategy
+      category: "projects"
+      graph_edges:
+        - dst: "sarah-chen"
+          rel_type: "led_by"
+          weight: 1.0
+          properties:
+            dst_entity_type: "users:engineers/sarah-chen"
+        - dst: "api-design-v2"
+          rel_type: "includes"
+          weight: 0.9
+          properties:
+            dst_entity_type: "resources:documents/api-design-v2"
+      tags:
+        - "project"
+        - "migration"
+        - "api"

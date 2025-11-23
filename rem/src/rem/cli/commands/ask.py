@@ -66,10 +66,14 @@ async def load_schema_from_registry(
 
 
 async def run_agent_streaming(
-    agent, query_text: str, max_turns: int = 10
+    agent,
+    prompt: str,
+    max_turns: int = 10,
+    context: AgentContext | None = None,
+    max_iterations: int | None = None,
 ) -> None:
     """
-    Run agent in streaming mode using agent.iter().
+    Run agent in streaming mode using agent.iter() with usage limits.
 
     Design Pattern (from carrier):
     - Use agent.iter() for complete execution with tool call visibility
@@ -80,39 +84,48 @@ async def run_agent_streaming(
 
     Args:
         agent: Pydantic AI agent
-        query_text: User query
+        prompt: Complete prompt (includes system context + history + query)
         max_turns: Maximum turns for agent execution (not used in current API)
+        context: Optional AgentContext for session persistence
+        max_iterations: Maximum iterations/requests (from agent schema or settings)
     """
-    logger.info("Running agent in streaming mode...")
+    from datetime import datetime, timezone
+    from pydantic_ai import UsageLimits
 
-    # Create query object
-    query = AgentQuery(query=query_text)
-    prompt = query.to_prompt()
+    logger.info("Running agent in streaming mode...")
 
     try:
         # Import event types for streaming
         from pydantic_ai import Agent as PydanticAgent
         from pydantic_ai.messages import PartStartEvent, PartDeltaEvent, TextPartDelta, ToolCallPart
 
+        # Accumulate assistant response for session persistence
+        assistant_response_parts = []
+
         # Use agent.iter() to get complete execution with tool calls
-        async with agent.iter(prompt) as agent_run:
+        usage_limits = UsageLimits(request_limit=max_iterations) if max_iterations else None
+        async with agent.iter(prompt, usage_limits=usage_limits) as agent_run:
             async for node in agent_run:
                 # Check if this is a model request node (includes tool calls and text)
                 if PydanticAgent.is_model_request_node(node):
                     # Stream events from model request
+                    request_stream: Any
                     async with node.stream(agent_run.ctx) as request_stream:
                         async for event in request_stream:
                             # Tool call start event
                             if isinstance(event, PartStartEvent) and isinstance(
                                 event.part, ToolCallPart
                             ):
-                                print(f"\n[Calling: {event.part.tool_name}]", flush=True)
+                                tool_marker = f"\n[Calling: {event.part.tool_name}]"
+                                print(tool_marker, flush=True)
+                                assistant_response_parts.append(tool_marker)
 
                             # Text content delta
                             elif isinstance(event, PartDeltaEvent) and isinstance(
                                 event.delta, TextPartDelta
                             ):
                                 print(event.delta.content_delta, end="", flush=True)
+                                assistant_response_parts.append(event.delta.content_delta)
 
         print("\n")  # Final newline after streaming
 
@@ -122,7 +135,41 @@ async def run_agent_streaming(
             logger.info("Final structured result:")
             output = result.output
             from rem.agentic.serialization import serialize_agent_result
-            print(json.dumps(serialize_agent_result(output), indent=2))
+            output_json = json.dumps(serialize_agent_result(output), indent=2)
+            print(output_json)
+            assistant_response_parts.append(f"\n{output_json}")
+
+        # Save session messages (if session_id provided and postgres enabled)
+        if context and context.session_id and settings.postgres.enabled:
+            from ...services.session.compression import SessionMessageStore
+
+            # Extract just the user query from prompt
+            # Prompt format from ContextBuilder: system + history + user message
+            # We need to extract the last user message
+            user_message_content = prompt.split("\n\n")[-1] if "\n\n" in prompt else prompt
+
+            user_message = {
+                "role": "user",
+                "content": user_message_content,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+
+            assistant_message = {
+                "role": "assistant",
+                "content": "".join(assistant_response_parts),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+
+            # Store messages with compression
+            store = SessionMessageStore(user_id=context.user_id or settings.test.effective_user_id)
+            await store.store_session_messages(
+                session_id=context.session_id,
+                messages=[user_message, assistant_message],
+                user_id=context.user_id,
+                compress=True,
+            )
+
+            logger.debug(f"Saved conversation to session {context.session_id}")
 
     except Exception as e:
         logger.error(f"Agent execution failed: {e}")
@@ -130,44 +177,96 @@ async def run_agent_streaming(
 
 
 async def run_agent_non_streaming(
-    agent, query_text: str, max_turns: int = 10, output_file: Path | None = None
+    agent,
+    prompt: str,
+    max_turns: int = 10,
+    output_file: Path | None = None,
+    context: AgentContext | None = None,
+    plan: bool = False,
+    max_iterations: int | None = None,
 ) -> dict[str, Any] | None:
     """
-    Run agent in non-streaming mode using agent.run().
+    Run agent in non-streaming mode using agent.run() with usage limits.
 
     Args:
         agent: Pydantic AI agent
-        query_text: User query
+        prompt: Complete prompt (includes system context + history + query)
         max_turns: Maximum turns for agent execution (not used in current API)
         output_file: Optional path to save output
+        context: Optional AgentContext for session persistence
+        plan: If True, output only the generated query (for query-agent)
+        max_iterations: Maximum iterations/requests (from agent schema or settings)
 
     Returns:
         Output data if successful, None otherwise
     """
+    from datetime import datetime, timezone
+    from pydantic_ai import UsageLimits
+
     logger.info("Running agent in non-streaming mode...")
 
-    # Create query object
-    query = AgentQuery(query=query_text)
-    prompt = query.to_prompt()
-
     try:
-        # Run agent and get complete result
-        result = await agent.run(prompt)
+        # Run agent and get complete result with usage limits
+        usage_limits = UsageLimits(request_limit=max_iterations) if max_iterations else None
+        result = await agent.run(prompt, usage_limits=usage_limits)
 
         # Extract output data
         output_data = None
+        assistant_content = None
         if hasattr(result, "output"):
             output = result.output
             from rem.agentic.serialization import serialize_agent_result
             output_data = serialize_agent_result(output)
-            print(json.dumps(output_data, indent=2))
+
+            if plan and isinstance(output_data, dict) and "query" in output_data:
+                # Plan mode: Output only the query
+                # Use sql formatting if possible or just raw string
+                assistant_content = output_data["query"]
+                print(assistant_content)
+            else:
+                # Normal mode
+                assistant_content = json.dumps(output_data, indent=2)
+                print(assistant_content)
         else:
             # Fallback for text-only results
-            print(result)
+            assistant_content = str(result)
+            print(assistant_content)
 
         # Save to file if requested
         if output_file and output_data:
             await _save_output_file(output_file, output_data)
+
+        # Save session messages (if session_id provided and postgres enabled)
+        if context and context.session_id and settings.postgres.enabled:
+            from ...services.session.compression import SessionMessageStore
+
+            # Extract just the user query from prompt
+            # Prompt format from ContextBuilder: system + history + user message
+            # We need to extract the last user message
+            user_message_content = prompt.split("\n\n")[-1] if "\n\n" in prompt else prompt
+
+            user_message = {
+                "role": "user",
+                "content": user_message_content,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+
+            assistant_message = {
+                "role": "assistant",
+                "content": assistant_content,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+
+            # Store messages with compression
+            store = SessionMessageStore(user_id=context.user_id or settings.test.effective_user_id)
+            await store.store_session_messages(
+                session_id=context.session_id,
+                messages=[user_message, assistant_message],
+                user_id=context.user_id,
+                compress=True,
+            )
+
+            logger.debug(f"Saved conversation to session {context.session_id}")
 
         return output_data
 
@@ -224,7 +323,7 @@ async def _save_output_file(file_path: Path, data: dict[str, Any]) -> None:
 
 
 @click.command()
-@click.argument("name")
+@click.argument("name_or_query")
 @click.argument("query", required=False)
 @click.option(
     "--model",
@@ -258,8 +357,8 @@ async def _save_output_file(file_path: Path, data: dict[str, Any]) -> None:
 )
 @click.option(
     "--user-id",
-    default="cli-user",
-    help="User ID for context (default: cli-user)",
+    default="test-user",
+    help="User ID for context (default: test-user)",
 )
 @click.option(
     "--session-id",
@@ -280,8 +379,14 @@ async def _save_output_file(file_path: Path, data: dict[str, Any]) -> None:
     default=None,
     help="Write output to file (YAML format)",
 )
+@click.option(
+    "--plan",
+    is_flag=True,
+    default=False,
+    help="Output only the generated plan/query (useful for query-agent)",
+)
 def ask(
-    name: str,
+    name_or_query: str,
     query: str | None,
     model: str | None,
     temperature: float | None,
@@ -292,30 +397,43 @@ def ask(
     session_id: str | None,
     input_file: Path | None,
     output_file: Path | None,
+    plan: bool,
 ):
     """
     Run an agent with a query or file input.
 
-    NAME is the agent schema name (YAML files in schemas/agents/):
-    - Short name: "contract-analyzer" → schemas/agents/contract-analyzer.yaml
-    - With extension: "contract-analyzer.yaml" → schemas/agents/contract-analyzer.yaml
-    - Full path also works: "schemas/agents/contract-analyzer.yaml"
-
-    QUERY is the user query (optional if --input-file is used).
+    Arguments:
+        NAME_OR_QUERY: Agent schema name OR query string.
+        QUERY: Query string (if first arg is agent name).
 
     Examples:
-        # Simple query
-        rem ask simple-agent "What is 2+2?"
+        # Simple query (uses default 'rem' agent)
+        rem ask "What documents did I upload?"
+
+        # Explicit agent
+        rem ask contract-analyzer "Analyze this contract"
 
         # Process file
         rem ask contract-analyzer -i contract.pdf -o output.yaml
-
-        # With specific model
-        rem ask query-agent "Find documents" -m openai:gpt-4o
-
-        # Streaming mode
-        rem ask simple-agent "Hello" --stream
     """
+    # Smart argument handling
+    name = "rem"  # Default agent
+    
+    if query is None and not input_file:
+        # Single argument provided
+        # Heuristic: If it looks like a schema file or known agent, treat as name
+        # Otherwise treat as query
+        if name_or_query.endswith((".yaml", ".yml", ".json")) or name_or_query in ["rem", "query-agent", "rem-query-agent"]:
+             # It's an agent name, query is missing (unless input_file)
+             name = name_or_query
+             # Query remains None, _ask_async will check input_file
+        else:
+             # It's a query, use default agent
+             query = name_or_query
+    elif query is not None:
+        # Two arguments provided
+        name = name_or_query
+
     asyncio.run(
         _ask_async(
             name=name,
@@ -329,6 +447,7 @@ def ask(
             session_id=session_id,
             input_file=input_file,
             output_file=output_file,
+            plan=plan,
         )
     )
 
@@ -345,8 +464,12 @@ async def _ask_async(
     session_id: str | None,
     input_file: Path | None,
     output_file: Path | None,
+    plan: bool,
 ):
     """Async implementation of ask command."""
+    import uuid
+    from ...agentic.context_builder import ContextBuilder
+
     # Validate input arguments
     if not query and not input_file:
         logger.error("Either QUERY argument or --input-file must be provided")
@@ -370,16 +493,36 @@ async def _ask_async(
         logger.error(str(e))
         sys.exit(1)
 
-    # Create agent context
-    context = AgentContext(
-        user_id=user_id,
-        tenant_id=user_id,  # Set tenant_id to user_id for backward compat
-        session_id=session_id,
-        default_model=model or settings.llm.default_model,
+    # Generate session ID if not provided
+    if not session_id:
+        session_id = str(uuid.uuid4())
+        logger.info(f"Generated session ID: {session_id}")
+
+    # Build context with session history using ContextBuilder
+    # This provides:
+    # - System context message with date and user profile hints
+    # - Compressed session history (if session exists)
+    # - Proper message structure for agent
+    logger.info(f"Building context for user {user_id}, session {session_id}")
+
+    # Prepare new message for ContextBuilder
+    new_messages = [{"role": "user", "content": query}]
+
+    # Build context with session history
+    context, messages = await ContextBuilder.build_from_headers(
+        headers={
+            "X-User-Id": user_id,
+            "X-Session-Id": session_id,
+        },
+        new_messages=new_messages,
     )
 
+    # Override model if specified via CLI flag
+    if model:
+        context.default_model = model
+
     logger.info(
-        f"Creating agent: model={context.default_model}, stream={stream}, max_turns={max_turns}"
+        f"Creating agent: model={context.default_model}, stream={stream}, max_turns={max_turns}, messages={len(messages)}"
     )
 
     # Create agent
@@ -389,20 +532,32 @@ async def _ask_async(
         model_override=model,
     )
 
-    # TODO: Apply temperature override
-    # Pydantic AI doesn't have a direct temperature parameter on agent
-    # Would need to be passed to run() call or set via model config
+    # Temperature is now handled in agent factory (schema override or settings default)
     if temperature is not None:
         logger.warning(
-            f"Temperature override ({temperature}) not yet implemented. "
-            "Using model default or schema config."
+            f"CLI temperature override ({temperature}) not yet supported. "
+            "Use agent schema 'override_temperature' field or LLM__DEFAULT_TEMPERATURE setting."
         )
 
-    # Run agent
+    # Combine messages into single prompt
+    # ContextBuilder already assembled: system context + history + new message
+    prompt = "\n\n".join(msg.content for msg in messages)
+
+    # Run agent with session persistence
     if stream:
-        await run_agent_streaming(agent, query, max_turns=max_turns)
+        await run_agent_streaming(agent, prompt, max_turns=max_turns, context=context)
     else:
-        await run_agent_non_streaming(agent, query, max_turns=max_turns, output_file=output_file)
+        await run_agent_non_streaming(
+            agent,
+            prompt,
+            max_turns=max_turns,
+            output_file=output_file,
+            context=context,
+            plan=plan,
+        )
+
+    # Log session ID for reuse
+    logger.success(f"Session ID: {session_id} (use --session-id to continue this conversation)")
 
 
 def register_command(parent_group):

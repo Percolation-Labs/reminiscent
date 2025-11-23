@@ -4,6 +4,7 @@ Unit tests for Pydantic AI agent factory.
 Tests the conversion of JSON Schema agent definitions to Pydantic AI agents,
 including schema parsing, model creation, tool loading, and description stripping.
 """
+from rem.settings import settings
 
 import pytest
 from pydantic import BaseModel
@@ -176,7 +177,7 @@ class TestCreatePydanticAIAgent:
     async def test_create_agent_with_context(self, query_agent_schema):
         """Test creating agent with context."""
         context = AgentContext(
-            user_id="test-user",
+            user_id=settings.test.effective_user_id,
             tenant_id="test-tenant",
             session_id="test-session",
             default_model="openai:gpt-4",

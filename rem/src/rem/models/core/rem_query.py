@@ -123,14 +123,21 @@ class SQLParameters(BaseModel):
     Performance: O(n) - Table scan with optional indexes
     Schema: Table-specific - Requires table name and column knowledge
     Provider-specific: Uses native SQL dialect
+
+    Supports two modes:
+    1. Structured: table_name + where_clause + order_by + limit
+    2. Raw: raw_query (full SQL statement like SELECT...)
     """
 
-    table_name: str = Field(..., description="Table to query")
-    where_clause: Optional[str] = Field(
-        default=None, description="SQL WHERE clause"
+    raw_query: Optional[str] = Field(
+        default=None, description="Raw SQL query (e.g., SELECT * FROM resources WHERE...)"
     )
-    order_by: Optional[str] = Field(default=None, description="SQL ORDER BY clause")
-    limit: Optional[int] = Field(default=None, description="SQL LIMIT")
+    table_name: Optional[str] = Field(default=None, description="Table to query (structured mode)")
+    where_clause: Optional[str] = Field(
+        default=None, description="SQL WHERE clause (structured mode)"
+    )
+    order_by: Optional[str] = Field(default=None, description="SQL ORDER BY clause (structured mode)")
+    limit: Optional[int] = Field(default=None, description="SQL LIMIT (structured mode)")
 
 
 class TraverseParameters(BaseModel):

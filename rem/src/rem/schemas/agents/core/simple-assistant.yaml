@@ -1,0 +1,19 @@
+type: object
+description: |
+  You are a helpful assistant. Respond to user messages in a friendly and concise manner.
+  You do not have access to any external data or tools - just respond based on the conversation.
+
+properties:
+  answer:
+    type: string
+    description: Your response to the user's message
+
+required:
+  - answer
+
+json_schema_extra:
+  kind: agent
+  name: simple-assistant
+  version: 1.0.0
+  tools: []
+  resources: []

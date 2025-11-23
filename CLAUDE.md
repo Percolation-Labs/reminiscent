@@ -60,7 +60,47 @@ This is a cloud-native REM (Resources Entities Moments) system for agentic AI wo
 
 **CRITICAL: Follow these conventions to prevent code duplication and maintenance issues**
 
-### 1. Configuration Management
+### 1. Datetime Convention: UTC-Naive (2025-11-23)
+
+**ALWAYS use UTC-naive datetimes throughout the codebase.**
+
+PostgreSQL stores `TIMESTAMP WITHOUT TIME ZONE` which is timezone-naive. All Python datetime operations should use UTC-naive datetimes to avoid comparison errors and database issues.
+
+**Convention:**
+```python
+# ✅ CORRECT - UTC-naive
+from datetime import datetime
+
+# Creating timestamps
+now = datetime.utcnow()
+created_at = datetime.utcnow()
+
+# Comparisons (both naive)
+cutoff = datetime.utcnow() - timedelta(days=30)
+if message.created_at >= cutoff:  # Works - both naive
+    ...
+
+# ❌ WRONG - UTC-aware (causes comparison errors)
+from datetime import datetime, timezone
+now = datetime.now(timezone.utc)  # Don't use!
+created_at = datetime.now(timezone.utc)  # Don't use!
+```
+
+**Why UTC-Naive:**
+- PostgreSQL uses `TIMESTAMP WITHOUT TIME ZONE`
+- Avoids "can't compare offset-naive and offset-aware datetimes" errors
+- Simpler mental model - all times are implicitly UTC
+- Database returns naive datetimes via asyncpg
+
+**Where This Applies:**
+- All Pydantic model timestamp fields (created_at, updated_at, deleted_at)
+- All datetime comparisons and filtering
+- User model: last_active_at
+- Moments: starts_timestamp, ends_timestamp
+- Resources: timestamp field
+- All service layer datetime operations
+
+### 2. Configuration Management
 - **ALWAYS** use `settings.llm.*_api_key` for API key lookups
 - **NEVER** use `os.getenv()` for API keys or configuration
 - Settings module provides centralized, type-safe configuration with defaults
@@ -805,17 +845,32 @@ REM includes a **two-phase evaluation system** using Arize Phoenix for systemati
 
 **CLI Commands**
 ```bash
-# Create golden set from CSV
-rem eval dataset create rem-lookup-golden \
+# Experiment lifecycle
+rem experiments create my-evaluation \
+  --agent ask_rem \
+  --evaluator rem-lookup-correctness \
+  --description "Baseline evaluation"
+
+rem experiments run my-evaluation
+
+# Dataset management
+rem experiments dataset create rem-lookup-golden \
   --from-csv golden.csv \
   --input-keys query \
   --output-keys expected_label,expected_type
 
-# Run evaluation
-rem eval experiment run rem-lookup-golden \
-  --experiment rem-v1 \
-  --agent ask_rem \
-  --evaluator rem-lookup-correctness
+rem experiments dataset list
+rem experiments dataset add rem-lookup-golden --from-csv more-data.csv
+
+# Prompt management
+rem experiments prompt create hello-world \
+  --system-prompt "You are a helpful assistant." \
+  --model-name gpt-4o
+
+rem experiments prompt list
+
+# Trace retrieval
+rem experiments trace list --project rem-agents --days 7
 
 # View results
 open http://localhost:6006
@@ -839,6 +894,126 @@ REM is fundamentally a RAG system. The query layer (LOOKUP, SEARCH, TRAVERSE, SQ
 See [rem/src/rem/services/phoenix/README.md](rem/src/rem/services/phoenix/README.md) for complete documentation.
 
 ---
+
+## Publishing to PyPI
+
+REM is published to PyPI as the `remdb` package: https://pypi.org/project/remdb/
+
+### Publishing Workflow
+
+**Prerequisites:**
+- PyPI API token stored in `~/.bash_profile` as `PYPI_TOKEN`
+- `uv` installed for building and publishing
+
+**Steps:**
+
+1. **Update Version** in `rem/pyproject.toml`:
+   ```toml
+   version = "0.1.x"  # Increment semantic version
+   ```
+
+2. **Build Package**:
+   ```bash
+   cd rem
+   rm -rf dist/
+   uv build
+   # Creates dist/remdb-0.1.x-py3-none-any.whl and dist/remdb-0.1.x.tar.gz
+   ```
+
+3. **Publish to PyPI**:
+   ```bash
+   export PYPI_TOKEN=<token-from-bash-profile>
+   uv publish --token $PYPI_TOKEN
+   # Uploads to https://upload.pypi.org/legacy/
+   ```
+
+**Verification:**
+```bash
+# Check package is live
+pip install --upgrade remdb[all]
+rem --version
+```
+
+**Versioning Strategy:**
+- Patch releases (0.1.x): Bug fixes, documentation updates, minor features
+- Minor releases (0.x.0): New features, breaking changes
+- Major releases (x.0.0): Architecture changes (not yet)
+
+**Current Version:** 0.1.12
+- Settings resilience fix for API key handling
+- Dockerfile schemas path fix
+- README documentation improvements
+
+## Developers
+
+### Running Tests
+
+REM uses pytest markers to control test execution, especially for tests that make expensive LLM API calls.
+
+#### Test Markers
+
+| Marker | Description | Usage |
+|--------|-------------|-------|
+| `@pytest.mark.asyncio` | Async test (auto-detected) | All async tests |
+| `@pytest.mark.unit` | Unit test | `pytest -m unit` |
+| `@pytest.mark.integration` | Integration test | `pytest -m integration` |
+| `@pytest.mark.slow` | Slow-running test | `pytest -m "not slow"` to skip |
+| **`@pytest.mark.llm`** | **Makes LLM API calls (expensive!)** | **`pytest -m "not llm"`** to skip |
+
+#### Recommended Test Commands
+
+```bash
+cd rem
+
+# Run all non-LLM integration tests (RECOMMENDED - fast, no API costs)
+pytest tests/integration/ -v -m "not llm"
+
+# Run only LLM tests (use sparingly - costs money!)
+pytest tests/integration/ -v -m "llm"
+
+# Run all tests (expensive - uses API credits)
+pytest tests/integration/ -v
+
+# Run specific test file
+pytest tests/integration/test_batch_upsert.py -v
+```
+
+#### Test Structure
+
+- `tests/unit/` - Unit tests (fast, no external dependencies)
+- `tests/integration/` - Integration tests
+  - Non-LLM tests: Database operations, MCP tool loading, content processing (~95 tests)
+  - LLM tests: Agent invocation, completions, query evolution (~40 tests)
+
+**Best Practice**: Always run non-LLM tests first to catch issues quickly without spending API credits:
+```bash
+pytest tests/integration/ -m "not llm"  # Fast feedback loop
+pytest tests/integration/ -m "llm"       # Only after non-LLM tests pass
+```
+
+### Type Checking
+Run the type checker to catch schema and type-related issues:
+```bash
+./scripts/check_types.sh
+```
+
+Or from the repository root:
+```bash
+./scripts/run_mypy.sh
+```
+
+Both commands save timestamped reports to `rem/.mypy/report_YYYYMMDD_HHMMSS.txt` (gitignored).
+
+Alternatively, run mypy directly (no report saved):
+```bash
+cd rem
+uv run mypy src/rem
+```
+
+**Current Status (2025-11-23):**
+- 222 errors in 55 files
+- High-priority fixes completed: type stubs installed, serve.py fixed, repository.py fixed
+- Reports stored in `.mypy/` folder (gitignored)
 
 ## Future Considerations
 

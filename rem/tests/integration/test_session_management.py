@@ -267,7 +267,6 @@ async def test_reload_session(tenant_id, session_id, user_id):
     # Reload session
     history = await reload_session(
         session_id=session_id,
-        tenant_id=tenant_id,
         user_id=user_id,
         decompress_messages=False,
     )
@@ -301,7 +300,6 @@ async def test_reload_session_with_decompression(tenant_id, session_id, user_id)
     # Reload with decompression
     history = await reload_session(
         session_id=session_id,
-        tenant_id=tenant_id,
         user_id=user_id,
         decompress_messages=True,
     )
@@ -336,7 +334,7 @@ async def test_multi_turn_conversation(tenant_id, session_id, user_id):
 
     # Reload and verify
     history = await reload_session(
-        session_id=session_id, tenant_id=tenant_id, user_id=user_id
+        session_id=session_id, user_id=user_id
     )
     assert len(history) == 2
 
@@ -352,7 +350,7 @@ async def test_multi_turn_conversation(tenant_id, session_id, user_id):
 
     # Reload full conversation
     full_history = await reload_session(
-        session_id=session_id, tenant_id=tenant_id, user_id=user_id
+        session_id=session_id, user_id=user_id
     )
     assert len(full_history) == 4
     assert full_history[0]["content"] == "What is REM?"
@@ -374,7 +372,6 @@ async def test_postgres_disabled_graceful_degradation(tenant_id, session_id, use
         # Reload should return empty list
         history = await reload_session(
             session_id=session_id,
-            tenant_id=tenant_id,
             user_id=user_id,
         )
 

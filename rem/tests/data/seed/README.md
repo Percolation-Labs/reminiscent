@@ -111,9 +111,9 @@ def db_with_seed_data(db_session, seed_data):
 - Document Analyzer (analyzer category)
 - Code Review Assistant (reviewer category)
 
-## Tenant ID
+## User ID
 
-All sample data uses tenant ID: `acme-corp`
+All sample data uses user ID: `acme-corp` (with optional tenant_id field for future multi-tenancy)
 
 ## Testing Queries
 
@@ -123,7 +123,7 @@ After loading seed data, you can test with:
 # Query for Sarah Chen's documents
 curl -X POST http://localhost:8000/api/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "X-Tenant-Id: acme-corp" \
+  -H "X-User-Id: acme-corp" \
   -d '{
     "model": "anthropic:claude-sonnet-4-5-20250929",
     "messages": [{"role": "user", "content": "What documents did Sarah Chen author?"}],
@@ -133,7 +133,7 @@ curl -X POST http://localhost:8000/api/v1/chat/completions \
 # Load a specific agent schema
 curl -X POST http://localhost:8000/api/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "X-Tenant-Id: acme-corp" \
+  -H "X-User-Id: acme-corp" \
   -H "X-Agent-Schema: schema_rem_assistant" \
   -d '{
     "model": "anthropic:claude-sonnet-4-5-20250929",
@@ -153,4 +153,20 @@ The YAML file uses a structured format with top-level keys for each entity type:
 - `schemas` - Agent schema definitions
 
 All timestamps use ISO 8601 format (`YYYY-MM-DDTHH:MM:SS`).
-All entities include CoreModel fields (id, tenant_id, metadata, tags, graph_edges, etc.).
+All entities include CoreModel fields (id, user_id, metadata, tags, graph_edges, etc.).
+
+## Timestamp Format
+
+All timestamps in seed data YAML files use ISO 8601 format: `YYYY-MM-DDTHH:MM:SS`
+
+**IMPORTANT:** Timestamps are treated as timezone-naive UTC:
+- ISO strings with timezone info (e.g., `2024-01-01T10:00:00Z`) are automatically converted to timezone-naive
+- System assumes all datetimes are UTC
+- No timezone conversions are performed
+
+**Example:**
+```yaml
+moments:
+  - starts_timestamp: "2024-01-01T10:00:00"  # Treated as UTC
+    ends_timestamp: "2024-01-01T11:00:00"
+```

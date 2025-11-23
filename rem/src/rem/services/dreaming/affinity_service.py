@@ -6,7 +6,7 @@ vector similarity (fast) or LLM analysis (intelligent).
 """
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
@@ -79,7 +79,7 @@ async def build_affinity(
     Returns:
         Statistics about affinity construction
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
+    cutoff = datetime.utcnow() - timedelta(hours=lookback_hours)
 
     # Create repositories and REM service
     resource_repo = Repository(Resource, "resources", db=db)
@@ -93,13 +93,13 @@ async def build_affinity(
         filters={
             "user_id": user_id,
         },
-        order_by="resource_timestamp DESC",
+        order_by="created_at DESC",
         limit=limit,
     )
 
     # Filter by timestamp
     resources = [
-        r for r in resources if r.resource_timestamp and r.resource_timestamp >= cutoff
+        r for r in resources if r.created_at and r.created_at >= cutoff
     ]
 
     if not resources:
@@ -140,10 +140,11 @@ async def build_affinity(
         with open(schema_path) as f:
             agent_schema = yaml.safe_load(f)
 
-        affinity_agent = await create_agent(
+        affinity_agent_runtime = await create_agent(
             agent_schema_override=agent_schema,
-            model_override=default_model,
+            model_override=default_model,  # type: ignore[arg-type]
         )
+        affinity_agent = affinity_agent_runtime.agent
 
     # Process each resource
     for resource in resources:
@@ -161,11 +162,10 @@ async def build_affinity(
                     query_type=QueryType.SEARCH,
                     user_id=user_id,
                     parameters=SearchParameters(
-                        table="resources",
+                        table_name="resources",
                         query_text=resource.content[:1000],  # Use first 1000 chars
-                        field="content",
                         limit=top_k + 1,  # +1 to exclude self
-                        threshold=similarity_threshold,
+                        min_similarity=similarity_threshold,
                     ),
                 )
 
@@ -173,15 +173,19 @@ async def build_affinity(
                 candidates = search_result.get("results", [])
 
                 # Filter out self and collect similar resources
+                # Note: SEARCH query returns {entity_type, similarity_score, data (JSONB)}
                 for candidate in candidates:
-                    if candidate.get("id") != resource.id:
+                    candidate_data = candidate.get("data", {})
+                    candidate_id = candidate_data.get("id")
+
+                    if candidate_id and candidate_id != str(resource.id):
                         similar_resources.append(
                             {
                                 "resource": next(
-                                    (r for r in resources if r.id == candidate["id"]),
+                                    (r for r in resources if str(r.id) == candidate_id),
                                     None,
                                 ),
-                                "similarity_score": candidate.get("similarity", 0.0),
+                                "similarity_score": candidate.get("similarity_score", 0.0),
                                 "relationship_type": "semantic_similar",
                                 "relationship_strength": "moderate",
                                 "edge_labels": [],
@@ -196,6 +200,7 @@ async def build_affinity(
 
         elif mode == AffinityMode.LLM:
             # Use LLM to assess relationships with all other resources
+            assert affinity_agent is not None, "Agent must be initialized in LLM mode"
             for other_resource in resources:
                 if other_resource.id == resource.id:
                     continue
@@ -203,24 +208,24 @@ async def build_affinity(
                 # Prepare input for agent
                 input_data = {
                     "resource_a": {
-                        "id": resource.id,
+                        "id": str(resource.id),
                         "name": resource.name,
                         "category": resource.category,
                         "content": resource.content[:2000],  # Limit for token efficiency
-                        "resource_timestamp": (
-                            resource.resource_timestamp.isoformat()
-                            if resource.resource_timestamp
+                        "created_at": (
+                            resource.created_at.isoformat()
+                            if resource.created_at
                             else None
                         ),
                     },
                     "resource_b": {
-                        "id": other_resource.id,
+                        "id": str(other_resource.id),
                         "name": other_resource.name,
                         "category": other_resource.category,
                         "content": other_resource.content[:2000],
-                        "resource_timestamp": (
-                            other_resource.resource_timestamp.isoformat()
-                            if other_resource.resource_timestamp
+                        "created_at": (
+                            other_resource.created_at.isoformat()
+                            if other_resource.created_at
                             else None
                         ),
                     },
@@ -232,6 +237,11 @@ async def build_affinity(
 
                 # Serialize result
                 assessment = serialize_agent_result(result.output)
+
+                # Type guard: ensure we have a dict
+                if not isinstance(assessment, dict):
+                    logger.warning(f"Expected dict from affinity agent, got {type(assessment)}")
+                    continue
 
                 # If relationship exists, add to similar resources
                 if assessment.get("relationship_exists"):
@@ -280,7 +290,7 @@ async def build_affinity(
 
             # Create InlineEdge
             edge = {
-                "dst": similar["resource"].id,  # Use ID for now, could use name
+                "dst": str(similar["resource"].id),  # Convert UUID to string
                 "rel_type": similar["relationship_type"],
                 "weight": weight,
                 "properties": {
@@ -293,7 +303,7 @@ async def build_affinity(
                     "edge_labels": similar.get("edge_labels", []),
                     "reasoning": similar.get("reasoning", ""),
                 },
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": datetime.utcnow().isoformat(),
             }
             new_edges.append(edge)
 

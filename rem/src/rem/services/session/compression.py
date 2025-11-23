@@ -199,6 +199,10 @@ class SessionMessageStore:
                 LIMIT 1
             """
 
+            if not self.repo.db:
+                logger.warning("Database not available for message lookup")
+                return None
+
             row = await self.repo.db.fetchrow(query, entity_key, self.user_id)
 
             if row:
@@ -299,7 +303,8 @@ class SessionMessageStore:
 
         try:
             # Load messages from repository
-            filters = {"session_id": session_id, "tenant_id": self.tenant_id}
+            # Note: tenant_id column in messages table maps to user_id (user-scoped partitioning)
+            filters = {"session_id": session_id, "tenant_id": self.user_id}
             if user_id:
                 filters["user_id"] = user_id
 
@@ -315,7 +320,7 @@ class SessionMessageStore:
                 }
 
                 # Check if message was compressed
-                entity_key = msg.metadata.get("entity_key") if msg.metadata else None
+                entity_key: str | None = msg.metadata.get("entity_key") if msg.metadata else None
                 if entity_key and len(msg.content) <= self.compressor.min_length_for_compression:
                     # This is a compressed reference, mark it
                     msg_dict["_compressed"] = True

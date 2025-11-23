@@ -38,6 +38,7 @@ from ...utils.batch_ops import (
     validate_record_for_kv_store,
 )
 from ...utils.sql_types import get_sql_type
+from .repository import Repository # Moved from inside get_repository
 
 
 class PostgresService:
@@ -68,12 +69,13 @@ class PostgresService:
         self.pool_size = settings.postgres.pool_size
         self.pool: Optional[asyncpg.Pool] = None
 
-        # Auto-create embedding worker if not provided (using sentinel value)
+        # Use global embedding worker singleton
         if embedding_worker is ...:
-            from ..embeddings import EmbeddingWorker
-            self.embedding_worker = EmbeddingWorker(postgres_service=self)
+            from ..embeddings.worker import get_global_embedding_worker
+            # Get or create global worker - it lives independently of this service
+            self.embedding_worker = get_global_embedding_worker(postgres_service=self)
         else:
-            self.embedding_worker = embedding_worker
+            self.embedding_worker = embedding_worker  # type: ignore[assignment]
 
     async def execute_ddl(self, query: str) -> None:
         """
@@ -83,9 +85,65 @@ class PostgresService:
             query: SQL query string
         """
         self._ensure_pool()
+        assert self.pool is not None  # Type guard for mypy
 
         async with self.pool.acquire() as conn:
             await conn.execute(query)
+
+    async def execute_script(self, sql_script: str) -> None:
+        """
+        Execute a multi-statement SQL script.
+
+        This method properly handles SQL files with multiple statements separated
+        by semicolons, including complex scripts with DO blocks, CREATE statements,
+        and comments.
+
+        Args:
+            sql_script: Complete SQL script content
+        """
+        self._ensure_pool()
+        assert self.pool is not None  # Type guard for mypy
+
+        # Split script into individual statements
+        # This is a simplified approach - for production consider using sqlparse
+        statements = []
+        current_statement = []
+        in_do_block = False
+
+        for line in sql_script.split('\n'):
+            stripped = line.strip()
+
+            # Skip empty lines and comments
+            if not stripped or stripped.startswith('--'):
+                continue
+
+            # Track DO blocks which can contain semicolons
+            if stripped.upper().startswith('DO $$') or stripped.upper().startswith('DO $'):
+                in_do_block = True
+
+            current_statement.append(line)
+
+            # Check for statement end
+            if stripped.endswith('$$;') or stripped.endswith('$;'):
+                in_do_block = False
+                statements.append('\n'.join(current_statement))
+                current_statement = []
+            elif stripped.endswith(';') and not in_do_block:
+                statements.append('\n'.join(current_statement))
+                current_statement = []
+
+        # Add any remaining statement
+        if current_statement:
+            stmt = '\n'.join(current_statement).strip()
+            if stmt:
+                statements.append(stmt)
+
+        # Execute each statement
+        async with self.pool.acquire() as conn:
+            for statement in statements:
+                stmt = statement.strip()
+                if stmt:
+                    await conn.execute(stmt)
 
     def _ensure_pool(self) -> None:
         """
@@ -100,7 +158,7 @@ class PostgresService:
         if not self.pool:
             raise RuntimeError("PostgreSQL pool not connected. Call connect() first.")
 
-    def get_repository(self, model_class: Type[BaseModel], table_name: str) -> "Repository":
+    def get_repository(self, model_class: Type[BaseModel], table_name: str) -> Repository[BaseModel]:
         """
         Get a repository instance for a given model and table.
 
@@ -111,7 +169,6 @@ class PostgresService:
         Returns:
             An instance of the Repository class.
         """
-        from .repository import Repository
         return Repository(model_class=model_class, table_name=table_name, db=self)
 
     async def _init_connection(self, conn: asyncpg.Connection) -> None:
@@ -149,10 +206,9 @@ class PostgresService:
 
     async def disconnect(self) -> None:
         """Close database connection pool."""
-        # Stop embedding worker first
-        if self.embedding_worker and hasattr(self.embedding_worker, "stop"):
-            await self.embedding_worker.stop()
-            logger.info("Embedding worker stopped")
+        # DO NOT stop the global embedding worker here!
+        # It's shared across multiple service instances and processes background tasks
+        # The worker will be stopped explicitly when the application shuts down
 
         if self.pool:
             logger.info("Closing PostgreSQL connection pool")
@@ -161,7 +217,9 @@ class PostgresService:
             logger.info("PostgreSQL connection pool closed")
 
     async def execute(
-        self, query: str, params: Optional[tuple] = None
+        self,
+        query: str,
+        params: Optional[tuple] = None,
     ) -> list[dict[str, Any]]:
         """
         Execute SQL query and return results.
@@ -174,6 +232,7 @@ class PostgresService:
             List of result rows as dicts
         """
         self._ensure_pool()
+        assert self.pool is not None  # Type guard for mypy
 
         async with self.pool.acquire() as conn:
             if params:
@@ -195,6 +254,7 @@ class PostgresService:
             List of asyncpg.Record objects
         """
         self._ensure_pool()
+        assert self.pool is not None  # Type guard for mypy
 
         async with self.pool.acquire() as conn:
             return await conn.fetch(query, *params)
@@ -211,6 +271,7 @@ class PostgresService:
             asyncpg.Record or None if no rows found
         """
         self._ensure_pool()
+        assert self.pool is not None  # Type guard for mypy
 
         async with self.pool.acquire() as conn:
             return await conn.fetchrow(query, *params)
@@ -227,6 +288,7 @@ class PostgresService:
             Single value or None if no rows found
         """
         self._ensure_pool()
+        assert self.pool is not None  # Type guard for mypy
 
         async with self.pool.acquire() as conn:
             return await conn.fetchval(query, *params)
@@ -249,11 +311,14 @@ class PostgresService:
             connection within a transaction.
         """
         self._ensure_pool()
+        assert self.pool is not None  # Type guard for mypy
 
         from contextlib import asynccontextmanager
 
         @asynccontextmanager
         async def _transaction_context():
+            if not self.pool:
+                raise RuntimeError("Database pool not initialized")
             async with self.pool.acquire() as conn:
                 async with conn.transaction():
                     # Yield a transaction wrapper that provides query methods
@@ -261,86 +326,10 @@ class PostgresService:
 
         return _transaction_context()
 
-
-class _TransactionContext:
-    """
-    Transaction context with bound connection.
-
-    Provides the same query interface as PostgresService but executes
-    all queries on a single connection within a transaction.
-
-    This is safer than method swapping and provides explicit transaction scope.
-    """
-
-    def __init__(self, conn: asyncpg.Connection):
-        """
-        Initialize transaction context.
-
-        Args:
-            conn: Database connection bound to this transaction
-        """
-        self.conn = conn
-
-    async def execute(
-        self, query: str, params: Optional[tuple] = None
-    ) -> list[dict[str, Any]]:
-        """
-        Execute SQL query within transaction.
-
-        Args:
-            query: SQL query string
-            params: Query parameters
-
-        Returns:
-            List of result rows as dicts
-        """
-        if params:
-            rows = await self.conn.fetch(query, *params)
-        else:
-            rows = await self.conn.fetch(query)
-        return [dict(row) for row in rows]
-
-    async def fetch(self, query: str, *params) -> list[asyncpg.Record]:
-        """
-        Fetch multiple rows within transaction.
-
-        Args:
-            query: SQL query string
-            *params: Query parameters
-
-        Returns:
-            List of asyncpg.Record objects
-        """
-        return await self.conn.fetch(query, *params)
-
-    async def fetchrow(self, query: str, *params) -> Optional[asyncpg.Record]:
-        """
-        Fetch single row within transaction.
-
-        Args:
-            query: SQL query string
-            *params: Query parameters
-
-        Returns:
-            asyncpg.Record or None if no rows found
-        """
-        return await self.conn.fetchrow(query, *params)
-
-    async def fetchval(self, query: str, *params) -> Any:
-        """
-        Fetch single value within transaction.
-
-        Args:
-            query: SQL query string
-            *params: Query parameters
-
-        Returns:
-            Single value or None if no rows found
-        """
-        return await self.conn.fetchval(query, *params)
-
     async def execute_many(
-        self, query: str, params_list: list[tuple]
+        self,
+        query: str,
+        params_list: list[tuple],
     ) -> None:
         """
         Execute SQL query with multiple parameter sets.
@@ -350,6 +339,7 @@ class _TransactionContext:
             params_list: List of parameter tuples
         """
         self._ensure_pool()
+        assert self.pool is not None  # Type guard for mypy
 
         async with self.pool.acquire() as conn:
             await conn.executemany(query, params_list)
@@ -561,6 +551,7 @@ class _TransactionContext:
         upserted_ids = []  # Track IDs of upserted records
 
         self._ensure_pool()
+        assert self.pool is not None  # Type guard for mypy
 
         for batch in batch_iterator(prepared_records, batch_size):
             batch_count += 1
@@ -715,7 +706,10 @@ class _TransactionContext:
         raise NotImplementedError("Use batch_upsert() for creating moments")
 
     async def update_graph_edges(
-        self, entity_id: str, edges: list[dict[str, Any]], merge: bool = True
+        self,
+        entity_id: str,
+        edges: list[dict[str, Any]],
+        merge: bool = True,
     ) -> None:
         """
         Update graph edges for an entity.
@@ -726,3 +720,83 @@ class _TransactionContext:
             merge: If True, merge with existing edges; if False, replace
         """
         raise NotImplementedError("Graph edge updates not yet implemented")
+
+
+class _TransactionContext:
+    """
+    Transaction context with bound connection.
+
+    Provides the same query interface as PostgresService but executes
+    all queries on a single connection within a transaction.
+
+    This is safer than method swapping and provides explicit transaction scope.
+    """
+
+    def __init__(self, conn: asyncpg.Connection):
+        """
+        Initialize transaction context.
+
+        Args:
+            conn: Database connection bound to this transaction
+        """
+        self.conn = conn
+
+    async def execute(
+        self,
+        query: str,
+        params: Optional[tuple] = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Execute SQL query within transaction.
+
+        Args:
+            query: SQL query string
+            params: Query parameters
+
+        Returns:
+            List of result rows as dicts
+        """
+        if params:
+            rows = await self.conn.fetch(query, *params)
+        else:
+            rows = await self.conn.fetch(query)
+        return [dict(row) for row in rows]
+
+    async def fetch(self, query: str, *params) -> list[asyncpg.Record]:
+        """
+        Fetch multiple rows within transaction.
+
+        Args:
+            query: SQL query string
+            *params: Query parameters
+
+        Returns:
+            List of asyncpg.Record objects
+        """
+        return await self.conn.fetch(query, *params)
+
+    async def fetchrow(self, query: str, *params) -> Optional[asyncpg.Record]:
+        """
+        Fetch single row within transaction.
+
+        Args:
+            query: SQL query string
+            *params: Query parameters
+
+        Returns:
+            asyncpg.Record or None if no rows found
+        """
+        return await self.conn.fetchrow(query, *params)
+
+    async def fetchval(self, query: str, *params) -> Any:
+        """
+        Fetch single value within transaction.
+
+        Args:
+            query: SQL query string
+            *params: Query parameters
+
+        Returns:
+            Single value or None if no rows found
+        """
+        return await self.conn.fetchval(query, *params)

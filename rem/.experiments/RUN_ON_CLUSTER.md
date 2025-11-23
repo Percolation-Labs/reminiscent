@@ -92,7 +92,7 @@ kubectl describe secret -n rem-app rem-api-secrets | grep -E "ANTHROPIC|OPENAI"
 cd /path/to/rem
 
 # Verify schemas exist
-ls -la schemas/agents/hello-world.yaml
+ls -la schemas/agents/examples/hello-world.yaml
 ls -la schemas/evaluators/hello-world/default.yaml
 
 # Set API keys (if not in cluster secrets)

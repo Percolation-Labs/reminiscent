@@ -115,8 +115,7 @@ stringData:
 - **`rem mcp`** - MCP server commands
 - **`rem dreaming`** - Background knowledge processing
 - **`rem process`** - File processing utilities
-- **`rem phoenix`** - Arize Phoenix integration (evaluation)
-- **`rem experiments`** - Experiment tracking and management
+- **`rem experiments`** - Experiment management (datasets, prompts, traces, runs)
 
 Run `rem COMMAND --help` for detailed usage of each command.
 

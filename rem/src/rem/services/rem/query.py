@@ -2,18 +2,21 @@
 REM Query Service - REM dialect implementation.
 
 REM Dialect Operations:
-1. SQL <query> - Execute raw SQL
+1. SELECT/INSERT/UPDATE/WITH - Raw SQL queries (automatically detected)
 2. SEARCH <text> [FROM <table>] [LIMIT <n>] - Vector similarity search
 3. LOOKUP <key> [IN <table>] - Exact KV store lookup
-4. FUZZY LOOKUP <text> [IN <table>] [THRESHOLD <n>] - Trigram fuzzy search
+4. FUZZY <text> [IN <table>] [THRESHOLD <n>] - Trigram fuzzy search
 5. TRAVERSE <entity> <direction> [DEPTH <n>] - Graph traversal
 
 Examples:
-- SQL SELECT * FROM resources WHERE tenant_id = 'acme-corp'
+- SELECT * FROM resources WHERE tenant_id = 'acme-corp'
 - SEARCH "getting started" FROM resources LIMIT 5
 - LOOKUP "docs://getting-started.md" IN resources
-- FUZZY LOOKUP "getting start" IN resources THRESHOLD 0.3
+- FUZZY "getting start" IN resources THRESHOLD 0.3
 - TRAVERSE res:123 OUTBOUND DEPTH 2
+
+Note: Any query not starting with a REM keyword is treated as raw SQL.
+Blocked for safety: DROP, DELETE, TRUNCATE, ALTER (destructive operations).
 """
 
 import re
@@ -74,19 +77,23 @@ class REMQueryService:
         query = query.strip()
         logger.info(f"Executing REM query: {query}")
 
-        # Parse operation
-        if query.upper().startswith("SQL "):
+        # Parse operation - check REM keywords first
+        query_upper = query.upper()
+        if query_upper.startswith("SQL "):
             return await self._execute_sql(query[4:].strip(), user_id)
-        elif query.upper().startswith("SEARCH "):
+        elif query_upper.startswith("SEARCH "):
             return await self._execute_search(query[7:].strip(), user_id)
-        elif query.upper().startswith("LOOKUP "):
+        elif query_upper.startswith("LOOKUP "):
             return await self._execute_lookup(query[7:].strip(), user_id)
-        elif query.upper().startswith("FUZZY LOOKUP "):
-            return await self._execute_fuzzy_lookup(query[13:].strip(), user_id)
-        elif query.upper().startswith("TRAVERSE "):
+        elif query_upper.startswith("FUZZY LOOKUP ") or query_upper.startswith("FUZZY "):
+            # Support both "FUZZY LOOKUP" and "FUZZY"
+            prefix_len = 13 if query_upper.startswith("FUZZY LOOKUP ") else 6
+            return await self._execute_fuzzy_lookup(query[prefix_len:].strip(), user_id)
+        elif query_upper.startswith("TRAVERSE "):
             return await self._execute_traverse(query[9:].strip(), user_id)
         else:
-            raise ValueError(f"Unknown REM operation: {query.split()[0]}")
+            # If not a REM keyword, treat as raw SQL (SELECT, INSERT, UPDATE, DELETE, etc.)
+            return await self._execute_sql(query, user_id)
 
     async def _execute_sql(self, query: str, user_id: Optional[str]) -> REMQueryResult:
         """
@@ -149,7 +156,9 @@ class REMQueryService:
 
         # Generate embedding for search query
         provider_str = f"{settings.llm.embedding_provider}:{settings.llm.embedding_model}"
-        query_embedding = generate_embeddings(provider_str, [search_text])[0]
+        embeddings_result = generate_embeddings(provider_str, [search_text])
+        # We passed a list, so result is list[list[float]], extract first element
+        query_embedding: list[float] = embeddings_result[0]  # type: ignore[assignment]
 
         # Delegate to executor
         results = await self.executor.execute_search(

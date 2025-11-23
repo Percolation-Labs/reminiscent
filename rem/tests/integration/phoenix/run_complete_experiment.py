@@ -190,7 +190,7 @@ def main():
             return None
 
         # Load agent schema
-        with open("schemas/agents/hello-world.yaml") as f:
+        with open("schemas/agents/examples/hello-world.yaml") as f:
             agent_schema = yaml.safe_load(f)
 
         # Create prompt for agent

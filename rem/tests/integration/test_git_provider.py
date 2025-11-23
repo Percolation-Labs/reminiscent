@@ -148,7 +148,7 @@ def test_has_breaking_changes(git_service):
 
 def test_get_commit(git_service):
     """Test getting commit hash for specific version."""
-    commit = git_service.get_commit("schemas/agents/test.yaml", "schemas/test/v1.0.0")
+    commit = git_service.get_commit("schemas/agents/examples/test.yaml", "schemas/test/v1.0.0")
 
     assert commit is not None
     assert isinstance(commit, str)
@@ -172,7 +172,7 @@ def test_fs_git_uri(git_service):
     fs = FS()
 
     # Test git:// URI with ref parameter
-    uri = "git://rem/schemas/agents/test.yaml?ref=schemas/test/v1.0.0"
+    uri = "git://rem/schemas/agents/examples/test.yaml?ref=schemas/test/v1.0.0"
 
     # Check if file exists
     exists = fs.exists(uri)

@@ -98,6 +98,7 @@ CREATE UNLOGGED TABLE IF NOT EXISTS kv_store (
     user_id VARCHAR(100),
     content_summary TEXT,
     metadata JSONB DEFAULT '{}',
+    graph_edges JSONB DEFAULT '[]'::jsonb,  -- Cached edges for fast graph traversal
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
@@ -123,6 +124,10 @@ USING gin (content_summary gin_trgm_ops);
 -- GIN index for metadata JSONB queries
 CREATE INDEX IF NOT EXISTS idx_kv_store_metadata ON kv_store
 USING gin (metadata);
+
+-- GIN index for graph_edges JSONB queries (graph traversal)
+CREATE INDEX IF NOT EXISTS idx_kv_store_graph_edges ON kv_store
+USING gin (graph_edges);
 
 -- Index for entity_type filtering
 CREATE INDEX IF NOT EXISTS idx_kv_store_type ON kv_store (entity_type);
@@ -210,159 +215,174 @@ COMMENT ON FUNCTION rebuild_kv_store() IS
 -- ============================================================================
 
 -- REM LOOKUP: O(1) entity lookup by natural key
--- Returns entity metadata from KV_STORE cache
+-- Returns structured columns extracted from entity records
+-- Parameters: entity_key, tenant_id (for backward compat), user_id (actual filter)
+-- Note: tenant_id parameter exists for backward compatibility but is ignored
 CREATE OR REPLACE FUNCTION rem_lookup(
     p_entity_key VARCHAR(255),
+    p_tenant_id VARCHAR(100),
     p_user_id VARCHAR(100)
 )
 RETURNS TABLE(
-    entity_key VARCHAR(255),
     entity_type VARCHAR(100),
-    entity_id UUID,
-    tenant_id VARCHAR(100),
-    user_id VARCHAR(100),
-    created_at TIMESTAMP,
-    content_summary TEXT,
-    metadata JSONB
+    data JSONB
 ) AS $$
+DECLARE
+    entity_table VARCHAR(100);
+    query_sql TEXT;
 BEGIN
-    RETURN QUERY
-    SELECT
-        kv.entity_key,
-        kv.entity_type,
-        kv.entity_id,
-        kv.tenant_id,
-        kv.user_id,
-        kv.created_at,
-        kv.content_summary,
-        kv.metadata
+    -- Use p_user_id for filtering (p_tenant_id ignored for backward compat)
+    -- First lookup in KV store to get entity_type (table name)
+    SELECT kv.entity_type INTO entity_table
     FROM kv_store kv
     WHERE kv.user_id = p_user_id
     AND kv.entity_key = p_entity_key;
+
+    -- If not found, return empty
+    IF entity_table IS NULL THEN
+        RETURN;
+    END IF;
+
+    -- Fetch raw record from underlying table as JSONB
+    -- LLMs can handle unstructured JSON - no need for schema assumptions
+    query_sql := format('
+        SELECT
+            %L::VARCHAR(100) AS entity_type,
+            row_to_json(t)::jsonb AS data
+        FROM %I t
+        WHERE t.user_id = $1
+        AND t.name = $2
+        AND t.deleted_at IS NULL
+    ', entity_table, entity_table);
+
+    RETURN QUERY EXECUTE query_sql USING p_user_id, p_entity_key;
 END;
 $$ LANGUAGE plpgsql STABLE;
 
 COMMENT ON FUNCTION rem_lookup IS
-'REM LOOKUP query: O(1) entity lookup by natural key scoped to user_id';
+'REM LOOKUP query: O(1) entity lookup by natural key. Returns raw entity data as JSONB for LLM consumption. tenant_id parameter exists for backward compatibility but filtering uses user_id.';
 
--- REM FUZZY: Fuzzy text search using pg_trgm similarity
--- Returns entities matching approximate text with similarity scores
-CREATE OR REPLACE FUNCTION rem_fuzzy(
-    p_query TEXT,
-    p_user_id VARCHAR(100),
-    p_threshold REAL DEFAULT 0.3,
-    p_limit INTEGER DEFAULT 10
+-- REM FETCH: Fetch full entity records from multiple tables
+-- Takes JSONB mapping of {table_name: [entity_keys]}, fetches all records
+-- Returns complete entity records as JSONB (not just KV store metadata)
+CREATE OR REPLACE FUNCTION rem_fetch(
+    p_entities_by_table JSONB,
+    p_user_id VARCHAR(100)
 )
 RETURNS TABLE(
-    entity_key VARCHAR(255),
-    entity_type VARCHAR(100),
-    entity_id UUID,
-    tenant_id VARCHAR(100),
-    user_id VARCHAR(100),
-    created_at TIMESTAMP,
-    content_summary TEXT,
-    metadata JSONB,
-    similarity_score REAL
+    entity_key TEXT,
+    entity_type TEXT,
+    entity_record JSONB
 ) AS $$
+DECLARE
+    table_name TEXT;
+    entity_keys TEXT[];
+    query_sql TEXT;
+    result_record RECORD;
 BEGIN
+    -- Iterate over each table in the JSONB object
+    FOR table_name IN SELECT jsonb_object_keys(p_entities_by_table)
+    LOOP
+        -- Extract array of keys for this table
+        entity_keys := ARRAY(
+            SELECT jsonb_array_elements_text(p_entities_by_table->table_name)
+        );
+
+        -- Build dynamic query for this table
+        query_sql := format('
+            SELECT
+                t.name AS entity_key,
+                %L AS entity_type,
+                row_to_json(t)::jsonb AS entity_record
+            FROM %I t
+            WHERE t.user_id = $1
+            AND t.name = ANY($2)
+            AND t.deleted_at IS NULL
+        ', table_name, table_name);
+
+        -- Execute and return rows for this table
+        FOR result_record IN EXECUTE query_sql USING p_user_id, entity_keys
+        LOOP
+            entity_key := result_record.entity_key;
+            entity_type := result_record.entity_type;
+            entity_record := result_record.entity_record;
+            RETURN NEXT;
+        END LOOP;
+    END LOOP;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+COMMENT ON FUNCTION rem_fetch IS
+'REM FETCH: Fetch full entity records (all columns as JSONB) from multiple tables. Takes JSONB mapping {table_name: [keys]}, fetches all records, returns unified result set. Use for hydrating LOOKUP, FUZZY, SEARCH, and TRAVERSE results.';
+
+-- REM FUZZY: Fuzzy text search using pg_trgm similarity
+-- Returns raw entity data as JSONB for LLM consumption
+CREATE OR REPLACE FUNCTION rem_fuzzy(
+    p_query TEXT,
+    p_tenant_id VARCHAR(100),
+    p_threshold REAL DEFAULT 0.3,
+    p_limit INTEGER DEFAULT 10,
+    p_user_id VARCHAR(100) DEFAULT NULL
+)
+RETURNS TABLE(
+    entity_type VARCHAR(100),
+    similarity_score REAL,
+    data JSONB
+) AS $$
+DECLARE
+    kv_matches RECORD;
+    entities_by_table JSONB := '{}'::jsonb;
+    table_keys JSONB;
+BEGIN
+    -- First, find matching keys in KV store with similarity scores
+    -- Group by table to prepare for batch fetch
+    FOR kv_matches IN
+        SELECT
+            kv.entity_key,
+            kv.entity_type,
+            similarity(kv.entity_key, p_query) AS sim_score
+        FROM kv_store kv
+        WHERE kv.user_id = COALESCE(p_user_id, p_tenant_id)
+        AND kv.entity_key % p_query  -- Trigram similarity operator
+        AND similarity(kv.entity_key, p_query) >= p_threshold
+        ORDER BY sim_score DESC
+        LIMIT p_limit
+    LOOP
+        -- Build JSONB mapping {table: [keys]}
+        IF entities_by_table ? kv_matches.entity_type THEN
+            table_keys := entities_by_table->kv_matches.entity_type;
+            entities_by_table := jsonb_set(
+                entities_by_table,
+                ARRAY[kv_matches.entity_type],
+                table_keys || jsonb_build_array(kv_matches.entity_key)
+            );
+        ELSE
+            entities_by_table := jsonb_set(
+                entities_by_table,
+                ARRAY[kv_matches.entity_type],
+                jsonb_build_array(kv_matches.entity_key)
+            );
+        END IF;
+    END LOOP;
+
+    -- Fetch full records using rem_fetch helper
+    -- Return raw entity data as JSONB for LLM consumption
+    -- Use p_user_id (not p_tenant_id) for actual filtering
     RETURN QUERY
     SELECT
-        kv.entity_key,
-        kv.entity_type,
-        kv.entity_id,
-        kv.tenant_id,
-        kv.user_id,
-        kv.created_at,
-        kv.content_summary,
-        kv.metadata,
-        similarity(kv.entity_key, p_query) AS similarity_score
-    FROM kv_store kv
-    WHERE kv.user_id = p_user_id
-    AND kv.entity_key % p_query  -- Trigram similarity operator
-    ORDER BY similarity_score DESC
-    LIMIT p_limit;
+        f.entity_type::VARCHAR(100),
+        similarity(f.entity_key, p_query) AS similarity_score,
+        f.entity_record AS data
+    FROM rem_fetch(entities_by_table, COALESCE(p_user_id, p_tenant_id)) f
+    ORDER BY similarity_score DESC;
 END;
 $$ LANGUAGE plpgsql STABLE;
 
 COMMENT ON FUNCTION rem_fuzzy IS
-'REM FUZZY query: Fuzzy text search using pg_trgm with similarity scoring scoped to user_id';
+'REM FUZZY query: Fuzzy text search using pg_trgm. Returns raw entity data as JSONB for LLM consumption. tenant_id parameter exists for backward compatibility but filtering uses user_id.';
 
--- REM TRAVERSE: Recursive graph traversal following edges
--- Explores graph_edges starting from entity_key up to max_depth
-CREATE OR REPLACE FUNCTION rem_traverse(
-    p_entity_key VARCHAR(255),
-    p_user_id VARCHAR(100),
-    p_max_depth INTEGER DEFAULT 1,
-    p_rel_type VARCHAR(100) DEFAULT NULL
-)
-RETURNS TABLE(
-    depth INTEGER,
-    entity_key VARCHAR(255),
-    entity_type VARCHAR(100),
-    entity_id UUID,
-    rel_type VARCHAR(100),
-    rel_weight REAL,
-    path TEXT[]
-) AS $$
-BEGIN
-    RETURN QUERY
-    WITH RECURSIVE graph_traversal AS (
-        -- Base case: Find starting entity
-        SELECT
-            0 AS depth,
-            kv.entity_key,
-            kv.entity_type,
-            kv.entity_id,
-            NULL::VARCHAR(100) AS rel_type,
-            NULL::REAL AS rel_weight,
-            ARRAY[kv.entity_key]::TEXT[] AS path
-        FROM kv_store kv
-        WHERE kv.user_id = p_user_id
-        AND kv.entity_key = p_entity_key
-
-        UNION ALL
-
-        -- Recursive case: Follow outbound edges from discovered entities
-        SELECT
-            gt.depth + 1,
-            target_kv.entity_key,
-            target_kv.entity_type,
-            target_kv.entity_id,
-            (edge->>'type')::VARCHAR(100) AS rel_type,
-            COALESCE((edge->'metadata'->>'weight')::REAL, 1.0) AS rel_weight,
-            gt.path || target_kv.entity_key AS path
-        FROM graph_traversal gt
-        -- Join to primary table to get graph_edges JSONB
-        JOIN kv_store source_kv ON source_kv.entity_key = gt.entity_key
-            AND source_kv.user_id = p_user_id
-        JOIN resources r ON r.id = source_kv.entity_id
-        -- Extract edges from JSONB array
-        CROSS JOIN LATERAL jsonb_array_elements(COALESCE(r.graph_edges, '[]'::jsonb)) AS edge
-        -- Lookup target entity in KV store
-        JOIN kv_store target_kv ON target_kv.entity_key = (edge->>'target')::VARCHAR(255)
-            AND target_kv.user_id = p_user_id
-        WHERE gt.depth < p_max_depth
-        -- Filter by relationship type if specified
-        AND (p_rel_type IS NULL OR (edge->>'type')::VARCHAR(100) = p_rel_type)
-        -- Prevent cycles by checking path
-        AND NOT (target_kv.entity_key = ANY(gt.path))
-    )
-    SELECT DISTINCT ON (entity_key)
-        gt.depth,
-        gt.entity_key,
-        gt.entity_type,
-        gt.entity_id,
-        gt.rel_type,
-        gt.rel_weight,
-        gt.path
-    FROM graph_traversal gt
-    WHERE gt.depth > 0  -- Exclude starting entity
-    ORDER BY gt.entity_key, gt.depth;
-END;
-$$ LANGUAGE plpgsql STABLE;
-
-COMMENT ON FUNCTION rem_traverse IS
-'REM TRAVERSE query: Recursive graph traversal following entity relationships via graph_edges scoped to user_id';
+-- REM TRAVERSE: Moved to 002_install_models.sql (after entity tables are created)
+-- See 002_install_models.sql for the full rem_traverse function with keys_only parameter
 
 -- REM SEARCH: Vector similarity search using embeddings
 -- Joins to embeddings table for semantic search
@@ -370,46 +390,46 @@ CREATE OR REPLACE FUNCTION rem_search(
     p_query_embedding vector(1536),
     p_table_name VARCHAR(100),
     p_field_name VARCHAR(100),
-    p_user_id VARCHAR(100),
+    p_tenant_id VARCHAR(100),
     p_provider VARCHAR(50) DEFAULT 'openai',
     p_min_similarity REAL DEFAULT 0.7,
-    p_limit INTEGER DEFAULT 10
+    p_limit INTEGER DEFAULT 10,
+    p_user_id VARCHAR(100) DEFAULT NULL
 )
 RETURNS TABLE(
-    entity_key VARCHAR(255),
     entity_type VARCHAR(100),
-    entity_id UUID,
-    distance REAL,
-    content_summary TEXT
+    similarity_score REAL,
+    data JSONB
 ) AS $$
 DECLARE
     embeddings_table VARCHAR(200);
+    source_table VARCHAR(100);
     query_sql TEXT;
 BEGIN
     -- Construct embeddings table name
     embeddings_table := 'embeddings_' || p_table_name;
+    source_table := p_table_name;
 
-    -- Dynamic query to join KV_STORE with embeddings table
+    -- Dynamic query to join source table with embeddings table
+    -- Returns raw entity data as JSONB for LLM consumption
     -- Note: Using inner product for OpenAI embeddings (normalized vectors)
     -- Inner product <#> returns negative value, so we negate it to get [0, 1]
-    -- where 1 = perfect match, 0 = orthogonal. We then compute (1 - inner_product)
-    -- to get distance where 0 = perfect match, 1 = completely different
+    -- where 1 = perfect match, 0 = orthogonal
     query_sql := format('
         SELECT
-            kv.entity_key,
-            kv.entity_type,
-            kv.entity_id,
-            (1.0 - (e.embedding <#> $1) * -1.0)::REAL AS distance,
-            kv.content_summary
-        FROM kv_store kv
-        JOIN %I e ON e.entity_id = kv.entity_id
-        WHERE kv.user_id = $2
+            %L::VARCHAR(100) AS entity_type,
+            (1.0 - (e.embedding <#> $1) * -1.0)::REAL AS similarity_score,
+            row_to_json(t)::jsonb AS data
+        FROM %I t
+        JOIN %I e ON e.entity_id = t.id
+        WHERE t.user_id = $2
         AND e.field_name = $3
         AND e.provider = $4
-        AND (1.0 - (e.embedding <#> $1) * -1.0) <= (1.0 - $5)
+        AND (1.0 - (e.embedding <#> $1) * -1.0) >= $5
+        AND t.deleted_at IS NULL
         ORDER BY e.embedding <#> $1 DESC
         LIMIT $6
-    ', embeddings_table);
+    ', source_table, source_table, embeddings_table);
 
     RETURN QUERY EXECUTE query_sql
     USING p_query_embedding, p_user_id, p_field_name, p_provider, p_min_similarity, p_limit;
@@ -417,7 +437,7 @@ END;
 $$ LANGUAGE plpgsql STABLE;
 
 COMMENT ON FUNCTION rem_search IS
-'REM SEARCH query: Vector similarity search using inner product for OpenAI normalized embeddings (0=different, 1=identical) scoped to user_id';
+'REM SEARCH query: Vector similarity search using inner product for OpenAI normalized embeddings. Returns raw entity data as JSONB for LLM consumption, scoped to user_id';
 
 -- Function to get migration status
 CREATE OR REPLACE FUNCTION migration_status()

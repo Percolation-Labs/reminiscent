@@ -18,7 +18,7 @@ Available Tools:
 """
 
 from functools import wraps
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Literal, cast
 
 from loguru import logger
 
@@ -37,14 +37,13 @@ from ...services.rem import RemService
 from ...settings import settings
 
 
-# Global service instances (initialized in FastAPI lifespan)
-_postgres_service: PostgresService | None = None
-_rem_service: RemService | None = None
+# Service cache for FastAPI lifespan initialization
+_service_cache: dict[str, Any] = {}
 
 
 def init_services(postgres_service: PostgresService, rem_service: RemService):
     """
-    Initialize global service instances for MCP tools.
+    Initialize service instances for MCP tools.
 
     Called during FastAPI lifespan startup.
 
@@ -52,10 +51,36 @@ def init_services(postgres_service: PostgresService, rem_service: RemService):
         postgres_service: PostgresService instance
         rem_service: RemService instance
     """
-    global _postgres_service, _rem_service
-    _postgres_service = postgres_service
-    _rem_service = rem_service
+    _service_cache["postgres"] = postgres_service
+    _service_cache["rem"] = rem_service
     logger.info("MCP tools initialized with service instances")
+
+
+async def get_rem_service() -> RemService:
+    """
+    Get or create RemService instance (lazy initialization).
+
+    Returns cached instance if available, otherwise creates new one.
+    Thread-safe for async usage.
+    """
+    if "rem" in _service_cache:
+        return cast(RemService, _service_cache["rem"])
+
+    # Lazy initialization for in-process/CLI usage
+    from ...services.postgres import get_postgres_service
+
+    postgres_service = get_postgres_service()
+    if not postgres_service:
+        raise RuntimeError("PostgreSQL is disabled. Cannot use REM service.")
+        
+    await postgres_service.connect()
+    rem_service = RemService(postgres_service=postgres_service)
+
+    _service_cache["postgres"] = postgres_service
+    _service_cache["rem"] = rem_service
+
+    logger.info("MCP tools: lazy initialized services")
+    return rem_service
 
 
 def mcp_tool_error_handler(func: Callable) -> Callable:
@@ -136,8 +161,8 @@ async def search_rem(
     - Example: SEARCH "database migration" table=resources returns related documents
 
     **SQL** - Direct SQL queries for structured data:
-    - Full PostgreSQL query power
-    - Example: SQL "SELECT * FROM users WHERE role = 'engineer'"
+    - Full PostgreSQL query power (scoped to table)
+    - Example: SQL "role = 'engineer'" (WHERE clause only)
 
     **TRAVERSE** - Graph traversal following relationships:
     - Explores entity neighborhood via graph edges
@@ -151,7 +176,7 @@ async def search_rem(
         threshold: Similarity threshold for FUZZY (0.0-1.0)
         table: Target table for SEARCH (resources, moments, users, etc.)
         limit: Max results for SEARCH
-        sql_query: SQL query string for SQL type
+        sql_query: SQL WHERE clause for SQL type (e.g. "id = '123'")
         initial_query: Starting entity for TRAVERSE
         edge_types: Edge types to follow for TRAVERSE (e.g., ["manages", "reports_to"])
         depth: Traversal depth for TRAVERSE (0=plan only, 1-5=actual traversal)
@@ -175,6 +200,13 @@ async def search_rem(
             limit=10
         )
 
+        # SQL query (WHERE clause only)
+        search_rem(
+            query_type="sql",
+            table="resources",
+            sql_query="category = 'document'"
+        )
+
         # Graph traversal
         search_rem(
             query_type="traverse",
@@ -183,15 +215,15 @@ async def search_rem(
             depth=2
         )
     """
-    if not _rem_service:
-        return {
-            "status": "error",
-            "error": "RemService not initialized. Check server startup.",
-        }
+    # Get RemService instance (lazy initialization)
+    rem_service = await get_rem_service()
 
     # Get user_id from context if not provided
     # TODO: Extract from authenticated session context when auth is enabled
     user_id = AgentContext.get_user_id_or_default(user_id, source="search_rem")
+
+    # Normalize query_type to lowercase for case-insensitive REM dialect
+    query_type = cast(Literal["lookup", "fuzzy", "search", "sql", "traverse"], query_type.lower())
 
     # Build RemQuery based on query_type
     if query_type == "lookup":
@@ -201,9 +233,10 @@ async def search_rem(
         query = RemQuery(
             query_type=QueryType.LOOKUP,
             parameters=LookupParameters(
-                entity_key=entity_key,
+                key=entity_key,
                 user_id=user_id,
             ),
+            user_id=user_id,
         )
 
     elif query_type == "fuzzy":
@@ -214,9 +247,10 @@ async def search_rem(
             query_type=QueryType.FUZZY,
             parameters=FuzzyParameters(
                 query_text=query_text,
-                user_id=user_id,
                 threshold=threshold,
+                limit=limit, # Limit was missing in original logic but likely intended
             ),
+            user_id=user_id,
         )
 
     elif query_type == "search":
@@ -229,22 +263,30 @@ async def search_rem(
             query_type=QueryType.SEARCH,
             parameters=SearchParameters(
                 query_text=query_text,
-                table=table,
-                user_id=user_id,
+                table_name=table,
                 limit=limit,
             ),
+            user_id=user_id,
         )
 
     elif query_type == "sql":
         if not sql_query:
             return {"status": "error", "error": "sql_query required for SQL"}
+        
+        # SQLParameters requires table_name. If not provided, we cannot execute.
+        # Assuming sql_query is just the WHERE clause based on RemService implementation,
+        # OR if table is provided we use it.
+        if not table:
+             return {"status": "error", "error": "table required for SQL queries (parameter: table)"}
 
         query = RemQuery(
             query_type=QueryType.SQL,
             parameters=SQLParameters(
-                sql_query=sql_query,
-                user_id=user_id,
+                table_name=table,
+                where_clause=sql_query,
+                limit=limit,
             ),
+            user_id=user_id,
         )
 
     elif query_type == "traverse":
@@ -259,9 +301,9 @@ async def search_rem(
             parameters=TraverseParameters(
                 initial_query=initial_query,
                 edge_types=edge_types or [],
-                depth=depth,
-                user_id=user_id,
+                max_depth=depth,
             ),
+            user_id=user_id,
         )
 
     else:
@@ -269,7 +311,7 @@ async def search_rem(
 
     # Execute query (errors handled by decorator)
     logger.info(f"Executing REM query: {query_type} for user {user_id}")
-    result = await _rem_service.execute_query(query)
+    result = await rem_service.execute_query(query)
 
     logger.info(f"Query completed successfully: {query_type}")
     return {
@@ -332,7 +374,7 @@ async def ask_rem_agent(
     user_id = AgentContext.get_user_id_or_default(user_id, source="ask_rem_agent")
 
     from ...agentic import create_agent
-    from ...services.schema_repository import SchemaRepository
+    from ...utils.schema_loader import load_agent_schema
 
     # Create agent context
     context = AgentContext(
@@ -342,24 +384,23 @@ async def ask_rem_agent(
     )
 
     # Load agent schema
-    schema_repo = SchemaRepository()
-    schema = await schema_repo.get_schema(agent_schema, agent_version)
-
-    if not schema:
+    try:
+        schema = load_agent_schema(agent_schema)
+    except FileNotFoundError:
         return {
             "status": "error",
             "error": f"Agent schema not found: {agent_schema}",
         }
 
     # Create agent
-    agent = await create_agent(
+    agent_runtime = await create_agent(
         context=context,
         agent_schema_override=schema,
     )
 
     # Run agent (errors handled by decorator)
     logger.info(f"Running ask_rem agent for query: {query[:100]}...")
-    result = await agent.run(query)
+    result = await agent_runtime.run(query)
 
     # Extract output
     from rem.agentic.serialization import serialize_agent_result

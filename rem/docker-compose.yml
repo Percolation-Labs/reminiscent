@@ -8,10 +8,10 @@ services:
       POSTGRES_PASSWORD: rem
       POSTGRES_HOST_AUTH_METHOD: trust
     ports:
-      - "5050:5432"
+      - "5050:5432"  # Developer port (builds locally)
     volumes:
-      # Mount migrations for automatic execution
-      - ./src/rem/sql/migrations:/docker-entrypoint-initdb.d:ro
+      # NOTE: Auto-migration disabled - use `rem db migrate` for explicit control
+      # - ./src/rem/sql/migrations:/docker-entrypoint-initdb.d:ro
       # Persistent data volume (PostgreSQL 18 format)
       - postgres_data:/var/lib/postgresql
     healthcheck:

@@ -16,14 +16,14 @@ kubectl port-forward -n observability svc/phoenix-svc 6006:6006
 export PHOENIX_API_KEY=<your-api-key>
 
 # Verify connection
-rem eval dataset list
+rem experiments dataset list
 ```
 
 ### Two-Phase Workflow
 
 **Phase 1: SME Creates Golden Set**
 ```bash
-rem eval dataset create rem-lookup-golden \
+rem experiments dataset create rem-lookup-golden \
   --from-csv golden.csv \
   --input-keys query \
   --output-keys expected_label,expected_type \
@@ -32,10 +32,9 @@ rem eval dataset create rem-lookup-golden \
 
 **Phase 2: Run Evaluation**
 ```bash
-rem eval experiment run rem-lookup-golden \
-  --experiment rem-v1-baseline \
+rem experiments run rem-lookup-golden \
   --agent ask_rem \
-  --evaluator rem-lookup-correctness,rem-faithfulness
+  --evaluator rem-lookup-correctness
 ```
 
 **View Results**
@@ -86,10 +85,11 @@ Evaluator Schemas (rem/schemas/evaluators/)
    ├─ rem-retrieval-recall.yaml (RAGAS-inspired)
    └─ rem-faithfulness.yaml (RAGAS-inspired)
 
-CLI Commands (rem/src/rem/cli/commands/phoenix.py)
-├─ rem eval dataset list/create/add
-├─ rem eval experiment run
-└─ rem eval trace list
+CLI Commands (rem/src/rem/cli/commands/experiments.py)
+├─ rem experiments dataset list/create/add
+├─ rem experiments run
+├─ rem experiments prompt list/create
+└─ rem experiments trace list
 ```
 
 ---
@@ -132,12 +132,12 @@ Evaluate retrieval layer independently (RAGAS concepts, no dependency).
 **Usage:**
 ```bash
 # Evaluate retrieval quality
-rem eval experiment run rem-search-golden \
+rem experiments run rem-search-golden \
   --agent ask_rem \
   --evaluator rem-retrieval-precision,rem-retrieval-recall
 
 # Evaluate faithfulness
-rem eval experiment run rem-lookup-golden \
+rem experiments run rem-lookup-golden \
   --agent ask_rem \
   --evaluator rem-faithfulness
 ```
@@ -229,17 +229,17 @@ Phoenix receives these spans and displays in UI.
 
 ```bash
 # List all datasets
-rem eval dataset list
+rem experiments dataset list
 
 # Create from CSV
-rem eval dataset create <name> \
+rem experiments dataset create <name> \
   --from-csv golden.csv \
   --input-keys query \
   --output-keys expected_label,expected_type \
   --metadata-keys difficulty,query_type
 
 # Add examples to existing dataset
-rem eval dataset add <name> \
+rem experiments dataset add <name> \
   --from-csv new-examples.csv \
   --input-keys query \
   --output-keys expected_label,expected_type
@@ -249,17 +249,17 @@ rem eval dataset add <name> \
 
 ```bash
 # Run agent only
-rem eval experiment run <dataset> \
+rem experiments run <dataset> \
   --experiment <name> \
   --agent ask_rem
 
 # Run evaluator only
-rem eval experiment run <dataset> \
+rem experiments run <dataset> \
   --experiment <name> \
   --evaluator rem-lookup-correctness
 
 # Run agent + evaluators
-rem eval experiment run <dataset> \
+rem experiments run <dataset> \
   --experiment <name> \
   --agent ask_rem \
   --evaluator rem-lookup-correctness,rem-faithfulness
@@ -269,7 +269,7 @@ rem eval experiment run <dataset> \
 
 ```bash
 # List recent traces
-rem eval trace list --project rem-agents --days 7 --limit 50
+rem experiments trace list --project rem-agents --days 7 --limit 50
 ```
 
 ---
@@ -410,7 +410,7 @@ export PHOENIX_API_KEY=<your-key>
 
 ```bash
 # List all datasets (check spelling, case-sensitive)
-rem eval dataset list
+rem experiments dataset list
 ```
 
 ### Evaluator Schema Not Found
@@ -447,7 +447,7 @@ REM's Phoenix evaluation framework provides:
 ✅ **Systematic tracking** - Phoenix integration for analysis over time
 
 **Next Steps:**
-1. Create your first golden set (`rem eval dataset create`)
-2. Run baseline evaluation (`rem eval experiment run`)
+1. Create your first golden set (`rem experiments dataset create`)
+2. Run baseline evaluation (`rem experiments run`)
 3. Iterate and improve agents
 4. Track progress in Phoenix UI (`open http://localhost:6006`)

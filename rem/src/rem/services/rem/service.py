@@ -131,16 +131,29 @@ class RemService:
             EmbeddingFieldNotFoundError: If field has no embeddings
         """
         try:
+            # RemQuery uses user_id for isolation (mapped to tenant_id in execution)
+            tenant_id = query.user_id
+            
             if query.query_type == QueryType.LOOKUP:
-                return await self._execute_lookup(query.parameters, query.tenant_id)
+                if isinstance(query.parameters, LookupParameters):
+                    return await self._execute_lookup(query.parameters, tenant_id)
+                raise InvalidParametersError("LOOKUP", "Invalid parameters type")
             elif query.query_type == QueryType.FUZZY:
-                return await self._execute_fuzzy(query.parameters, query.tenant_id)
+                if isinstance(query.parameters, FuzzyParameters):
+                    return await self._execute_fuzzy(query.parameters, tenant_id)
+                raise InvalidParametersError("FUZZY", "Invalid parameters type")
             elif query.query_type == QueryType.SEARCH:
-                return await self._execute_search(query.parameters, query.tenant_id)
+                if isinstance(query.parameters, SearchParameters):
+                    return await self._execute_search(query.parameters, tenant_id)
+                raise InvalidParametersError("SEARCH", "Invalid parameters type")
             elif query.query_type == QueryType.SQL:
-                return await self._execute_sql(query.parameters, query.tenant_id)
+                if isinstance(query.parameters, SQLParameters):
+                    return await self._execute_sql(query.parameters, tenant_id)
+                raise InvalidParametersError("SQL", "Invalid parameters type")
             elif query.query_type == QueryType.TRAVERSE:
-                return await self._execute_traverse(query.parameters, query.tenant_id)
+                if isinstance(query.parameters, TraverseParameters):
+                    return await self._execute_traverse(query.parameters, tenant_id)
+                raise InvalidParametersError("TRAVERSE", "Invalid parameters type")
             else:
                 raise InvalidParametersError("UNKNOWN", f"Unknown query type: {query.query_type}")
         except (FieldNotFoundError, EmbeddingFieldNotFoundError, InvalidParametersError):
@@ -175,7 +188,9 @@ class RemService:
 
         all_results = []
         for key in keys:
-            query_params = get_lookup_params(key, tenant_id, params.user_id)
+            # Use tenant_id (from query.user_id) as the user_id param for lookup if params.user_id not set
+            user_id = params.user_id or tenant_id
+            query_params = get_lookup_params(key, tenant_id, user_id)
             results = await self.db.execute(LOOKUP_QUERY, query_params)
             all_results.extend(results)
 
@@ -208,7 +223,7 @@ class RemService:
             tenant_id,
             params.threshold,
             params.limit,
-            params.user_id,
+            tenant_id, # Use tenant_id (query.user_id) as user_id
         )
         results = await self.db.execute(FUZZY_QUERY, query_params)
 
@@ -246,7 +261,8 @@ class RemService:
             ContentFieldNotFoundError: If no 'content' field and field_name not specified
         """
         table_name = params.table_name
-        field_name = params.field_name
+        # SearchParameters doesn't have field_name, imply from table or default
+        field_name = "content" # Default
 
         # Get model fields for validation
         available_fields = self._get_model_fields(table_name)
@@ -283,10 +299,13 @@ class RemService:
         from ..embeddings.api import generate_embedding_async
         from .queries import SEARCH_QUERY, get_search_params
 
+        # SearchParameters doesn't have provider, use default
+        provider = settings.llm.embedding_provider
+
         query_embedding = await generate_embedding_async(
             text=params.query_text,
             model=settings.llm.embedding_model,
-            provider=params.provider or settings.llm.embedding_provider,
+            provider=provider,
         )
 
         # Execute vector search via rem_search() PostgreSQL function
@@ -295,10 +314,10 @@ class RemService:
             table_name,
             field_name,
             tenant_id,
-            params.provider or settings.llm.embedding_provider,
+            provider,
             params.min_similarity or 0.7,
             params.limit or 10,
-            params.user_id,
+            tenant_id, # Use tenant_id (query.user_id) as user_id
         )
         results = await self.db.execute(SEARCH_QUERY, query_params)
 
@@ -319,14 +338,45 @@ class RemService:
 
         Pushes SELECT queries down to Postgres for performance.
 
+        Supports two modes:
+        1. Raw SQL: params.raw_query contains full SQL statement
+        2. Structured: params.table_name + where_clause (with tenant isolation)
+
         Args:
-            params: SQLParameters with table and WHERE clause
+            params: SQLParameters with raw_query OR table_name + where_clause
             tenant_id: Tenant identifier
 
         Returns:
             Query results
         """
+        # Mode 1: Raw SQL query (no tenant isolation added automatically)
+        if params.raw_query:
+            # Security: Block destructive operations
+            # Allow: SELECT, INSERT, UPDATE, WITH (read + data modifications)
+            # Block: DROP, DELETE, TRUNCATE, ALTER (destructive operations)
+            query_upper = params.raw_query.strip().upper()
+            forbidden_keywords = ["DROP", "DELETE", "TRUNCATE", "ALTER"]
+
+            for keyword in forbidden_keywords:
+                if query_upper.startswith(keyword):
+                    raise ValueError(
+                        f"Destructive SQL operation '{keyword}' is not allowed. "
+                        f"Forbidden operations: {', '.join(forbidden_keywords)}"
+                    )
+
+            results = await self.db.execute(params.raw_query)
+            return {
+                "query_type": "SQL",
+                "raw_query": params.raw_query,
+                "results": results,
+                "count": len(results),
+            }
+
+        # Mode 2: Structured query with tenant isolation
         from .queries import build_sql_query
+
+        if not params.table_name:
+            raise ValueError("SQL query requires either raw_query or table_name")
 
         # Build SQL query with tenant isolation
         query = build_sql_query(
@@ -362,17 +412,19 @@ class RemService:
         """
         from .queries import TRAVERSE_QUERY, get_traverse_params
 
-        # Handle edge_types wildcards
-        rel_types = params.edge_types
-        if not rel_types or "*" in rel_types:
-            rel_types = None
+        # Handle edge_types - PostgreSQL function takes single type, not array
+        # Use first type from list or None for all types
+        rel_type: str | None = None
+        if params.edge_types and "*" not in params.edge_types:
+            rel_type = params.edge_types[0] if params.edge_types else None
 
         query_params = get_traverse_params(
-            params.initial_query,
-            tenant_id,
-            params.max_depth or 1,
-            rel_types,
-            None, # user_id not yet in TraverseParameters, passing None
+            start_key=params.initial_query,
+            tenant_id=tenant_id,
+            user_id=tenant_id,  # Use tenant_id (query.user_id) as user_id
+            max_depth=params.max_depth or 1,
+            rel_type=rel_type,
+            keys_only=False,
         )
         results = await self.db.execute(TRAVERSE_QUERY, query_params)
 
@@ -452,11 +504,13 @@ class RemService:
                 query_type, parameters = self._parse_query_string(query_output.query)
 
                 # Create RemQuery and execute
-                rem_query = RemQuery(
-                    query_type=query_type,
-                    parameters=parameters,
-                    tenant_id=tenant_id,
-                )
+                # RemQuery takes user_id, which we treat as tenant_id
+                # Pydantic will validate and convert the dict to the correct parameter type
+                rem_query = RemQuery.model_validate({
+                    "query_type": query_type,
+                    "parameters": parameters,
+                    "user_id": tenant_id,
+                })
 
                 result["results"] = await self.execute_query(rem_query)
 

@@ -53,12 +53,10 @@ def register_commands(dreaming: click.Group):
 
                 if result["status"] == "success":
                     logger.success(f"User model updated successfully!")
-                    logger.info(f"Sessions analyzed: {result['sessions_analyzed']}")
-                    logger.info(f"Moments included: {result['moments_included']}")
-                    logger.info(f"Resources included: {result['resources_included']}")
-                    logger.info(f"Current projects: {result['current_projects']}")
-                    logger.info(f"Technical stack: {result['technical_stack_size']} items")
-                    logger.info(f"Key collaborators: {result['key_collaborators']}")
+                    logger.info(f"Messages analyzed: {result.get('messages_analyzed', 0)}")
+                    logger.info(f"Moments included: {result.get('moments_included', 0)}")
+                    logger.info(f"Resources included: {result.get('resources_included', 0)}")
+                    logger.info(f"Activity level: {result.get('activity_level', 'N/A')}")
                 else:
                     logger.warning(f"Status: {result['status']}")
 
@@ -134,7 +132,8 @@ def register_commands(dreaming: click.Group):
             rem dreaming affinity --user-id user-123 --use-llm --limit 100
             rem dreaming affinity --user-id sarah-chen
         """
-        from ...workers.dreaming import AffinityMode, DreamingWorker
+        from ...workers.dreaming import DreamingWorker
+        from ...services.dreaming.affinity_service import AffinityMode
 
         if use_llm and not limit:
             logger.error("--limit is REQUIRED when using --use-llm to control costs")

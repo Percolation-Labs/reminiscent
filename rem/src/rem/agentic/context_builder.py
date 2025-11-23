@@ -165,7 +165,7 @@ class ContextBuilder:
             context_hint = f"Today's date: {today}."
 
             # Add user context (auto-inject or on-demand hint)
-            if settings.chat.auto_inject_user_context and context.user_id:
+            if settings.chat.auto_inject_user_context and context.user_id and db:
                 # Auto-inject: Load and include user profile
                 user_context_content = await ContextBuilder._load_user_context(
                     user_id=context.user_id,

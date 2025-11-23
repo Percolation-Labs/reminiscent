@@ -365,17 +365,17 @@ class ContentService:
             user_id=user_id,
             name=file_name,
             uri=storage_uri,
-            s3_key=internal_key,
-            s3_bucket=(
-                storage_uri.split("/")[2] if storage_uri.startswith("s3://") else "local"
-            ),
-            content_type=content_type,
+            mime_type=content_type,
             size_bytes=file_size,
             metadata={
                 "source_uri": file_uri,
                 "source_type": source_type,
                 "category": category,
                 "storage_uri": storage_uri,
+                "s3_key": internal_key,
+                "s3_bucket": (
+                    storage_uri.split("/")[2] if storage_uri.startswith("s3://") else "local"
+                ),
             },
             tags=tags or [],
         )
@@ -530,8 +530,13 @@ class ContentService:
         ]
 
         if self.resource_repo:
-            await self.resource_repo.upsert(resources)
+            await self.resource_repo.upsert(
+                resources,
+                embeddable_fields=["content"],
+                generate_embeddings=True,
+            )
             logger.info(f"Saved {len(resources)} Resource chunks")
+            logger.info(f"Queued {len(resources)} embedding generation tasks for content field")
 
         return {
             "file": file.model_dump(),
@@ -589,6 +594,9 @@ class ContentService:
         # Save to schemas table
         from rem.services.postgres import get_postgres_service
         postgres = get_postgres_service()
+        if not postgres:
+            raise RuntimeError("PostgreSQL is disabled. Cannot save Schema entity to database.")
+
         await postgres.connect()
         try:
             from rem.models.entities import Schema as SchemaModel
@@ -632,6 +640,9 @@ class ContentService:
 
         from rem.services.postgres import get_postgres_service
         postgres = get_postgres_service()
+        if not postgres:
+            raise RuntimeError("PostgreSQL is disabled. Cannot process engram.")
+
         await postgres.connect()
         try:
             processor = EngramProcessor(postgres)

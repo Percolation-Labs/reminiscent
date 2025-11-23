@@ -48,22 +48,22 @@ from loguru import logger
 try:
     import polars as pl
 except ImportError:
-    pl = None
+    pl = None  # type: ignore[assignment]
 
 try:
     import pandas as pd
 except ImportError:
-    pd = None
+    pd = None  # type: ignore[assignment]
 
 try:
     import yaml
 except ImportError:
-    yaml = None
+    yaml = None  # type: ignore[assignment]
 
 try:
     from PIL import Image
 except ImportError:
-    Image = None
+    Image = None  # type: ignore[assignment]
 
 
 class LocalProvider:
@@ -111,7 +111,7 @@ class LocalProvider:
         if mode[0] == "w" or mode[0] == "a":
             Path(uri).parent.mkdir(parents=True, exist_ok=True)
 
-        return open(uri, mode)
+        return open(uri, mode)  # type: ignore[return-value]
 
     def read(self, uri: str, use_polars: bool = True, **options) -> Any:
         """

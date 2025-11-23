@@ -143,24 +143,24 @@ def create_mcp_server(is_local: bool = False) -> FastMCP:
             "\n"
             "**Quick Start:**\n"
             "1. User: \"Who is Sarah?\"\n"
-            "   → Call: search_rem(query_type=\"lookup\", entity_key=\"Sarah\", tenant_id=\"...\")\n"
+            "   → Call: search_rem(query_type=\"lookup\", entity_key=\"Sarah\", user_id=\"...\")\n"
             "\n"
             "2. User: \"Find documents about database migration\"\n"
-            "   → Call: search_rem(query_type=\"search\", query_text=\"database migration\", table=\"resources\", tenant_id=\"...\")\n"
+            "   → Call: search_rem(query_type=\"search\", query_text=\"database migration\", table=\"resources\", user_id=\"...\")\n"
             "\n"
             "3. User: \"Who reports to Sally?\"\n"
-            "   → Call: search_rem(query_type=\"traverse\", initial_query=\"Sally\", edge_types=[\"reports-to\"], depth=2, tenant_id=\"...\")\n"
+            "   → Call: search_rem(query_type=\"traverse\", initial_query=\"Sally\", edge_types=[\"reports-to\"], depth=2, user_id=\"...\")\n"
             "\n"
             "4. User: \"Show me Sarah's org chart\" (Multi-turn example)\n"
-            "   → Turn 1: search_rem(query_type=\"lookup\", entity_key=\"Sarah\", tenant_id=\"...\")\n"
-            "   → Turn 2: search_rem(query_type=\"traverse\", initial_query=\"Sarah\", depth=0, tenant_id=\"...\")  # PLAN mode\n"
-            "   → Turn 3: search_rem(query_type=\"traverse\", initial_query=\"Sarah\", edge_types=[\"manages\", \"reports-to\"], depth=2, tenant_id=\"...\")\n"
+            "   → Turn 1: search_rem(query_type=\"lookup\", entity_key=\"Sarah\", user_id=\"...\")\n"
+            "   → Turn 2: search_rem(query_type=\"traverse\", initial_query=\"Sarah\", depth=0, user_id=\"...\")  # PLAN mode\n"
+            "   → Turn 3: search_rem(query_type=\"traverse\", initial_query=\"Sarah\", edge_types=[\"manages\", \"reports-to\"], depth=2, user_id=\"...\")\n"
             "\n"
             "5. User: \"What did we discuss last week about the TiDB migration?\"\n"
-            "   → Call: ask_rem_agent(query=\"What did we discuss last week about the TiDB migration?\", tenant_id=\"...\")\n"
+            "   → Call: ask_rem_agent(query=\"What did we discuss last week about the TiDB migration?\", user_id=\"...\")\n"
             "\n"
             "6. User: \"Ingest this PDF file\"\n"
-            "   → Call: ingest_into_rem(file_uri=\"s3://bucket/file.pdf\", tenant_id=\"...\")\n"
+            "   → Call: ingest_into_rem(file_uri=\"s3://bucket/file.pdf\", user_id=\"...\")\n"
         ),
     )
 
@@ -178,14 +178,12 @@ def create_mcp_server(is_local: bool = False) -> FastMCP:
     @wraps(ingest_into_rem)
     async def ingest_into_rem_wrapper(
         file_uri: str,
-        tenant_id: str,
         user_id: str | None = None,
         category: str | None = None,
         tags: list[str] | None = None,
     ):
         return await ingest_into_rem(
             file_uri=file_uri,
-            tenant_id=tenant_id,
             user_id=user_id,
             category=category,
             tags=tags,
