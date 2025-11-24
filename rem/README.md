@@ -4,32 +4,9 @@ Cloud-native unified memory infrastructure for agentic AI systems built with Pyd
 
 ## Architecture Overview
 
-```mermaid
-graph TD
-    API[FastAPI<br/>Chat + MCP] --> AGENTS[JSON Schema<br/>Agents]
-    AGENTS --> TOOLS[MCP Tools<br/>5 Tools]
-
-    TOOLS --> QUERY[REM Query<br/>Dialect]
-    QUERY --> DB[(PostgreSQL<br/>+pgvector)]
-
-    FILES[File Processor] --> DREAM[Dreaming<br/>Workers]
-    DREAM --> DB
-
-    AGENTS --> OTEL[OpenTelemetry]
-    OTEL --> PHOENIX[Arize<br/>Phoenix]
-
-    EVAL[Evaluation<br/>Framework] --> PHOENIX
-
-    classDef api fill:#4A90E2,stroke:#2E5C8A,color:#fff
-    classDef agent fill:#7B68EE,stroke:#483D8B,color:#fff
-    classDef db fill:#50C878,stroke:#2E7D4E,color:#fff
-    classDef obs fill:#9B59B6,stroke:#6C3483,color:#fff
-
-    class API,TOOLS api
-    class AGENTS agent
-    class DB,QUERY db
-    class OTEL,PHOENIX,EVAL obs
-```
+<p align="center">
+  <img src="https://mermaid.ink/img/Z3JhcGggVEQKICAgIEFQSVtGYXN0QVBJPGJyLz5DaGF0ICsgTUNQXSAtLT4gQUdFTlRTW0pTT04gU2NoZW1hPGJyLz5BZ2VudHNdCiAgICBBR0VOVFMgLS0-IFRPT0xTW01DUCBUb29sczxici8-NSBUb29sc10KCiAgICBUT09MUyAtLT4gUVVFUllbUkVNIFF1ZXJ5PGJyLz5EaWFsZWN0XQogICAgUVVFUlkgLS0-IERCWyhQb3N0Z3JlU1FMPGJyLz4rcGd2ZWN0b3IpXQoKICAgIEZJTEVTW0ZpbGUgUHJvY2Vzc29yXSAtLT4gRFJFQU1bRHJlYW1pbmc8YnIvPldvcmtlcnNdCiAgICBEUkVBTSAtLT4gREIKCiAgICBBR0VOVFMgLS0-IE9URUxbT3BlblRlbGVtZXRyeV0KICAgIE9URUwgLS0-IFBIT0VOSVhbQXJpemU8YnIvPlBob2VuaXhdCgogICAgRVZBTFtFdmFsdWF0aW9uPGJyLz5GcmFtZXdvcmtdIC0tPiBQSE9FTklYCgogICAgY2xhc3NEZWYgYXBpIGZpbGw6IzRBOTBFMixzdHJva2U6IzJFNUM4QSxjb2xvcjojZmZmCiAgICBjbGFzc0RlZiBhZ2VudCBmaWxsOiM3QjY4RUUsc3Ryb2tlOiM0ODNEOEIsY29sb3I6I2ZmZgogICAgY2xhc3NEZWYgZGIgZmlsbDojNTBDODc4LHN0cm9rZTojMkU3RDRFLGNvbG9yOiNmZmYKICAgIGNsYXNzRGVmIG9icyBmaWxsOiM5QjU5QjYsc3Ryb2tlOiM2QzM0ODMsY29sb3I6I2ZmZgoKICAgIGNsYXNzIEFQSSxUT09MUyBhcGkKICAgIGNsYXNzIEFHRU5UUyBhZ2VudAogICAgY2xhc3MgREIsUVVFUlkgZGIKICAgIGNsYXNzIE9URUwsUEhPRU5JWCxFVkFMIG9icwo=" alt="REM Architecture" width="700">
+</p>
 
 **Key Components:**
 
