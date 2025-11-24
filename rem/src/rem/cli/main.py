@@ -14,9 +14,17 @@ from pathlib import Path
 import click
 from loguru import logger
 
+# Import version from package
+try:
+    from importlib.metadata import version
+    __version__ = version("remdb")
+except Exception:
+    __version__ = "unknown"
+
 
 @click.group()
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging")
+@click.version_option(version=__version__, prog_name="rem")
 def cli(verbose: bool):
     """REM - Resources Entities Moments system CLI."""
     if verbose:

@@ -5,11 +5,21 @@ Experiments use ExperimentConfig (rem/models/core/experiment.py) for configurati
 and support Git+S3 hybrid storage. Includes dataset, prompt, and trace management.
 
 Directory Structure:
-    .experiments/{experiment-name}/
-    ├── experiment.yaml          # ExperimentConfig
-    ├── README.md                # Auto-generated docs
-    ├── datasets/                # Optional: small datasets
-    └── results/                 # Optional: metrics summaries
+    experiments/{experiment-name}/
+    ├── experiment.yaml          # ExperimentConfig (metadata, agent ref, evaluator ref)
+    ├── README.md                # Auto-generated documentation
+    ├── ground-truth/            # Evaluation datasets (Q&A pairs)
+    │   ├── dataset.csv          # Input/output pairs for evaluation
+    │   └── dataset.yaml         # Alternative YAML format
+    ├── seed-data/              # Data to seed REM before running experiments
+    │   └── data.yaml           # Users, resources, moments in REM format
+    └── results/                # Experiment results and metrics
+        └── {run-timestamp}/    # Each run gets its own timestamped folder
+            ├── metrics.json    # Summary metrics
+            └── run_info.json   # Run metadata (eval framework URLs, etc)
+
+Environment Variables:
+    EXPERIMENTS_HOME: Override default experiment directory (default: "experiments")
 
 Commands:
     # Experiment lifecycle
@@ -60,7 +70,7 @@ def experiments():
 @click.option("--results-location", type=click.Choice(["git", "s3", "hybrid"]), default="git",
               help="Where to store results")
 @click.option("--tags", help="Comma-separated tags (e.g., 'production,cv-parser')")
-@click.option("--base-path", default=".experiments", help="Base directory for experiments")
+@click.option("--base-path", help="Base directory for experiments (default: EXPERIMENTS_HOME or 'experiments')")
 def create(
     name: str,
     agent: str,
@@ -69,11 +79,16 @@ def create(
     dataset_location: str,
     results_location: str,
     tags: Optional[str],
-    base_path: str,
+    base_path: Optional[str],
 ):
     """Create a new experiment configuration.
 
     Creates directory structure and generates experiment.yaml and README.md.
+
+    The experiment directory will contain:
+    - ground-truth/: Q&A pairs for evaluation
+    - seed-data/: REM data (users, resources, moments) to load before running
+    - results/: Timestamped run results
 
     Examples:
         # Small experiment (Git-only)
@@ -90,6 +105,9 @@ def create(
             --dataset-location s3 \\
             --results-location hybrid \\
             --tags "production,cv-parser,weekly"
+
+        # Custom location
+        EXPERIMENTS_HOME=/path/to/experiments rem experiments create my-test --agent my-agent
     """
     from rem.models.core.experiment import (
         ExperimentConfig,
@@ -99,15 +117,19 @@ def create(
         ResultsConfig,
         ExperimentStatus,
     )
+    import os
 
     try:
+        # Resolve base path: CLI arg > EXPERIMENTS_HOME env var > default "experiments"
+        if base_path is None:
+            base_path = os.getenv("EXPERIMENTS_HOME", "experiments")
         # Build dataset reference
         if dataset_location == "git":
             dataset_ref = DatasetReference(
                 location=DatasetLocation.GIT,
-                path="datasets/ground_truth.csv",
+                path="ground-truth/dataset.csv",
                 format="csv",
-                description="Ground truth dataset for evaluation"
+                description="Ground truth Q&A dataset for evaluation"
             )
         else:  # s3 or hybrid
             dataset_ref = DatasetReference(
@@ -168,26 +190,167 @@ def create(
         config_path = config.save(base_path)
         readme_path = config.save_readme(base_path)
 
-        # Create datasets directory
-        datasets_dir = config.get_experiment_dir(base_path) / "datasets"
-        datasets_dir.mkdir(parents=True, exist_ok=True)
+        # Create new directory structure
+        exp_dir = config.get_experiment_dir(base_path)
+
+        # Create ground-truth directory
+        ground_truth_dir = exp_dir / "ground-truth"
+        ground_truth_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create seed-data directory
+        seed_data_dir = exp_dir / "seed-data"
+        seed_data_dir.mkdir(parents=True, exist_ok=True)
 
         # Create results directory if Git-based
         if results_location == "git":
-            results_dir = config.get_experiment_dir(base_path) / "results"
+            results_dir = exp_dir / "results"
             results_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create placeholder files with documentation
+        ground_truth_readme = ground_truth_dir / "README.md"
+        ground_truth_readme.write_text("""# Ground Truth Dataset
+
+This directory contains Q&A pairs for evaluating the agent.
+
+## Format
+
+**CSV format** (`dataset.csv`):
+```csv
+input,expected_output,metadata
+"What is the capital of France?","Paris","{\"difficulty\": \"easy\"}"
+```
+
+**YAML format** (`dataset.yaml`):
+```yaml
+- input: "What is the capital of France?"
+  expected_output: "Paris"
+  metadata:
+    difficulty: easy
+```
+
+## Generating Ground Truth
+
+### Using AI Assistants
+
+AI coding assistants (like Claude, GPT-4, etc.) can help generate comprehensive ground-truth datasets:
+
+1. **Generate from existing examples**: Show the assistant examples from your domain and ask it to create similar Q&A pairs
+2. **Create challenging questions**: Ask the assistant to act as a judge and generate HARD questions that test edge cases
+3. **Vary difficulty levels**: Request a mix of easy, medium, and hard questions with appropriate metadata tags
+
+Example prompt:
+```
+Based on these example documents about [your domain], generate 20 Q&A pairs
+for evaluating an agent. Include:
+- 5 easy factual questions
+- 10 medium questions requiring reasoning
+- 5 hard questions with edge cases
+Format as CSV with difficulty and category metadata.
+```
+
+### Ground Truth as Judge
+
+**Important**: Keep ground-truth data **separate** from the agent being tested:
+- Ground truth should be hidden from the agent during evaluation
+- The agent should only see the `input` field
+- The evaluator compares agent output against `expected_output`
+- This ensures unbiased evaluation
+
+### Quality Guidelines
+
+1. **Diverse Coverage**: Include various question types and difficulty levels
+2. **Domain-Specific**: Use terminology and scenarios from your actual use case
+3. **Metadata Tags**: Add difficulty, category, priority for analysis
+4. **SME Review**: Have domain experts validate expected outputs
+
+## Usage
+
+These datasets can be:
+- Loaded into evaluation frameworks (Arize Phoenix, etc.)
+- Used for regression testing
+- Converted to different formats as needed
+
+The experiment runner will automatically use this data for evaluation.
+""")
+
+        seed_data_readme = seed_data_dir / "README.md"
+        seed_data_readme.write_text("""# Seed Data
+
+This directory contains REM data to load before running the experiment.
+
+## Format
+
+Use standard REM YAML format:
+
+```yaml
+users:
+  - id: test-user-001
+    user_id: experiment-test
+    email: test@example.com
+
+resources:
+  - id: resource-001
+    user_id: experiment-test
+    label: example-document
+    content: "Document content here..."
+
+moments:
+  - id: moment-001
+    user_id: experiment-test
+    label: example-meeting
+    starts_timestamp: "2024-01-15T14:00:00"
+```
+
+## Generating Seed Data
+
+### Using AI Assistants
+
+AI coding assistants can help generate realistic seed data for your experiments:
+
+1. **From existing datasets**: Reference examples from the `datasets/` directory
+2. **Domain-specific scenarios**: Describe your use case and ask for appropriate test data
+3. **Anonymized versions**: Ask to create fictional data based on real patterns
+
+Example prompt:
+```
+Based on the recruitment dataset examples in datasets/domains/recruitment/,
+generate seed data for testing a CV parser agent. Include:
+- 3 test users
+- 5 CV documents (resources) with varied experience levels
+- 2 interview moment entries
+Use fictional names and anonymize all content.
+```
+
+### Best Practices
+
+1. **Minimal**: Only include data necessary for the ground-truth questions to be answerable
+2. **Anonymized**: Always use fictional names, companies, and content
+3. **Relevant**: Seed data should provide context for evaluation questions
+4. **Versioned**: Track changes to seed data in Git for reproducibility
+
+## Usage
+
+Load this data before running experiments:
+```bash
+rem db load --file seed-data/data.yaml --user-id experiment-test
+```
+
+This ensures your agent has the necessary context for evaluation.
+""")
 
         click.echo(f"\n✓ Created experiment: {name}")
         click.echo(f"  Configuration: {config_path}")
         click.echo(f"  Documentation: {readme_path}")
-        click.echo(f"  Datasets: {datasets_dir}")
+        click.echo(f"  Ground Truth: {ground_truth_dir}")
+        click.echo(f"  Seed Data: {seed_data_dir}")
         if results_location == "git":
             click.echo(f"  Results: {results_dir}")
         click.echo(f"\nNext steps:")
-        click.echo(f"  1. Add dataset to {datasets_dir}/")
-        click.echo(f"  2. Review configuration: {config_path}")
-        click.echo(f"  3. Run experiment: rem experiments run {name}")
-        click.echo(f"  4. Commit to Git: git add .experiments/{name}/ && git commit")
+        click.echo(f"  1. Add ground truth Q&A to {ground_truth_dir}/dataset.csv")
+        click.echo(f"  2. Add seed data to {seed_data_dir}/data.yaml (optional)")
+        click.echo(f"  3. Review configuration: {config_path}")
+        click.echo(f"  4. Run experiment: rem experiments run {name}")
+        click.echo(f"  5. Commit to Git: git add {base_path}/{name}/ && git commit")
 
     except Exception as e:
         logger.error(f"Failed to create experiment: {e}")
@@ -201,11 +364,11 @@ def create(
 
 
 @experiments.command("list")
-@click.option("--base-path", default=".experiments", help="Base directory for experiments")
+@click.option("--base-path", help="Base directory for experiments (default: EXPERIMENTS_HOME or 'experiments')")
 @click.option("--status", help="Filter by status (draft, ready, completed, etc.)")
 @click.option("--tags", help="Filter by tags (comma-separated)")
 def list_experiments(
-    base_path: str,
+    base_path: Optional[str],
     status: Optional[str],
     tags: Optional[str],
 ):
@@ -217,8 +380,13 @@ def list_experiments(
         rem experiments list --tags production,cv-parser
     """
     from rem.models.core.experiment import ExperimentConfig, ExperimentStatus
+    import os
 
     try:
+        # Resolve base path
+        if base_path is None:
+            base_path = os.getenv("EXPERIMENTS_HOME", "experiments")
+
         experiments_dir = Path(base_path)
         if not experiments_dir.exists():
             click.echo(f"No experiments directory found at {base_path}")
@@ -279,16 +447,21 @@ def list_experiments(
 
 @experiments.command("show")
 @click.argument("name")
-@click.option("--base-path", default=".experiments", help="Base directory for experiments")
-def show(name: str, base_path: str):
+@click.option("--base-path", help="Base directory for experiments (default: EXPERIMENTS_HOME or 'experiments')")
+def show(name: str, base_path: Optional[str]):
     """Show experiment details.
 
     Examples:
         rem experiments show hello-world-validation
     """
     from rem.models.core.experiment import ExperimentConfig
+    import os
 
     try:
+        # Resolve base path
+        if base_path is None:
+            base_path = os.getenv("EXPERIMENTS_HOME", "experiments")
+
         config_path = Path(base_path) / name / "experiment.yaml"
         if not config_path.exists():
             click.echo(f"Experiment not found: {name}")
@@ -348,7 +521,7 @@ def show(name: str, base_path: str):
 
 @experiments.command("run")
 @click.argument("name")
-@click.option("--base-path", default=".experiments", help="Base directory for experiments")
+@click.option("--base-path", help="Base directory for experiments (default: EXPERIMENTS_HOME or 'experiments')")
 @click.option("--version", help="Git tag version to load (e.g., 'experiments/my-exp/v1.0.0')")
 @click.option("--dry-run", is_flag=True, help="Test on small subset without saving")
 @click.option("--update-prompts", is_flag=True, help="Update prompts in Phoenix before running")
@@ -356,7 +529,7 @@ def show(name: str, base_path: str):
 @click.option("--phoenix-api-key", help="Phoenix API key (overrides PHOENIX_API_KEY env var)")
 def run(
     name: str,
-    base_path: str,
+    base_path: Optional[str],
     version: Optional[str],
     dry_run: bool,
     update_prompts: bool,
@@ -407,8 +580,13 @@ def run(
     from rem.agentic.providers.phoenix import create_evaluator_from_schema
     from datetime import datetime
     import pandas as pd
+    import os
 
     try:
+        # Resolve base path
+        if base_path is None:
+            base_path = os.getenv("EXPERIMENTS_HOME", "experiments")
+
         # Load experiment configuration
         if version:
             # Load from Git at specific version

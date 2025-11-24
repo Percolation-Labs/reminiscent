@@ -28,9 +28,12 @@ from rem.config import (
 )
 
 
-def prompt_postgres_config() -> dict:
+def prompt_postgres_config(use_defaults: bool = False) -> dict:
     """
     Prompt user for PostgreSQL configuration.
+
+    Args:
+        use_defaults: If True, use all default values without prompting
 
     Returns:
         PostgreSQL configuration dictionary
@@ -44,27 +47,44 @@ def prompt_postgres_config() -> dict:
         "POSTGRES__CONNECTION_STRING", "postgresql://rem:rem@localhost:5051/rem"
     )
 
-    # Prompt for components
-    click.echo(
-        "\nEnter PostgreSQL connection details (press Enter to use default):"
-    )
-    click.echo("Default: Package users on port 5051 (docker compose -f docker-compose.prebuilt.yml up -d)")
-    click.echo("Developers: Change port to 5050 if using docker-compose.yml (local build)")
-    click.echo("Custom DB: Enter your own host/port below")
+    # Default values
+    host = "localhost"
+    port = 5050
+    database = "rem"
+    username = "rem"
+    password = "rem"
+    pool_min_size = 5
+    pool_max_size = 20
 
-    host = click.prompt("Host", default="localhost")
-    port = click.prompt("Port", default=5051, type=int)
-    database = click.prompt("Database name", default="rem")
-    username = click.prompt("Username", default="rem")
-    password = click.prompt("Password", default="rem", hide_input=True)
+    if use_defaults:
+        click.echo("\nUsing default PostgreSQL configuration:")
+        click.echo(f"  Host: {host}")
+        click.echo(f"  Port: {port}")
+        click.echo(f"  Database: {database}")
+        click.echo(f"  Username: {username}")
+        click.echo(f"  Pool: {pool_min_size}-{pool_max_size} connections")
+    else:
+        # Prompt for components
+        click.echo(
+            "\nEnter PostgreSQL connection details (press Enter to use default):"
+        )
+        click.echo("Default: Package users on port 5051 (docker compose -f docker-compose.prebuilt.yml up -d)")
+        click.echo("Developers: Change port to 5050 if using docker-compose.yml (local build)")
+        click.echo("Custom DB: Enter your own host/port below")
+
+        host = click.prompt("Host", default=host)
+        port = click.prompt("Port", default=port, type=int)
+        database = click.prompt("Database name", default=database)
+        username = click.prompt("Username", default=username)
+        password = click.prompt("Password", default=password, hide_input=True)
+
+        # Additional pool settings
+        click.echo("\nConnection pool settings:")
+        pool_min_size = click.prompt("Pool minimum size", default=pool_min_size, type=int)
+        pool_max_size = click.prompt("Pool maximum size", default=pool_max_size, type=int)
 
     # Build connection string
     connection_string = f"postgresql://{username}:{password}@{host}:{port}/{database}"
-
-    # Additional pool settings
-    click.echo("\nConnection pool settings:")
-    pool_min_size = click.prompt("Pool minimum size", default=5, type=int)
-    pool_max_size = click.prompt("Pool maximum size", default=20, type=int)
 
     return {
         "connection_string": connection_string,
@@ -73,9 +93,12 @@ def prompt_postgres_config() -> dict:
     }
 
 
-def prompt_llm_config() -> dict:
+def prompt_llm_config(use_defaults: bool = False) -> dict:
     """
     Prompt user for LLM provider configuration.
+
+    Args:
+        use_defaults: If True, use all default values without prompting
 
     Returns:
         LLM configuration dictionary
@@ -86,39 +109,54 @@ def prompt_llm_config() -> dict:
 
     config = {}
 
-    # Default model
-    click.echo("\nDefault LLM model (format: provider:model-id)")
-    click.echo("Examples:")
-    click.echo("  - anthropic:claude-sonnet-4-5-20250929")
-    click.echo("  - openai:gpt-4o")
-    click.echo("  - openai:gpt-4o-mini")
+    # Default values
+    default_model = "anthropic:claude-sonnet-4-5-20250929"
+    default_temperature = 0.5
 
-    config["default_model"] = click.prompt(
-        "Default model", default="anthropic:claude-sonnet-4-5-20250929"
-    )
+    if use_defaults:
+        click.echo("\nUsing default LLM configuration:")
+        click.echo(f"  Model: {default_model}")
+        click.echo(f"  Temperature: {default_temperature}")
+        click.echo("  API Keys: Not configured (set via environment variables)")
+        config["default_model"] = default_model
+        config["default_temperature"] = default_temperature
+    else:
+        # Default model
+        click.echo("\nDefault LLM model (format: provider:model-id)")
+        click.echo("Examples:")
+        click.echo("  - anthropic:claude-sonnet-4-5-20250929")
+        click.echo("  - openai:gpt-4o")
+        click.echo("  - openai:gpt-4o-mini")
 
-    # Temperature
-    config["default_temperature"] = click.prompt(
-        "Default temperature (0.0-1.0)", default=0.5, type=float
-    )
+        config["default_model"] = click.prompt(
+            "Default model", default=default_model
+        )
 
-    # API keys
-    click.echo("\nAPI Keys (optional - leave empty to skip):")
+        # Temperature
+        config["default_temperature"] = click.prompt(
+            "Default temperature (0.0-1.0)", default=default_temperature, type=float
+        )
 
-    openai_key = click.prompt("OpenAI API key", default="", show_default=False)
-    if openai_key:
-        config["openai_api_key"] = openai_key
+        # API keys
+        click.echo("\nAPI Keys (optional - leave empty to skip):")
 
-    anthropic_key = click.prompt("Anthropic API key", default="", show_default=False)
-    if anthropic_key:
-        config["anthropic_api_key"] = anthropic_key
+        openai_key = click.prompt("OpenAI API key", default="", show_default=False)
+        if openai_key:
+            config["openai_api_key"] = openai_key
+
+        anthropic_key = click.prompt("Anthropic API key", default="", show_default=False)
+        if anthropic_key:
+            config["anthropic_api_key"] = anthropic_key
 
     return config
 
 
-def prompt_s3_config() -> dict:
+def prompt_s3_config(use_defaults: bool = False) -> dict:
     """
     Prompt user for S3 storage configuration.
+
+    Args:
+        use_defaults: If True, skip S3 configuration (optional feature)
 
     Returns:
         S3 configuration dictionary
@@ -129,8 +167,12 @@ def prompt_s3_config() -> dict:
 
     config = {}
 
+    if use_defaults:
+        click.echo("\nSkipping S3 configuration (optional - configure later if needed)")
+        return {}
+
     click.echo("\nS3 storage is used for file uploads and processed content.")
-    use_s3 = click.confirm("Configure S3 storage?", default=True)
+    use_s3 = click.confirm("Configure S3 storage?", default=False)
 
     if not use_s3:
         return {}
@@ -154,9 +196,12 @@ def prompt_s3_config() -> dict:
     return config
 
 
-def prompt_additional_env_vars() -> dict:
+def prompt_additional_env_vars(use_defaults: bool = False) -> dict:
     """
     Prompt user for additional environment variables.
+
+    Args:
+        use_defaults: If True, skip additional env vars (optional feature)
 
     Returns:
         Dictionary of custom environment variables
@@ -166,6 +211,10 @@ def prompt_additional_env_vars() -> dict:
     click.echo("=" * 60)
 
     env_vars: dict[str, str] = {}
+
+    if use_defaults:
+        click.echo("\nSkipping additional environment variables (configure later if needed)")
+        return env_vars
 
     add_env = click.confirm(
         "Add custom environment variables?", default=False
@@ -207,7 +256,13 @@ def prompt_additional_env_vars() -> dict:
     is_flag=True,
     help="Open configuration file in editor",
 )
-def configure_command(install: bool, claude_desktop: bool, show: bool, edit: bool):
+@click.option(
+    "--yes",
+    "-y",
+    is_flag=True,
+    help="Accept all defaults without prompting (non-interactive mode)",
+)
+def configure_command(install: bool, claude_desktop: bool, show: bool, edit: bool, yes: bool):
     """
     Configure REM installation.
 
@@ -215,10 +270,12 @@ def configure_command(install: bool, claude_desktop: bool, show: bool, edit: boo
     Configuration is saved to ~/.rem/config.yaml and merged with environment variables.
 
     Examples:
-        rem configure               # Run interactive wizard
-        rem configure --install     # Run wizard + install database tables
-        rem configure --show        # Show current configuration
-        rem configure --edit        # Open config in $EDITOR
+        rem configure                    # Run interactive wizard
+        rem configure --yes              # Accept all defaults (non-interactive)
+        rem configure --yes --install    # Quick setup with defaults + install tables
+        rem configure --install          # Run wizard + install database tables
+        rem configure --show             # Show current configuration
+        rem configure --edit             # Open config in $EDITOR
     """
     config_path = get_config_path()
 
@@ -258,57 +315,74 @@ def configure_command(install: bool, claude_desktop: bool, show: bool, edit: boo
     click.echo("\n" + "=" * 60)
     click.echo("REM Configuration Wizard")
     click.echo("=" * 60)
-    click.echo("\nThis wizard will help you configure REM for first-time use.")
+
+    if yes:
+        click.echo("\nRunning in non-interactive mode (--yes flag)")
+        click.echo("Using default configuration values...")
+    else:
+        click.echo("\nThis wizard will help you configure REM for first-time use.")
+
     click.echo(f"Configuration will be saved to: {config_path}")
 
     # Check if config already exists
     if config_exists():
         click.echo(f"\nConfiguration file already exists at {config_path}")
-        if not click.confirm("Overwrite existing configuration?", default=False):
+        if yes:
+            # In non-interactive mode, skip configuration creation
+            click.echo("Skipping configuration creation (file already exists)")
+            config = None  # Will not save/validate
+        elif not click.confirm("Overwrite existing configuration?", default=False):
             click.echo("Configuration unchanged.")
+            config = None  # Will not save/validate
+        else:
+            # User confirmed overwrite - create new config
+            config = {}
+            config["postgres"] = prompt_postgres_config(use_defaults=yes)
+            config["llm"] = prompt_llm_config(use_defaults=yes)
+            s3_config = prompt_s3_config(use_defaults=yes)
+            if s3_config:
+                config["s3"] = s3_config
+            env_vars = prompt_additional_env_vars(use_defaults=yes)
+            if env_vars:
+                config["env"] = env_vars
+    else:
+        # No existing config - create new one
+        config = {}
+        config["postgres"] = prompt_postgres_config(use_defaults=yes)
+        config["llm"] = prompt_llm_config(use_defaults=yes)
+        s3_config = prompt_s3_config(use_defaults=yes)
+        if s3_config:
+            config["s3"] = s3_config
+        env_vars = prompt_additional_env_vars(use_defaults=yes)
+        if env_vars:
+            config["env"] = env_vars
+
+    # Validate and save configuration (only if we created one)
+    if config is not None:
+        click.echo("\n" + "=" * 60)
+        click.echo("Validating Configuration")
+        click.echo("=" * 60)
+
+        errors = validate_config(config)
+        if errors:
+            click.echo("\nConfiguration validation failed:")
+            for error in errors:
+                click.echo(f"  ❌ {error}", err=True)
+            click.echo("\nPlease fix these errors and try again.")
             return
 
-    # Build configuration
-    config = {}
+        click.echo("✅ Configuration is valid")
 
-    # PostgreSQL (required)
-    config["postgres"] = prompt_postgres_config()
-
-    # LLM providers
-    config["llm"] = prompt_llm_config()
-
-    # S3 storage (optional)
-    s3_config = prompt_s3_config()
-    if s3_config:
-        config["s3"] = s3_config
-
-    # Additional environment variables
-    env_vars = prompt_additional_env_vars()
-    if env_vars:
-        config["env"] = env_vars
-
-    # Validate configuration
-    click.echo("\n" + "=" * 60)
-    click.echo("Validating Configuration")
-    click.echo("=" * 60)
-
-    errors = validate_config(config)
-    if errors:
-        click.echo("\nConfiguration validation failed:")
-        for error in errors:
-            click.echo(f"  ❌ {error}", err=True)
-        click.echo("\nPlease fix these errors and try again.")
-        return
-
-    click.echo("✅ Configuration is valid")
-
-    # Save configuration
-    try:
-        save_config(config)
-        click.echo(f"\n✅ Configuration saved to {config_path}")
-    except Exception as e:
-        click.echo(f"\n❌ Failed to save configuration: {e}", err=True)
-        return
+        # Save configuration
+        try:
+            save_config(config)
+            click.echo(f"\n✅ Configuration saved to {config_path}")
+        except Exception as e:
+            click.echo(f"\n❌ Failed to save configuration: {e}", err=True)
+            return
+    else:
+        # Load existing config for use in install step
+        config = load_config() if config_exists() else {}
 
     # Install database tables if requested
     if install:
@@ -316,7 +390,7 @@ def configure_command(install: bool, claude_desktop: bool, show: bool, edit: boo
         click.echo("Database Installation")
         click.echo("=" * 60)
 
-        if click.confirm("\nInstall database tables?", default=True):
+        if yes or click.confirm("\nInstall database tables?", default=True):
             try:
                 # Import here to ensure config is loaded first
                 from rem.config import merge_config_to_env

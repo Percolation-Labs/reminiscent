@@ -132,9 +132,10 @@ import sys
 from pathlib import Path
 from kreuzberg import ExtractionConfig, extract_file_sync
 
-# Parse document with table extraction
+# Parse document without table extraction (avoids PyTorch dependency)
+# Table extraction requires PyTorch which is 1GB+ dependency
 config = ExtractionConfig(
-    extract_tables=True,
+    extract_tables=False,  # Disabled - requires PyTorch
     chunk_content=False,
     extract_keywords=False,
 )
@@ -144,13 +145,7 @@ result = extract_file_sync(Path(sys.argv[1]), config=config)
 # Serialize result to JSON
 output = {
     'content': result.content,
-    'tables': [
-        {
-            'page_number': t.get('page_number', 0),
-            'text': t.get('text', ''),
-        }
-        for t in result.tables
-    ],
+    'tables': [],  # Table extraction disabled
     'metadata': result.metadata
 }
 print(json.dumps(output))
@@ -223,15 +218,18 @@ print(json.dumps(output))
             else:
                 # Normal execution (not in daemon)
                 from kreuzberg import ExtractionConfig, extract_file_sync
+                # Disable table extraction to avoid gmft/PyTorch dependency
+                # Table extraction requires PyTorch which is 1GB+ dependency
+                # Future: Re-enable with native TATR-based extraction in Kreuzberg v4
                 config = ExtractionConfig(
-                    extract_tables=True,
+                    extract_tables=False,  # Disabled - requires PyTorch
                     chunk_content=False,
                     extract_keywords=False,
                 )
                 result = extract_file_sync(tmp_path, config=config)
                 text = result.content
                 extraction_metadata = {
-                    "table_count": len(result.tables),
+                    "table_count": 0,  # Table extraction disabled
                     "parser": "kreuzberg",
                     "file_extension": tmp_path.suffix,
                 }
