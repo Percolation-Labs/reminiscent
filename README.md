@@ -51,7 +51,11 @@ See [rem/README.md](rem/README.md) for detailed installation and usage.
 
 ## Architecture
 
-![REM Architecture](remdb-eks.drawio.png)
+<p align="center">
+  <img src="remdb-eks.drawio.png" alt="REM Architecture" width="600">
+</p>
+
+<div align="center">
 
 ```mermaid
 graph TD
@@ -79,6 +83,8 @@ graph TD
     class DB,QUERY db
     class OTEL,PHOENIX,EVAL obs
 ```
+
+</div>
 
 **Key Components:**
 
