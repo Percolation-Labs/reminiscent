@@ -14,13 +14,52 @@ REM is a **unified memory infrastructure** for AI agents that combines:
 
 See [rem/README.md](rem/README.md) for complete Python package documentation.
 
-## Quick Start (2 minutes)
+## Quick Start (5 minutes)
 
-### Option 1: Docker Compose (Recommended for Testing)
+### Option 1: PyPI Install with Example Data (Recommended)
+
+```bash
+# Install remdb
+pip install remdb[all]
+
+# Clone example datasets
+git clone https://github.com/Percolation-Labs/remstack-lab.git
+cd remstack-lab
+
+# Configure REM (interactive wizard)
+rem configure --install
+
+# Start PostgreSQL
+docker run -d \
+  --name rem-postgres \
+  -e POSTGRES_USER=rem \
+  -e POSTGRES_PASSWORD=rem \
+  -e POSTGRES_DB=rem \
+  -p 5050:5432 \
+  pgvector/pgvector:pg18
+
+# Load quickstart dataset
+rem db load --file datasets/quickstart/sample_data.yaml --user-id demo-user
+
+# Ask questions
+rem ask --user-id demo-user "What documents exist in the system?"
+rem ask --user-id demo-user "Show me meetings about API design"
+```
+
+**What you get:**
+- 3 users (software team)
+- 3 resources (docs, notes)
+- 3 moments (meetings, sessions)
+- 4 messages (team chat)
+- 3 agent schemas (query assistant, analyzer, reviewer)
+
+**Next steps:** Explore [remstack-lab](https://github.com/Percolation-Labs/remstack-lab) for domain-specific datasets (recruitment, legal, enterprise) and format examples (engrams, conversations).
+
+### Option 2: Docker Compose (All-in-One)
 
 ```bash
 # Clone and start
-git clone https://github.com/your-org/remstack.git
+git clone https://github.com/Percolation-Labs/remstack.git
 cd remstack/rem
 export ANTHROPIC_API_KEY="sk-ant-..."
 docker compose up -d
@@ -33,19 +72,6 @@ curl http://localhost:8000/health
 - REST API: http://localhost:8000/docs
 - MCP Server: http://localhost:8000/api/v1/mcp
 - PostgreSQL: `localhost:5050` (rem/rem)
-
-### Option 2: PyPI Install 
-
-```bash
-# Install
-pip install remdb[all]
-
-# Configure (interactive wizard)
-rem configure --install --claude-desktop
-
-# Start services
-rem serve
-```
 
 See [rem/README.md](rem/README.md) for detailed installation and usage.
 
@@ -95,6 +121,36 @@ graph TD
 - **Ingestion & Dreaming**: Background workers for content extraction and progressive index enrichment (0% → 100% answerable)
 - **Observability & Evals**: OpenTelemetry tracing + Arize Phoenix + LLM-as-a-Judge evaluation framework
 
+## Example Datasets
+
+Looking for example data to get started? Check out [**remstack-lab**](https://github.com/Percolation-Labs/remstack-lab) - a companion repository with curated datasets and experiments:
+
+**Datasets by Domain:**
+- **Quickstart**: Minimal dataset for learning REM in 5 minutes (users, resources, moments)
+- **Recruitment**: CV parsing, candidate tracking, interview pipelines
+- **Legal**: Contract analysis, NDA processing, risk assessment
+- **Enterprise**: Team collaboration, knowledge bases, project documentation
+- **Misc**: General-purpose examples and patterns
+
+**Datasets by Format:**
+- **Engrams**: Voice memos, personal reflections, meeting transcripts with timestamps
+- **Documents**: Markdown, PDF, text files with structured content
+- **Conversations**: Multi-turn dialogues, chat logs, support tickets
+- **Files**: Binary file examples with S3 URIs and metadata
+
+**Working from remstack-lab:**
+```bash
+# Clone and work from the lab directory
+git clone https://github.com/Percolation-Labs/remstack-lab.git
+cd remstack-lab
+
+# Load any dataset
+rem db load --file datasets/domains/recruitment/scenarios/candidate_pipeline/data.yaml --user-id your-company
+
+# Explore and experiment
+rem ask --user-id your-company "Show me candidates with Python experience"
+```
+
 ## Repository Structure
 
 ```
@@ -110,6 +166,9 @@ remstack/
 │   └── application/      # REM application manifests
 └── README.md             # This file
 ```
+
+**Related Repositories:**
+- **[remstack-lab](https://github.com/Percolation-Labs/remstack-lab)**: Example datasets and experiments (recommended for getting started)
 
 ## Documentation
 

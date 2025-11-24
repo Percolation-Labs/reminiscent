@@ -38,14 +38,61 @@ Cloud-native unified memory infrastructure for agentic AI systems built with Pyd
 
 Choose your path:
 
-- **Option 1: Package Users** (Recommended for non-developers) - PyPI package + dockerized database
-- **Option 2: Developers** - Clone repo, local development with uv
+- **Option 1: Package Users with Example Data** (Recommended for first-time users) - PyPI + example datasets
+- **Option 2: Package Users** (Recommended for non-developers) - PyPI package + dockerized database
+- **Option 3: Developers** - Clone repo, local development with uv
 
 ---
 
-## Option 1: Package Users (Recommended)
+## Option 1: Package Users with Example Data (Recommended)
 
-**Best for**: Using REM as a service (API + CLI) without modifying code.
+**Best for**: First-time users who want to explore REM with curated example datasets.
+
+```bash
+# Install remdb
+pip install remdb[all]
+
+# Clone example datasets
+git clone https://github.com/Percolation-Labs/remstack-lab.git
+cd remstack-lab
+
+# Configure REM (interactive wizard)
+rem configure --install
+
+# Start PostgreSQL
+docker run -d \
+  --name rem-postgres \
+  -e POSTGRES_USER=rem \
+  -e POSTGRES_PASSWORD=rem \
+  -e POSTGRES_DB=rem \
+  -p 5050:5432 \
+  pgvector/pgvector:pg18
+
+# Load quickstart dataset
+rem db load --file datasets/quickstart/sample_data.yaml --user-id demo-user
+
+# Ask questions
+rem ask --user-id demo-user "What documents exist in the system?"
+rem ask --user-id demo-user "Show me meetings about API design"
+
+# Try other datasets
+rem db load --file datasets/domains/recruitment/scenarios/candidate_pipeline/data.yaml --user-id my-company
+rem ask --user-id my-company "Show me candidates with Python experience"
+```
+
+**What you get:**
+- Quickstart: 3 users, 3 resources, 3 moments, 4 messages
+- Domain datasets: recruitment, legal, enterprise, misc
+- Format examples: engrams, documents, conversations, files
+- Jupyter notebooks and experiments
+
+**Learn more**: [remstack-lab repository](https://github.com/Percolation-Labs/remstack-lab)
+
+---
+
+## Option 2: Package Users (No Example Data)
+
+**Best for**: Using REM as a service (API + CLI) without modifying code, bringing your own data.
 
 ### Step 1: Start Database and API with Docker Compose
 
@@ -110,34 +157,81 @@ Configuration saved to `~/.rem/config.yaml` (can edit with `rem configure --edit
 - See [REM Query Dialect](#rem-query-dialect) for query examples
 - See [API Endpoints](#api-endpoints) for OpenAI-compatible API usage
 
-### Step 3: Test the Stack
+### Step 3: Load Sample Data (Optional but Recommended)
+
+**Option A: Clone example datasets** (Recommended - works with all README examples)
 
 ```bash
-# Ingest a test file to populate your knowledge base
+# Clone datasets repository
+git clone https://github.com/Percolation-Labs/remstack-lab.git
+
+# Load quickstart dataset
+rem db load --file remstack-lab/datasets/quickstart/sample_data.yaml --user-id demo-user
+
+# Test with sample queries
+rem ask --user-id demo-user "What documents exist in the system?"
+rem ask --user-id demo-user "Show me meetings about API design"
+rem ask --user-id demo-user "Who is Sarah Chen?"
+
+# Try domain-specific datasets
+rem db load --file remstack-lab/datasets/domains/recruitment/scenarios/candidate_pipeline/data.yaml --user-id my-company
+rem ask --user-id my-company "Show me candidates with Python experience"
+```
+
+**Option B: Bring your own data**
+
+```bash
+# Ingest your own files
 echo "REM is a bio-inspired memory system for agentic AI workloads." > test-doc.txt
 rem process ingest test-doc.txt --user-id test-user --category documentation --tags rem,ai
 
 # Query your ingested data
-rem ask "What do you know about REM from my knowledge base?" --user-id test-user
+rem ask --user-id test-user "What do you know about REM from my knowledge base?"
+```
 
-# Test with a general query (uses agent's built-in knowledge + your data)
-rem ask "What is REM?" --user-id test-user
+### Step 4: Test the API
 
-# Test the API
+```bash
+# Test the OpenAI-compatible chat completions API
 curl -X POST http://localhost:8000/api/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "X-User-Id: test-user" \
+  -H "X-User-Id: demo-user" \
   -d '{
     "model": "anthropic:claude-sonnet-4-5-20250929",
-    "messages": [{"role": "user", "content": "What is REM?"}],
+    "messages": [{"role": "user", "content": "What documents did Sarah Chen author?"}],
     "stream": false
   }'
 ```
 
-**File Ingestion Commands:**
+**Available Commands:**
+- `rem ask` - Natural language queries to REM
 - `rem process ingest <file>` - Full ingestion pipeline (storage + parsing + embedding + database)
 - `rem process uri <file>` - READ-ONLY parsing (no database storage, useful for testing parsers)
+- `rem db load --file <yaml>` - Load structured datasets directly
 
+## Example Datasets
+
+🎯 **Recommended**: Clone [remstack-lab](https://github.com/Percolation-Labs/remstack-lab) for curated datasets organized by domain and format.
+
+**What's included:**
+- **Quickstart**: Minimal dataset (3 users, 3 resources, 3 moments) - perfect for first-time users
+- **Domains**: Recruitment (CV parsing), Legal (contracts), Enterprise (team collaboration)
+- **Formats**: Engrams (voice memos), Documents (markdown/PDF), Conversations (chat logs)
+- **Evaluation**: Golden datasets for Phoenix-based agent testing
+
+**Working from remstack-lab:**
+```bash
+cd remstack-lab
+
+# Load any dataset
+rem db load --file datasets/quickstart/sample_data.yaml --user-id demo-user
+
+# Explore formats
+rem db load --file datasets/formats/engrams/scenarios/team_meeting/team_standup_meeting.yaml --user-id demo-user
+
+# Try domain-specific examples
+rem db load --file datasets/domains/recruitment/scenarios/candidate_pipeline/data.yaml --user-id acme-corp
+```
 
 ## See Also
 
@@ -146,8 +240,7 @@ curl -X POST http://localhost:8000/api/v1/chat/completions \
 - [CLI Reference](#cli-reference) - Complete command-line interface documentation
 - [Bring Your Own Agent](#bring-your-own-agent) - Create custom agents with your own prompts and tools
 - [Production Deployment](#production-deployment) - AWS EKS with Kubernetes
-
-**Sample Data**: Test data with users, resources, and moments is at `tests/data/seed/test-user-data.yaml`
+- [Example Datasets](https://github.com/Percolation-Labs/remstack-lab) - Curated datasets by domain and format
 
 ---
 
