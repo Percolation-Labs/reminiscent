@@ -51,6 +51,8 @@ See [rem/README.md](rem/README.md) for detailed installation and usage.
 
 ## Architecture
 
+![REM Architecture](remdb-eks.drawio.png)
+
 ```mermaid
 graph TD
     API[FastAPI<br/>Chat + MCP] --> AGENTS[JSON Schema<br/>Agents]
