@@ -22,7 +22,7 @@ Cloud-native unified memory infrastructure for agentic AI systems built with Pyd
 | Feature | Description | Benefits |
 |---------|-------------|----------|
 | **OpenAI-Compatible Chat API** | Drop-in replacement for OpenAI chat completions API with streaming support | Use with existing OpenAI clients, switch models across providers (OpenAI, Anthropic, etc.) |
-| **Built-in MCP Server** | FastMCP server with 5 tools + 3 resources for memory operations | Export memory to Claude Desktop, Cursor, or any MCP-compatible host |
+| **Built-in MCP Server** | FastMCP server with 4 tools + 3 resources for memory operations | Export memory to Claude Desktop, Cursor, or any MCP-compatible host |
 | **REM Query Engine** | Multi-index query system (LOOKUP, FUZZY, SEARCH, SQL, TRAVERSE) with custom dialect | O(1) lookups, semantic search, graph traversal - all tenant-isolated |
 | **Dreaming Workers** | Background workers for entity extraction, moment generation, and affinity matching | Automatic knowledge graph construction from resources (0% → 100% query answerable) |
 | **PostgreSQL + pgvector** | CloudNativePG with PostgreSQL 18, pgvector extension, streaming replication | Production-ready vector search, no external vector DB needed |
@@ -217,7 +217,7 @@ json_schema_extra:
   version: 1.0.0
   tools:
     - search_rem
-    - lookup_rem
+    - ask_rem_agent
   resources: []
 ```
 
@@ -277,17 +277,23 @@ Every agent schema must include:
 
 ### Available MCP Tools
 
-REM provides **5 built-in MCP tools** your agents can use:
+REM provides **4 built-in MCP tools** your agents can use:
 
-| Tool | Purpose | Example |
-|------|---------|---------|
-| `search_rem` | Semantic vector search | `SEARCH "ML architecture" FROM resources LIMIT 10` |
-| `lookup_rem` | O(1) exact lookup by label | `LOOKUP "sarah-chen" FROM resources` |
-| `traverse_rem` | Graph traversal | `TRAVERSE FROM "project-x" TYPE "references" DEPTH 2` |
-| `query_rem` | Execute REM queries (LOOKUP, SEARCH, TRAVERSE, SQL) | Any REM query |
-| `ask_rem` | Iterated retrieval with query evolution | Natural language questions |
+| Tool | Purpose | Parameters |
+|------|---------|------------|
+| `search_rem` | Execute REM queries (LOOKUP, FUZZY, SEARCH, SQL, TRAVERSE) | `query_type`, `entity_key`, `query_text`, `table`, `sql_query`, `initial_query`, `edge_types`, `depth` |
+| `ask_rem_agent` | Natural language to REM query via agent-driven reasoning | `query`, `agent_schema`, `agent_version` |
+| `ingest_into_rem` | Full file ingestion pipeline (read → store → parse → chunk → embed) | `file_uri`, `category`, `tags`, `is_local_server` |
+| `read_resource` | Access MCP resources (schemas, status) for Claude Desktop | `uri` |
 
 **Tool Reference**: Tools are defined in `src/rem/api/mcp_router/tools.py`
+
+**Note**: `search_rem` is a unified tool that handles all REM query types via the `query_type` parameter:
+- `query_type="lookup"` - O(1) entity lookup by label
+- `query_type="fuzzy"` - Fuzzy text matching with similarity threshold
+- `query_type="search"` - Semantic vector search (table-specific)
+- `query_type="sql"` - Direct SQL queries (WHERE clause)
+- `query_type="traverse"` - Graph traversal with depth control
 
 ### Multi-User Isolation
 
@@ -327,6 +333,7 @@ rem ask "SELECT name, category, created_at FROM schemas ORDER BY created_at DESC
 
 **Agent not loading tools:**
 - Verify `json_schema_extra.tools` lists correct tool names
+- Valid tool names: `search_rem`, `ask_rem_agent`, `ingest_into_rem`, `read_resource`
 - Check MCP tool names in `src/rem/api/mcp_router/tools.py`
 - Tools are case-sensitive: use `search_rem`, not `Search_REM`
 
