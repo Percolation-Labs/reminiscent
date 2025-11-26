@@ -1,10 +1,10 @@
 # Kustomize Base for REM Stack
 #
 # This is the base configuration containing all components:
-# - REM API (FastAPI)
-# - REM MCP (FastMCP)
+# - REM API (FastAPI + MCP server at /api/v1/mcp)
 # - File Processor (KEDA-scaled worker)
-# - PostgreSQL (CloudNativePG) - optional, can deploy separately
+# - Dreaming Worker (CronJob for background processing)
+# - PostgreSQL (CloudNativePG) - optional, deploy separately
 #
 # This base is environment-agnostic. Use overlays for environment-specific config.
 #
@@ -40,9 +40,6 @@ resources:
 images:
   - name: rem-api
     newName: ${ECR_REGISTRY}/rem-api
-    newTag: latest
-  - name: rem-mcp
-    newName: ${ECR_REGISTRY}/rem-mcp
     newTag: latest
   - name: rem-worker
     newName: ${ECR_REGISTRY}/rem-worker

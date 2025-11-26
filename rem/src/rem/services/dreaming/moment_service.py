@@ -8,13 +8,12 @@ with temporal boundaries and metadata.
 
 import json
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
 
-import yaml
 from loguru import logger
 
+from ...utils.schema_loader import load_agent_schema
 from ...agentic.providers.pydantic_ai import create_agent
 from ...agentic.serialization import serialize_agent_result
 from ...models.entities.moment import Moment, Person
@@ -101,19 +100,7 @@ async def construct_moments(
         }
 
     # Load MomentBuilder agent schema
-    schema_path = (
-        Path(__file__).parent.parent.parent
-        / "schemas"
-        / "agents"
-        / "core"
-        / "moment-builder.yaml"
-    )
-
-    if not schema_path.exists():
-        raise FileNotFoundError(f"MomentBuilder schema not found: {schema_path}")
-
-    with open(schema_path) as f:
-        agent_schema = yaml.safe_load(f)
+    agent_schema = load_agent_schema("moment-builder")
 
     # Prepare input data for agent
     input_data = {

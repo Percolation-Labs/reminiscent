@@ -163,7 +163,22 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     """
-    Create and configure the FastAPI application.
+    Create and configure the FastAPI application with MCP server.
+
+    The returned app exposes `app.mcp_server` (FastMCP instance) for adding
+    custom tools, resources, and prompts:
+
+        app = create_app()
+
+        @app.mcp_server.tool()
+        async def my_tool(query: str) -> dict:
+            '''Custom MCP tool.'''
+            return {"result": query}
+
+        @app.mcp_server.resource("custom://data")
+        async def my_resource() -> str:
+            '''Custom resource.'''
+            return '{"data": "value"}'
 
     Design Pattern:
     1. Create MCP server
@@ -174,9 +189,10 @@ def create_app() -> FastAPI:
     6. Define health endpoints
     7. Register API routers
     8. Mount MCP app
+    9. Expose mcp_server on app for extension
 
     Returns:
-        Configured FastAPI application
+        Configured FastAPI application with .mcp_server attribute
     """
     # Create MCP server and get HTTP app
     # path="/" creates routes at root, then mount at /api/v1/mcp
@@ -228,6 +244,11 @@ def create_app() -> FastAPI:
 
     # Add SSE buffering middleware (for MCP SSE transport)
     app.add_middleware(SSEBufferingMiddleware)
+    
+    # Add Anonymous Tracking & Rate Limiting (Runs AFTER Auth if Auth is enabled)
+    # Must be added BEFORE AuthMiddleware in code to be INNER in the stack
+    from .middleware.tracking import AnonymousTrackingMiddleware
+    app.add_middleware(AnonymousTrackingMiddleware)
 
     # Add authentication middleware (if enabled)
     if settings.auth.enabled:
@@ -304,6 +325,10 @@ def create_app() -> FastAPI:
 
     # Mount MCP app at /api/v1/mcp
     app.mount("/api/v1/mcp", mcp_app)
+
+    # Expose MCP server on app for extension
+    # Users can add tools/resources/prompts via app.mcp_server
+    app.mcp_server = mcp_server  # type: ignore[attr-defined]
 
     return app
 

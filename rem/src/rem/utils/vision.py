@@ -11,13 +11,15 @@ markdown descriptions of images.
 """
 
 import base64
-import os
 from enum import Enum
 from pathlib import Path
 from typing import Optional
 
 import requests
 from loguru import logger
+
+from rem.utils.constants import HTTP_TIMEOUT_LONG, VISION_MAX_TOKENS
+from rem.utils.mime_types import EXTENSION_TO_MIME
 
 
 class VisionProvider(str, Enum):
@@ -141,14 +143,7 @@ class ImageAnalyzer:
 
         # Detect media type
         suffix = image_path.suffix.lower()
-        media_type_map = {
-            ".png": "image/png",
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".gif": "image/gif",
-            ".webp": "image/webp",
-        }
-        media_type = media_type_map.get(suffix, "image/png")
+        media_type = EXTENSION_TO_MIME.get(suffix, "image/png")
 
         logger.info(f"Analyzing {image_path.name} with {self.provider.value} ({self.model})")
 
@@ -190,7 +185,7 @@ class ImageAnalyzer:
 
         body = {
             "model": self.model,
-            "max_tokens": 2048,
+            "max_tokens": VISION_MAX_TOKENS,
             "messages": [
                 {
                     "role": "user",
@@ -216,7 +211,7 @@ class ImageAnalyzer:
             "https://api.anthropic.com/v1/messages",
             headers=headers,
             json=body,
-            timeout=60.0,
+            timeout=HTTP_TIMEOUT_LONG,
         )
 
         if response.status_code != 200:
@@ -261,7 +256,7 @@ class ImageAnalyzer:
             url,
             params=params,
             json=body,
-            timeout=60.0,
+            timeout=HTTP_TIMEOUT_LONG,
         )
 
         if response.status_code != 200:
@@ -311,14 +306,14 @@ class ImageAnalyzer:
                     ],
                 }
             ],
-            "max_tokens": 2048,
+            "max_tokens": VISION_MAX_TOKENS,
         }
 
         response = requests.post(
             url,
             headers=headers,
             json=body,
-            timeout=60.0,
+            timeout=HTTP_TIMEOUT_LONG,
         )
 
         if response.status_code != 200:

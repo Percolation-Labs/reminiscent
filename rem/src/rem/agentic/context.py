@@ -72,7 +72,7 @@ class AgentContext(BaseModel):
     def get_user_id_or_default(
         user_id: str | None,
         source: str = "context",
-        default: str = "default",
+        default: str | None = None,
     ) -> str:
         """
         Get user_id or fallback to default with logging.
@@ -83,10 +83,10 @@ class AgentContext(BaseModel):
         Args:
             user_id: User identifier (may be None)
             source: Source of the call (for logging clarity)
-            default: Default value to use (default: "default")
+            default: Default value to use (default: settings.test.effective_user_id)
 
         Returns:
-            user_id if provided, otherwise default
+            user_id if provided, otherwise default from settings
 
         Example:
             # In MCP tool
@@ -105,8 +105,10 @@ class AgentContext(BaseModel):
             )
         """
         if user_id is None:
-            logger.debug(f"No user_id provided from {source}, using '{default}'")
-            return default
+            from rem.settings import settings
+            effective_default = default or settings.test.effective_user_id
+            logger.debug(f"No user_id provided from {source}, using '{effective_default}'")
+            return effective_default
         return user_id
 
     @classmethod

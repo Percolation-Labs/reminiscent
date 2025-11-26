@@ -65,12 +65,12 @@ This directory contains sample PDF documents for testing REM's document processi
 ```bash
 # Process all PDFs through file processor
 rem process files \
-  --tenant-id demo \
+   \
   --directory tests/data/content-examples/pdf
 
 # Run ontology extraction on processed files
 rem dreaming custom \
-  --tenant-id demo \
+   \
   --extractor cv-parser-v1
 
 # Query extracted data
@@ -103,7 +103,7 @@ docker cp tests/data/content-examples/pdf rem-api:/app/tests/data/content-exampl
 
 # Process files
 docker exec rem-api rem process files \
-  --tenant-id demo \
+   \
   --directory /app/tests/data/content-examples/pdf
 ```
 
@@ -123,25 +123,25 @@ See `rem/schemas/ontology_extractors/` for schema definitions.
 ### 1. Multi-Document Contract Analysis
 ```bash
 # Process all legal documents
-rem process files --tenant-id demo --file-pattern "*agreement*.pdf" --extractor contract-analyzer-v1
+rem process files  --file-pattern "*agreement*.pdf" --extractor contract-analyzer-v1
 ```
 
 ### 2. Candidate Screening
 ```bash
 # Extract candidate data from resumes
-rem process files --tenant-id demo --file-pattern "*resume*.pdf" --extractor cv-parser-v1
+rem process files  --file-pattern "*resume*.pdf" --extractor cv-parser-v1
 ```
 
 ### 3. Financial Analysis
 ```bash
 # Process financial documents
-rem process files --tenant-id demo --file-pattern "*financial*.pdf,*invoice*.pdf" --extractor financial-report-analyzer-v1
+rem process files  --file-pattern "*financial*.pdf,*invoice*.pdf" --extractor financial-report-analyzer-v1
 ```
 
 ### 4. Full Pipeline Test
 ```bash
 # Process all documents with dreaming workflow
-rem dreaming full --tenant-id demo --user-id test-user
+rem dreaming full  --user-id test-user
 
 # Query results
 rem ask "What candidates have we reviewed?"

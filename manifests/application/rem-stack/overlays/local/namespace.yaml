@@ -1,0 +1,8 @@
+# Namespace for local development
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rem-local
+  labels:
+    environment: local
+    app.kubernetes.io/part-of: rem-stack

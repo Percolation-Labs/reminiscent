@@ -251,7 +251,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
         }
 
         # Store messages with compression
-        store = SessionMessageStore(user_id=context.user_id or "default")
+        store = SessionMessageStore(user_id=context.user_id or settings.test.effective_user_id)
 
         await store.store_session_messages(
             session_id=context.session_id,

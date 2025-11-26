@@ -1,0 +1,119 @@
+# Local PostgreSQL Deployment
+# Standalone deployment for local development (not CloudNativePG)
+#
+# Key differences from production:
+# - Single pod (no HA)
+# - Ephemeral storage (data lost on restart)
+# - Simple auth (trust)
+# - No backup/restore
+#
+# The rem-postgres-rw service provides compatibility with production
+# manifests that reference CloudNativePG's naming convention.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-local
+  labels:
+    app: postgres-local
+    component: database
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-local
+  template:
+    metadata:
+      labels:
+        app: postgres-local
+        component: database
+    spec:
+      containers:
+        - name: postgres
+          image: pgvector/pgvector:pg18
+          ports:
+            - containerPort: 5432
+              name: postgres
+          env:
+            - name: POSTGRES_DB
+              value: rem
+            - name: POSTGRES_USER
+              value: rem
+            - name: POSTGRES_PASSWORD
+              value: rem
+            - name: POSTGRES_HOST_AUTH_METHOD
+              value: trust
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          livenessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - rem
+                - -d
+                - rem
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - rem
+                - -d
+                - rem
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: postgres-data
+          emptyDir: {}  # Ephemeral for local dev
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-local
+  labels:
+    app: postgres-local
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5432
+      targetPort: postgres
+      protocol: TCP
+      name: postgres
+  selector:
+    app: postgres-local
+
+---
+# Alias service for compatibility with production manifests
+# Production uses rem-postgres-rw (CloudNativePG naming convention)
+apiVersion: v1
+kind: Service
+metadata:
+  name: rem-postgres-rw
+  labels:
+    app: postgres-local
+    compatibility: cloudnativepg
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5432
+      targetPort: postgres
+      protocol: TCP
+      name: postgres
+  selector:
+    app: postgres-local

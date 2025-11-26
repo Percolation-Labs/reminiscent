@@ -1,0 +1,135 @@
+# -*- mode: python -*-
+# Tiltfile for REM Stack Local Development
+#
+# Usage:
+#   tilt up                        # Tier 1: docker-compose (default)
+#   tilt up -- --enable_minio      # Tier 2: + MinIO for S3 testing
+#   tilt up -- --k8s_mode          # Tier 3: Local Kubernetes
+#
+# Dashboard: http://localhost:10350
+
+# =============================================================================
+# Configuration
+# =============================================================================
+
+config.define_bool("enable_minio", False, "Enable MinIO for S3 testing")
+config.define_bool("k8s_mode", False, "Use local Kubernetes instead of docker-compose")
+cfg = config.parse()
+
+enable_minio = cfg.get("enable_minio", False)
+k8s_mode = cfg.get("k8s_mode", False)
+
+# =============================================================================
+# TIER 3: Local Kubernetes Mode
+# =============================================================================
+
+if k8s_mode:
+    print("Running in Kubernetes mode (requires kind/minikube)")
+
+    # Build REM image and load into local cluster
+    docker_build(
+        'rem-local',
+        context='../../rem',
+        dockerfile='../../rem/Dockerfile',
+        live_update=[
+            sync('../../rem/src', '/app/src'),
+        ]
+    )
+
+    # Apply local Kustomize overlay (uses production manifests as base)
+    # Path: manifests/application/rem-stack/overlays/local
+    k8s_yaml(kustomize('../application/rem-stack/overlays/local'))
+
+    # Configure K8s resources
+    k8s_resource('postgres-local',
+        port_forwards=['5432:5432'],
+        labels=['database'],
+    )
+
+    k8s_resource('rem-api',
+        port_forwards=['8000:8000'],
+        resource_deps=['postgres-local'],
+        labels=['app'],
+        links=[
+            link('http://localhost:8000', 'API'),
+            link('http://localhost:8000/docs', 'Swagger UI'),
+        ],
+    )
+
+    # Note: file-processor not included in local overlay (uses KEDA CRDs)
+    # Use docker-compose mode (Tier 1) if you need the worker
+
+# =============================================================================
+# TIER 1 & 2: Docker Compose Mode
+# =============================================================================
+
+else:
+    print("Running in Docker Compose mode")
+
+    compose_files = ['../../rem/docker-compose.yml']
+    if enable_minio:
+        compose_files.append('./docker-compose.minio.yml')
+        print("   + MinIO enabled for S3 testing")
+
+    docker_compose(compose_files)
+
+    # Configure resources with UI enhancements
+    dc_resource('postgres', labels=['database'])
+
+    dc_resource('api',
+        labels=['app'],
+        resource_deps=['postgres'],
+        links=[
+            link('http://localhost:8000', 'API'),
+            link('http://localhost:8000/docs', 'Swagger UI'),
+        ],
+    )
+
+    dc_resource('worker', labels=['app'], resource_deps=['postgres'])
+
+    if enable_minio:
+        dc_resource('minio', labels=['storage'])
+
+# =============================================================================
+# Developer Task Buttons (Full Suite)
+# =============================================================================
+
+local_resource(
+    'db-migrate',
+    cmd='cd ../../rem && uv run rem db migrate',
+    labels=['tasks'],
+    auto_init=False,
+    trigger_mode=TRIGGER_MODE_MANUAL,
+)
+
+local_resource(
+    'test-integration',
+    cmd='cd ../../rem && uv run pytest tests/integration/ -v -m "not llm" --tb=short',
+    labels=['tasks'],
+    auto_init=False,
+    trigger_mode=TRIGGER_MODE_MANUAL,
+)
+
+local_resource(
+    'type-check',
+    cmd='cd ../../rem && ./scripts/run_mypy.sh',
+    labels=['tasks'],
+    auto_init=False,
+    trigger_mode=TRIGGER_MODE_MANUAL,
+)
+
+local_resource(
+    'health-check',
+    cmd='curl -sf http://localhost:8000/health | head -c 200 || echo "API not ready"',
+    labels=['tasks'],
+    auto_init=False,
+    trigger_mode=TRIGGER_MODE_MANUAL,
+)
+
+local_resource(
+    'db-reset',
+    cmd='docker compose -f ../../rem/docker-compose.yml down -v postgres && docker compose -f ../../rem/docker-compose.yml up -d postgres',
+    labels=['tasks'],
+    auto_init=False,
+    trigger_mode=TRIGGER_MODE_MANUAL,
+)

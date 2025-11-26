@@ -2,16 +2,26 @@
 
 import json
 import multiprocessing
-import os
 import random
 import subprocess
 import sys
-import tempfile
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Optional
 
 from loguru import logger
+
+from rem.utils.constants import (
+    AUDIO_CHUNK_TARGET_SECONDS,
+    AUDIO_CHUNK_WINDOW_SECONDS,
+    MIN_SILENCE_MS,
+    SILENCE_THRESHOLD_DB,
+    SUBPROCESS_TIMEOUT_SECONDS,
+    WAV_HEADER_MIN_BYTES,
+    WHISPER_COST_PER_MINUTE,
+)
+from rem.utils.files import temp_file_from_bytes
+from rem.utils.mime_types import get_extension
 
 
 class ContentProvider(ABC):
@@ -132,10 +142,9 @@ import sys
 from pathlib import Path
 from kreuzberg import ExtractionConfig, extract_file_sync
 
-# Parse document without table extraction (avoids PyTorch dependency)
-# Table extraction requires PyTorch which is 1GB+ dependency
+# Parse document with kreuzberg 3.x
 config = ExtractionConfig(
-    extract_tables=False,  # Disabled - requires PyTorch
+    extract_tables=True,
     chunk_content=False,
     extract_keywords=False,
 )
@@ -145,7 +154,7 @@ result = extract_file_sync(Path(sys.argv[1]), config=config)
 # Serialize result to JSON
 output = {
     'content': result.content,
-    'tables': [],  # Table extraction disabled
+    'tables': [t.model_dump() for t in result.tables] if result.tables else [],
     'metadata': result.metadata
 }
 print(json.dumps(output))
@@ -156,7 +165,7 @@ print(json.dumps(output))
             [sys.executable, "-c", script, str(file_path)],
             capture_output=True,
             text=True,
-            timeout=300,  # 5 minute timeout
+            timeout=SUBPROCESS_TIMEOUT_SECONDS,
         )
 
         if result.returncode != 0:
@@ -178,21 +187,9 @@ print(json.dumps(output))
         # Write bytes to temp file for kreuzberg
         # Detect extension from metadata
         content_type = metadata.get("content_type", "")
-        extension_map = {
-            "application/pdf": ".pdf",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
-            "image/png": ".png",
-            "image/jpeg": ".jpg",
-        }
-        suffix = extension_map.get(content_type, ".pdf")  # Default to PDF
+        suffix = get_extension(content_type, default=".pdf")
 
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-            tmp.write(content)
-            tmp_path = Path(tmp.name)
-
-        try:
+        with temp_file_from_bytes(content, suffix=suffix) as tmp_path:
             # Check if running in daemon process
             if self._is_daemon_process():
                 logger.info("Daemon process detected - using subprocess workaround for document parsing")
@@ -206,7 +203,7 @@ print(json.dumps(output))
                     }
                 except Exception as e:
                     logger.error(f"Subprocess parsing failed: {e}. Falling back to text-only.")
-                    # Fallback to simple text extraction
+                    # Fallback to simple text extraction (kreuzberg 3.x API)
                     from kreuzberg import ExtractionConfig, extract_file_sync
                     config = ExtractionConfig(extract_tables=False)
                     result = extract_file_sync(tmp_path, config=config)
@@ -216,20 +213,17 @@ print(json.dumps(output))
                         "file_extension": tmp_path.suffix,
                     }
             else:
-                # Normal execution (not in daemon)
+                # Normal execution (not in daemon) - kreuzberg 4.x with native ONNX/Rust
                 from kreuzberg import ExtractionConfig, extract_file_sync
-                # Disable table extraction to avoid gmft/PyTorch dependency
-                # Table extraction requires PyTorch which is 1GB+ dependency
-                # Future: Re-enable with native TATR-based extraction in Kreuzberg v4
                 config = ExtractionConfig(
-                    extract_tables=False,  # Disabled - requires PyTorch
-                    chunk_content=False,
-                    extract_keywords=False,
+                    enable_quality_processing=True,  # Enables table extraction with native ONNX
+                    chunk_content=False,  # We handle chunking ourselves
+                    extract_tables=False,  # Disable table extraction to avoid PyTorch dependency
                 )
                 result = extract_file_sync(tmp_path, config=config)
                 text = result.content
                 extraction_metadata = {
-                    "table_count": 0,  # Table extraction disabled
+                    "table_count": len(result.tables) if result.tables else 0,
                     "parser": "kreuzberg",
                     "file_extension": tmp_path.suffix,
                 }
@@ -238,10 +232,6 @@ print(json.dumps(output))
                 "text": text,
                 "metadata": extraction_metadata,
             }
-
-        finally:
-            # Clean up temp file
-            tmp_path.unlink(missing_ok=True)
 
 
 class AudioProvider(ContentProvider):
@@ -287,19 +277,20 @@ class AudioProvider(ContentProvider):
             ValueError: If OpenAI API key missing
         """
         # Handle empty or invalid content
-        if not content or len(content) < 44:  # WAV header is minimum 44 bytes
+        if not content or len(content) < WAV_HEADER_MIN_BYTES:
             logger.warning("Audio content too small to be valid WAV file")
             return {
                 "text": "[Invalid or empty audio file]",
                 "metadata": {"error": "invalid_content", "size": len(content)},
             }
 
-        # Check for OpenAI API key
-        api_key = os.getenv("OPENAI_API_KEY")
+        # Check for OpenAI API key (use settings)
+        from rem.settings import settings
+        api_key = settings.llm.openai_api_key
         if not api_key:
-            logger.warning("No OPENAI_API_KEY found - audio transcription disabled")
+            logger.warning("No OpenAI API key found - audio transcription disabled")
             return {
-                "text": "[Audio transcription requires OPENAI_API_KEY environment variable]",
+                "text": "[Audio transcription requires LLM__OPENAI_API_KEY to be set]",
                 "metadata": {"error": "missing_api_key"},
             }
 
@@ -316,83 +307,74 @@ class AudioProvider(ContentProvider):
         # Write bytes to temp file
         # Detect extension from metadata or use .wav as fallback
         content_type = metadata.get("content_type", "audio/wav")
-        extension_map = {
-            "audio/wav": ".wav",
-            "audio/mpeg": ".mp3",
-            "audio/mp4": ".m4a",
-            "audio/x-m4a": ".m4a",
-            "audio/flac": ".flac",
-            "audio/ogg": ".ogg",
-        }
-        extension = extension_map.get(content_type, ".wav")
+        extension = get_extension(content_type, default=".wav")
 
-        with tempfile.NamedTemporaryFile(suffix=extension, delete=False) as tmp:
-            tmp.write(content)
-            tmp_path = Path(tmp.name)
+        chunker = None
+        chunks = None
 
-        try:
-            logger.info(f"Processing audio file: {tmp_path.name} ({len(content) / 1024 / 1024:.1f} MB)")
-
-            # Step 1: Chunk audio by silence
-            chunker = AudioChunker(
-                target_chunk_seconds=60.0,
-                chunk_window_seconds=2.0,
-                silence_threshold_db=-40.0,
-                min_silence_ms=500,
-            )
-
-            chunks = chunker.chunk_audio(tmp_path)
-            logger.info(f"Created {len(chunks)} audio chunks")
-
-            # Step 2: Transcribe chunks
-            transcriber = AudioTranscriber(api_key=api_key)
-            results = transcriber.transcribe_chunks(chunks)
-            logger.info(f"Transcribed {len(results)} chunks")
-
-            # Step 3: Combine into markdown format
-            # Format: Each chunk becomes a section with timestamp
-            markdown_parts = []
-            for result in results:
-                timestamp = f"{result.start_seconds:.1f}s - {result.end_seconds:.1f}s"
-                markdown_parts.append(f"## [{timestamp}]\n\n{result.text}\n")
-
-            markdown_text = "\n".join(markdown_parts)
-
-            # Calculate metadata
-            total_duration = sum(r.duration_seconds for r in results)
-            estimated_cost = (total_duration / 60) * 0.006  # $0.006 per minute
-            successful_chunks = sum(1 for r in results if r.confidence > 0)
-
-            extraction_metadata = {
-                "chunk_count": len(chunks),
-                "transcribed_chunks": successful_chunks,
-                "duration_seconds": total_duration,
-                "estimated_cost": estimated_cost,
-                "parser": "whisper_api",
-            }
-
-            logger.info(
-                f"Transcription complete: {successful_chunks}/{len(chunks)} chunks, "
-                f"${estimated_cost:.3f} cost"
-            )
-
-            return {
-                "text": markdown_text,
-                "metadata": extraction_metadata,
-            }
-
-        except Exception as e:
-            logger.error(f"Audio extraction failed: {e}")
-            raise RuntimeError(f"Audio transcription failed: {e}") from e
-
-        finally:
-            # Clean up temp file and chunks
+        with temp_file_from_bytes(content, suffix=extension) as tmp_path:
             try:
-                tmp_path.unlink(missing_ok=True)
-                if 'chunker' in locals() and 'chunks' in locals():
-                    chunker.cleanup_chunks(chunks)
+                logger.info(f"Processing audio file: {tmp_path.name} ({len(content) / 1024 / 1024:.1f} MB)")
+
+                # Step 1: Chunk audio by silence
+                chunker = AudioChunker(
+                    target_chunk_seconds=AUDIO_CHUNK_TARGET_SECONDS,
+                    chunk_window_seconds=AUDIO_CHUNK_WINDOW_SECONDS,
+                    silence_threshold_db=SILENCE_THRESHOLD_DB,
+                    min_silence_ms=MIN_SILENCE_MS,
+                )
+
+                chunks = chunker.chunk_audio(tmp_path)
+                logger.info(f"Created {len(chunks)} audio chunks")
+
+                # Step 2: Transcribe chunks
+                transcriber = AudioTranscriber(api_key=api_key)
+                results = transcriber.transcribe_chunks(chunks)
+                logger.info(f"Transcribed {len(results)} chunks")
+
+                # Step 3: Combine into markdown format
+                # Format: Each chunk becomes a section with timestamp
+                markdown_parts = []
+                for result in results:
+                    timestamp = f"{result.start_seconds:.1f}s - {result.end_seconds:.1f}s"
+                    markdown_parts.append(f"## [{timestamp}]\n\n{result.text}\n")
+
+                markdown_text = "\n".join(markdown_parts)
+
+                # Calculate metadata
+                total_duration = sum(r.duration_seconds for r in results)
+                estimated_cost = (total_duration / 60) * WHISPER_COST_PER_MINUTE
+                successful_chunks = sum(1 for r in results if r.confidence > 0)
+
+                extraction_metadata = {
+                    "chunk_count": len(chunks),
+                    "transcribed_chunks": successful_chunks,
+                    "duration_seconds": total_duration,
+                    "estimated_cost": estimated_cost,
+                    "parser": "whisper_api",
+                }
+
+                logger.info(
+                    f"Transcription complete: {successful_chunks}/{len(chunks)} chunks, "
+                    f"${estimated_cost:.3f} cost"
+                )
+
+                return {
+                    "text": markdown_text,
+                    "metadata": extraction_metadata,
+                }
+
             except Exception as e:
-                logger.warning(f"Cleanup failed: {e}")
+                logger.error(f"Audio extraction failed: {e}")
+                raise RuntimeError(f"Audio transcription failed: {e}") from e
+
+            finally:
+                # Clean up audio chunks (temp file cleanup handled by context manager)
+                if chunker is not None and chunks is not None:
+                    try:
+                        chunker.cleanup_chunks(chunks)
+                    except Exception as e:
+                        logger.warning(f"Chunk cleanup failed: {e}")
 
 
 class SchemaProvider(ContentProvider):
@@ -670,19 +652,9 @@ class ImageProvider(ContentProvider):
 
                 # Write bytes to temp file for analysis
                 content_type = metadata.get("content_type", "image/png")
-                extension_map = {
-                    "image/png": ".png",
-                    "image/jpeg": ".jpg",
-                    "image/gif": ".gif",
-                    "image/webp": ".webp",
-                }
-                extension = extension_map.get(content_type, ".png")
+                extension = get_extension(content_type, default=".png")
 
-                with tempfile.NamedTemporaryFile(suffix=extension, delete=False) as tmp:
-                    tmp.write(content)
-                    tmp_path = Path(tmp.name)
-
-                try:
+                with temp_file_from_bytes(content, suffix=extension) as tmp_path:
                     # Analyze image
                     result = analyzer.analyze_image(tmp_path)
                     vision_description = result.description
@@ -690,9 +662,6 @@ class ImageProvider(ContentProvider):
                     vision_model = result.model
 
                     logger.info(f"Vision analysis complete: {len(vision_description)} chars")
-                finally:
-                    # Clean up temp file
-                    tmp_path.unlink(missing_ok=True)
 
             except ImportError as e:
                 logger.warning(f"Vision analysis not available: {e}")
@@ -735,19 +704,9 @@ class ImageProvider(ContentProvider):
                 if embedder.is_available():
                     # Write bytes to temp file for CLIP embedding
                     content_type = metadata.get("content_type", "image/png")
-                    extension_map = {
-                        "image/png": ".png",
-                        "image/jpeg": ".jpg",
-                        "image/gif": ".gif",
-                        "image/webp": ".webp",
-                    }
-                    extension = extension_map.get(content_type, ".png")
+                    extension = get_extension(content_type, default=".png")
 
-                    with tempfile.NamedTemporaryFile(suffix=extension, delete=False) as tmp:
-                        tmp.write(content)
-                        tmp_path = Path(tmp.name)
-
-                    try:
+                    with temp_file_from_bytes(content, suffix=extension) as tmp_path:
                         # Generate CLIP embedding
                         result = embedder.embed_image(tmp_path)
                         if result:
@@ -757,9 +716,6 @@ class ImageProvider(ContentProvider):
                             logger.info(
                                 f"CLIP embedding generated: {clip_dimensions} dims, {clip_tokens} tokens"
                             )
-                    finally:
-                        # Clean up temp file
-                        tmp_path.unlink(missing_ok=True)
                 else:
                     logger.debug(
                         "CLIP embeddings disabled - set CONTENT__JINA_API_KEY to enable. "

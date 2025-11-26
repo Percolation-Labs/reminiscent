@@ -163,6 +163,27 @@ pytest tests/integration/services/
 pytest tests/integration/ -k "not (postgres or redis)"
 ```
 
+### Cost-Effective LLM Testing
+
+**Recommended:** Use `openai:gpt-4.1-nano` for development and CI to minimize API costs:
+
+```bash
+# Run non-LLM integration tests (fast, no API costs)
+REM_SKIP_CONFIG_FILE=true pytest tests/integration/ -m "not llm" -v
+
+# Run LLM tests with cheap model (for development)
+REM_SKIP_CONFIG_FILE=true LLM__DEFAULT_MODEL=openai:gpt-4.1-nano pytest tests/integration/ -m "llm" -v
+
+# Run all tests with cheap model
+REM_SKIP_CONFIG_FILE=true LLM__DEFAULT_MODEL=openai:gpt-4.1-nano pytest tests/integration/ -v
+```
+
+**Note:** Some tests may fail with smaller models due to:
+- `UsageLimitExceeded` - smaller models need more turns, hitting the 20-request limit
+- Query format differences - smaller models may not generate exact expected query syntax
+
+These are model-specific behaviors, not code regressions. For release validation, use the default model (`anthropic:claude-sonnet-4-5-20250929`).
+
 ### Watch Mode (Development)
 ```bash
 # Re-run tests on file changes

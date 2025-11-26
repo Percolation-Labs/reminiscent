@@ -20,7 +20,6 @@ Usage:
     embeddings = generate_embeddings("openai:text-embedding-3-small", texts)
 """
 
-import os
 from typing import Any, cast
 
 import requests
@@ -29,6 +28,16 @@ from tenacity import (
     retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
+)
+
+from rem.utils.constants import (
+    HTTP_TIMEOUT_LONG,
+    OPENAI_EMBEDDING_DIMS_SMALL,
+    OPENAI_EMBEDDING_DIMS_LARGE,
+    VOYAGE_EMBEDDING_DIMS,
+    RETRY_BACKOFF_MULTIPLIER,
+    RETRY_BACKOFF_MIN,
+    RETRY_BACKOFF_MAX,
 )
 
 
@@ -166,7 +175,11 @@ def _create_retry_decorator(max_retries: int):
     return retry(
         retry=retry_if_exception_type(RateLimitError),
         stop=stop_after_attempt(max_retries),
-        wait=wait_exponential(multiplier=1, min=1, max=60),
+        wait=wait_exponential(
+            multiplier=RETRY_BACKOFF_MULTIPLIER,
+            min=RETRY_BACKOFF_MIN,
+            max=RETRY_BACKOFF_MAX,
+        ),
         reraise=True,
     )
 
@@ -234,7 +247,7 @@ def _generate_openai_embeddings(
     }
 
     try:
-        response = requests.post(url, json=payload, headers=headers, timeout=60)
+        response = requests.post(url, json=payload, headers=headers, timeout=HTTP_TIMEOUT_LONG)
 
         # Handle rate limits
         if response.status_code == 429:
@@ -334,7 +347,7 @@ def _generate_voyage_embeddings(
     }
 
     try:
-        response = requests.post(url, json=payload, headers=headers, timeout=60)
+        response = requests.post(url, json=payload, headers=headers, timeout=HTTP_TIMEOUT_LONG)
 
         # Handle rate limits
         if response.status_code == 429:

@@ -392,6 +392,29 @@ Middleware runs in reverse order of addition:
 
 ## Error Responses
 
+### 429 - Rate Limit Exceeded
+
+When a user exceeds their rate limit (based on their tier), the API returns a 429 status code with a structured error body. The frontend should intercept this error to prompt the user to sign in or upgrade.
+
+```json
+{
+  "error": {
+    "code": "rate_limit_exceeded",
+    "message": "You have exceeded your rate limit. Please sign in or upgrade to continue.",
+    "details": {
+      "limit": 50,
+      "tier": "anonymous",
+      "retry_after": 60
+    }
+  }
+}
+```
+
+**Handling Strategy:**
+1.  **Intercept 429s:** API client should listen for `status === 429`.
+2.  **Check Code:** If `error.code === 'rate_limit_exceeded'` AND `error.details.tier === 'anonymous'`, trigger "Login / Sign Up" flow.
+3.  **Authenticated Users:** If `tier !== 'anonymous'`, prompt to upgrade plan.
+
 ### 500 - Agent Schema Not Found
 
 ```json

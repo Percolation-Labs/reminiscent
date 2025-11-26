@@ -5,12 +5,19 @@ Provides synchronous and async wrappers for embedding generation using
 raw HTTP requests (no OpenAI SDK dependency).
 """
 
-import os
 from typing import Optional, cast
 
 import httpx
 import requests
 from loguru import logger
+
+from rem.utils.constants import DEFAULT_EMBEDDING_DIMS, HTTP_TIMEOUT_DEFAULT
+
+
+def _get_openai_api_key() -> Optional[str]:
+    """Get OpenAI API key from settings."""
+    from rem.settings import settings
+    return settings.llm.openai_api_key
 
 
 def generate_embedding(
@@ -26,16 +33,16 @@ def generate_embedding(
         text: Text to embed
         model: Model name (default: text-embedding-3-small)
         provider: Provider name (default: openai)
-        api_key: API key (defaults to OPENAI_API_KEY env var)
+        api_key: API key (defaults to settings.llm.openai_api_key)
 
     Returns:
         Embedding vector (1536 dimensions for text-embedding-3-small)
     """
     if provider == "openai":
-        api_key = api_key or os.getenv("OPENAI_API_KEY")
+        api_key = api_key or _get_openai_api_key()
         if not api_key:
             logger.warning("No OpenAI API key - returning zero vector")
-            return [0.0] * 1536
+            return [0.0] * DEFAULT_EMBEDDING_DIMS
 
         try:
             logger.info(f"Generating OpenAI embedding for text using {model}")
@@ -47,7 +54,7 @@ def generate_embedding(
                     "Content-Type": "application/json",
                 },
                 json={"input": [text], "model": model},
-                timeout=30,
+                timeout=HTTP_TIMEOUT_DEFAULT,
             )
             response.raise_for_status()
 
@@ -58,11 +65,11 @@ def generate_embedding(
 
         except Exception as e:
             logger.error(f"Failed to generate embedding from OpenAI: {e}", exc_info=True)
-            return [0.0] * 1536
+            return [0.0] * DEFAULT_EMBEDDING_DIMS
 
     else:
         logger.warning(f"Unsupported provider '{provider}' - returning zero vector")
-        return [0.0] * 1536
+        return [0.0] * DEFAULT_EMBEDDING_DIMS
 
 
 async def generate_embedding_async(
@@ -78,16 +85,16 @@ async def generate_embedding_async(
         text: Text to embed
         model: Model name (default: text-embedding-3-small)
         provider: Provider name (default: openai)
-        api_key: API key (defaults to OPENAI_API_KEY env var)
+        api_key: API key (defaults to settings.llm.openai_api_key)
 
     Returns:
         Embedding vector (1536 dimensions for text-embedding-3-small)
     """
     if provider == "openai":
-        api_key = api_key or os.getenv("OPENAI_API_KEY")
+        api_key = api_key or _get_openai_api_key()
         if not api_key:
             logger.warning("No OpenAI API key - returning zero vector")
-            return [0.0] * 1536
+            return [0.0] * DEFAULT_EMBEDDING_DIMS
 
         try:
             logger.info(f"Generating OpenAI embedding for text using {model}")
@@ -100,7 +107,7 @@ async def generate_embedding_async(
                         "Content-Type": "application/json",
                     },
                     json={"input": [text], "model": model},
-                    timeout=30.0,
+                    timeout=HTTP_TIMEOUT_DEFAULT,
                 )
                 response.raise_for_status()
 
@@ -113,8 +120,8 @@ async def generate_embedding_async(
 
         except Exception as e:
             logger.error(f"Failed to generate embedding from OpenAI: {e}", exc_info=True)
-            return [0.0] * 1536
+            return [0.0] * DEFAULT_EMBEDDING_DIMS
 
     else:
         logger.warning(f"Unsupported provider '{provider}' - returning zero vector")
-        return [0.0] * 1536
+        return [0.0] * DEFAULT_EMBEDDING_DIMS

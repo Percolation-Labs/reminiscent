@@ -341,7 +341,7 @@ After integration tests pass:
 
 1. **Embedding Generation**
    ```bash
-   python -m rem.workers.embedding_worker --tenant-id=acme-corp
+   python -m rem.workers.embedding_worker 
    ```
 
 2. **Query Testing**
@@ -356,7 +356,7 @@ After integration tests pass:
 
 4. **Dreaming Worker**
    ```bash
-   python -m rem.cli.dreaming full --tenant-id=acme-corp
+   python -m rem.cli.dreaming full 
    ```
 
 ## Quick Reference

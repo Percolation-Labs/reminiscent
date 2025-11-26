@@ -53,7 +53,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, TYPE_CHECKING, cast
 
-import pandas as pd
+import polars as pl
 from loguru import logger
 
 from .config import PhoenixConfig
@@ -62,6 +62,95 @@ if TYPE_CHECKING:
     from phoenix.client import Client
     from phoenix.client.resources.datasets import Dataset
     from phoenix.client.resources.experiments.types import RanExperiment
+
+
+def dataframe_to_phoenix_dataset(
+    client: "PhoenixClient",
+    df: pl.DataFrame,
+    dataset_name: str,
+    input_keys: list[str] | None = None,
+    output_keys: list[str] | None = None,
+    metadata_keys: list[str] | None = None,
+    description: str | None = None,
+) -> "Dataset":
+    """Convert a Polars DataFrame to a Phoenix Dataset.
+
+    This function transforms a Polars DataFrame into a Phoenix Dataset by:
+    1. Extracting input columns (what agents receive)
+    2. Extracting output columns (ground truth/expected output)
+    3. Extracting metadata columns (optional labels, difficulty, etc.)
+
+    If column keys are not specified, uses smart defaults:
+    - input_keys: columns containing 'input', 'query', 'question', or 'prompt'
+    - output_keys: columns containing 'output', 'expected', 'answer', or 'response'
+    - metadata_keys: remaining columns
+
+    Args:
+        client: PhoenixClient instance
+        df: Polars DataFrame with experiment data
+        dataset_name: Name for the created Phoenix dataset
+        input_keys: Optional list of column names for inputs
+        output_keys: Optional list of column names for outputs (ground truth)
+        metadata_keys: Optional list of column names for metadata
+        description: Optional dataset description
+
+    Returns:
+        Phoenix Dataset instance
+
+    Example:
+        >>> df = pl.read_csv("golden_set.csv")
+        >>> dataset = dataframe_to_phoenix_dataset(
+        ...     client=phoenix_client,
+        ...     df=df,
+        ...     dataset_name="my-golden-set",
+        ...     input_keys=["query"],
+        ...     output_keys=["expected_output"],
+        ...     metadata_keys=["difficulty"]
+        ... )
+    """
+    columns = df.columns
+
+    # Smart defaults for column detection
+    if input_keys is None:
+        input_keys = [c for c in columns if any(
+            k in c.lower() for k in ["input", "query", "question", "prompt"]
+        )]
+        if not input_keys:
+            # Fallback: first column
+            input_keys = [columns[0]] if columns else []
+
+    if output_keys is None:
+        output_keys = [c for c in columns if any(
+            k in c.lower() for k in ["output", "expected", "answer", "response", "reference"]
+        )]
+        if not output_keys:
+            # Fallback: second column
+            output_keys = [columns[1]] if len(columns) > 1 else []
+
+    if metadata_keys is None:
+        used_keys = set(input_keys) | set(output_keys)
+        metadata_keys = [c for c in columns if c not in used_keys]
+
+    logger.debug(
+        f"DataFrame to Phoenix Dataset: inputs={input_keys}, "
+        f"outputs={output_keys}, metadata={metadata_keys}"
+    )
+
+    # Convert to list of dicts
+    records = df.to_dicts()
+
+    inputs = [{k: row.get(k) for k in input_keys} for row in records]
+    outputs = [{k: row.get(k) for k in output_keys} for row in records]
+    metadata = [{k: row.get(k) for k in metadata_keys} for row in records] if metadata_keys else None
+
+    # Create Phoenix dataset
+    return client.create_dataset_from_data(
+        name=dataset_name,
+        inputs=inputs,
+        outputs=outputs,
+        metadata=metadata,
+        description=description,
+    )
 
 
 class PhoenixClient:
@@ -260,19 +349,22 @@ class PhoenixClient:
             "SEARCH semantic AI engineer",sarah-chen,person,medium,SEARCH
         """
         try:
-            # Load CSV
-            df = pd.read_csv(csv_file_path)
+            # Load CSV with Polars
+            df = pl.read_csv(csv_file_path)
+
+            # Convert to list of dicts
+            records = df.to_dicts()
 
             # Extract inputs
-            inputs = cast(list[dict[str, Any]], df[input_keys].to_dict("records"))
+            inputs = [{k: row.get(k) for k in input_keys} for row in records]
 
             # Extract outputs
-            outputs = cast(list[dict[str, Any]], df[output_keys].to_dict("records"))
+            outputs = [{k: row.get(k) for k in output_keys} for row in records]
 
             # Extract metadata if specified
             metadata = None
             if metadata_keys:
-                metadata = cast(list[dict[str, Any]], df[metadata_keys].to_dict("records"))
+                metadata = [{k: row.get(k) for k in metadata_keys} for row in records]
 
             return self.create_dataset_from_data(
                 name=name,
@@ -331,13 +423,16 @@ class PhoenixClient:
 
     def run_experiment(
         self,
-        dataset: "Dataset" | str,
+        dataset: "Dataset" | str | pl.DataFrame,
         task: Callable[[Any], Any] | None = None,
         evaluators: list[Callable[[Any], Any]] | None = None,
         experiment_name: str | None = None,
         experiment_description: str | None = None,
         experiment_metadata: dict[str, Any] | None = None,
         experiment_config: Any | None = None,
+        input_keys: list[str] | None = None,
+        output_keys: list[str] | None = None,
+        metadata_keys: list[str] | None = None,
     ) -> "RanExperiment":
         """Run an evaluation experiment.
 
@@ -346,14 +441,22 @@ class PhoenixClient:
         2. Agent run: Provide task function to execute agents on dataset
         3. Evaluator run: Provide evaluators to score existing outputs
 
+        Dataset can be:
+        - Phoenix Dataset instance
+        - Dataset name (string) - will be loaded from Phoenix
+        - Polars DataFrame - will be converted to Phoenix Dataset
+
         Args:
-            dataset: Dataset instance or name (required unless experiment_config provided)
+            dataset: Dataset instance, name, or Polars DataFrame
             task: Optional task function to run on each example (agent execution)
             evaluators: Optional list of evaluator functions
             experiment_name: Optional experiment name
             experiment_description: Optional description
             experiment_metadata: Optional metadata dict
             experiment_config: Optional ExperimentConfig instance (overrides other params)
+            input_keys: Column names for inputs (required if dataset is DataFrame)
+            output_keys: Column names for outputs (required if dataset is DataFrame)
+            metadata_keys: Optional column names for metadata
 
         Returns:
             RanExperiment with results
@@ -367,6 +470,16 @@ class PhoenixClient:
             ...     dataset="rem-lookup-golden",
             ...     task=run_agent,
             ...     experiment_name="rem-v1-baseline"
+            ... )
+
+        Example - With Polars DataFrame:
+            >>> df = pl.read_csv("golden_set.csv")
+            >>> experiment = client.run_experiment(
+            ...     dataset=df,
+            ...     task=run_agent,
+            ...     experiment_name="rem-v1-baseline",
+            ...     input_keys=["query"],
+            ...     output_keys=["expected_output"]
             ... )
 
         Example - Evaluator Run (Phase 2b):
@@ -406,6 +519,21 @@ class PhoenixClient:
                         )
                     else:
                         dataset = dataset_ref.path
+
+            # Convert Polars DataFrame to Phoenix Dataset
+            if isinstance(dataset, pl.DataFrame):
+                dataset_name_for_phoenix = f"{experiment_name or 'experiment'}-dataset-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+                logger.info(f"Converting Polars DataFrame to Phoenix Dataset: {dataset_name_for_phoenix}")
+                dataset = dataframe_to_phoenix_dataset(
+                    client=self,
+                    df=dataset,
+                    dataset_name=dataset_name_for_phoenix,
+                    input_keys=input_keys,
+                    output_keys=output_keys,
+                    metadata_keys=metadata_keys,
+                    description=f"Auto-created from DataFrame for experiment: {experiment_name}",
+                )
+                logger.info(f"✓ Created Phoenix Dataset: {dataset_name_for_phoenix}")
 
             # Load dataset if name provided
             if isinstance(dataset, str):
@@ -454,7 +582,7 @@ class PhoenixClient:
         root_spans_only: bool = True,
         trace_id: str | None = None,
         span_id: str | None = None,
-    ) -> pd.DataFrame:
+    ) -> pl.DataFrame:
         """Query traces from Phoenix.
 
         Args:
@@ -467,7 +595,7 @@ class PhoenixClient:
             span_id: Filter by specific span ID
 
         Returns:
-            DataFrame with trace data
+            Polars DataFrame with trace data
 
         Example:
             >>> traces = client.get_traces(
@@ -492,8 +620,11 @@ class PhoenixClient:
             if span_id:
                 query_params["span_id"] = span_id
 
-            # Query traces
-            traces_df = self._client.query_spans(limit=limit, **query_params)  # type: ignore[attr-defined]
+            # Query traces (Phoenix returns pandas DataFrame)
+            pandas_df = self._client.query_spans(limit=limit, **query_params)  # type: ignore[attr-defined]
+
+            # Convert pandas to Polars
+            traces_df = pl.from_pandas(pandas_df)
 
             logger.debug(f"Retrieved {len(traces_df)} traces")
             return traces_df
@@ -535,7 +666,7 @@ class PhoenixClient:
             ... )
         """
         try:
-            # Query traces
+            # Query traces (returns Polars DataFrame)
             traces_df = self.get_traces(
                 project_name=project_name,
                 start_time=start_time,
@@ -547,12 +678,15 @@ class PhoenixClient:
             if len(traces_df) == 0:
                 raise ValueError("No traces found matching criteria")
 
+            # Convert to list of dicts for iteration
+            records = traces_df.to_dicts()
+
             # Extract inputs and outputs from traces
             inputs = []
             outputs = []
             metadata = []
 
-            for _, row in traces_df.iterrows():
+            for row in records:
                 # Extract input
                 span_input = row.get("attributes.input")
                 if span_input:

@@ -65,3 +65,5 @@ Pulumi.*.yaml
 .cases
 .mypy_cache
 .claude
+.aplanned
+.venv-test

@@ -164,7 +164,7 @@ cp curated-queries.csv experiments/rem-001/validation/production/
 **Option C: Curated Engrams**
 ```bash
 # Generate engrams from REM data
-rem dreaming full --user-id test-user --tenant-id acme --generate-test-cases
+rem dreaming full --user-id test-user  --generate-test-cases
 
 # Review and select high-quality engrams
 rem engram list --quality high --limit 100 --output engrams.csv
@@ -357,7 +357,7 @@ Level 4 (Mature):   Multiple cycles, full query capabilities
 # Generate engrams from REM data
 rem dreaming full \
   --user-id test-user \
-  --tenant-id acme \
+   \
   --generate-test-cases \
   --quality-level 3
 
@@ -1027,7 +1027,7 @@ rem experiments experiment run rem-lookup-ask_rem-golden \
 
 ```bash
 # 1. Generate high-quality engrams
-rem dreaming full --tenant-id acme --generate-test-cases --quality-level 4
+rem dreaming full  --generate-test-cases --quality-level 4
 
 # 2. Export engrams
 rem engram export rem-engrams-mature-mixed --output engrams.csv --format phoenix

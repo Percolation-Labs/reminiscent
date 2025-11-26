@@ -97,6 +97,21 @@ spec:
             # Authentication configuration
             - name: AUTH__ENABLED
               value: "true"
+            - name: AUTH__SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: rem-llm-api-keys
+                  key: auth-session-secret
+            - name: AUTH__GOOGLE__CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: rem-llm-api-keys
+                  key: auth-google-client-id
+            - name: AUTH__GOOGLE__CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: rem-llm-api-keys
+                  key: auth-google-client-secret
             - name: AUTH__JWT_SECRET
               valueFrom:
                 secretKeyRef:

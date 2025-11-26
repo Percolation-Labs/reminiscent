@@ -578,8 +578,7 @@ def run(
     from rem.services.git import GitService
     from rem.services.phoenix import PhoenixClient
     from rem.agentic.providers.phoenix import create_evaluator_from_schema
-    from datetime import datetime
-    import pandas as pd
+    from rem.utils.date_utils import utc_now, to_iso, format_timestamp_for_experiment
     import os
 
     try:
@@ -615,36 +614,22 @@ def run(
             click.echo(f"  Mode: DRY RUN (no data will be saved)")
         click.echo()
 
-        # Load agent schema from Git or filesystem
+        # Load agent schema using centralized schema loader
         agent_name = config.agent_schema_ref.name
         agent_version = config.agent_schema_ref.version
 
         click.echo(f"Loading agent schema: {agent_name} (version: {agent_version or 'latest'})")
 
-        # Try Git first, fallback to filesystem
-        agent_schema = None
+        from rem.utils.schema_loader import load_agent_schema
+
         try:
-            git_svc = GitService()
-            agent_schema = git_svc.load_schema(agent_name, version=agent_version)
-            click.echo(f"✓ Loaded agent schema from Git")
-        except Exception as e:
-            logger.debug(f"Git not available, trying filesystem: {e}")
-
-            # Fallback to local filesystem
-            from rem.services.fs import FS
-            fs = FS()
-
-            schema_path = f"schemas/agents/{agent_name}.yaml"
-            try:
-                agent_schema = fs.read(schema_path)
-                click.echo(f"✓ Loaded agent schema from filesystem")
-            except Exception as fs_error:
-                logger.error(f"Failed to load agent schema: Git: {e}, FS: {fs_error}")
-                click.echo(f"Error: Could not load agent schema '{agent_name}'")
-                click.echo(f"  Tried Git: {e}")
-                click.echo(f"  Tried filesystem: {schema_path}")
-                click.echo(f"  Make sure the schema exists")
-                raise click.Abort()
+            agent_schema = load_agent_schema(agent_name)
+            click.echo(f"✓ Loaded agent schema: {agent_name}")
+        except FileNotFoundError as e:
+            logger.error(f"Failed to load agent schema: {e}")
+            click.echo(f"Error: Could not load agent schema '{agent_name}'")
+            click.echo(f"  {e}")
+            raise click.Abort()
 
         # Create agent function from schema
         from rem.agentic.providers.pydantic_ai import create_agent
@@ -683,73 +668,85 @@ def run(
                 return {"output": serialized}
             return serialized if isinstance(serialized, dict) else {"output": str(serialized)}
 
-        # Load evaluator schema
+        # Load evaluator schema using centralized schema loader
         evaluator_name = config.evaluator_schema_ref.name
         evaluator_version = config.evaluator_schema_ref.version
 
-        # Resolve evaluator path (evaluators are organized by agent name)
-        evaluator_schema_path = f"rem/schemas/evaluators/{agent_name}/{evaluator_name}.yaml"
-
         click.echo(f"Loading evaluator: {evaluator_name} for agent {agent_name}")
 
-        try:
-            evaluator_fn = create_evaluator_from_schema(
-                evaluator_schema_path=evaluator_schema_path,
-                model_name=None,  # Use default from schema
-            )
-            click.echo(f"✓ Loaded evaluator schema")
-        except Exception as e:
-            logger.warning(f"Failed to load evaluator: {e}")
-            click.echo(f"Error: Could not load evaluator schema")
-            click.echo(f"  Path: {evaluator_schema_path}")
-            click.echo(f"  Make sure the schema exists")
+        # Try multiple evaluator path patterns (agent-specific, then generic)
+        evaluator_paths_to_try = [
+            f"{agent_name}/{evaluator_name}",  # e.g., hello-world/default
+            f"{agent_name}-{evaluator_name}",  # e.g., hello-world-default
+            evaluator_name,                     # e.g., default (generic)
+        ]
+
+        evaluator_fn = None
+        evaluator_load_error = None
+
+        for evaluator_path in evaluator_paths_to_try:
+            try:
+                evaluator_fn = create_evaluator_from_schema(
+                    evaluator_schema_path=evaluator_path,
+                    model_name=None,  # Use default from schema
+                )
+                click.echo(f"✓ Loaded evaluator schema: {evaluator_path}")
+                break
+            except FileNotFoundError as e:
+                evaluator_load_error = e
+                logger.debug(f"Evaluator not found at {evaluator_path}: {e}")
+                continue
+            except Exception as e:
+                evaluator_load_error = e
+                logger.warning(f"Failed to load evaluator from {evaluator_path}: {e}")
+                continue
+
+        if evaluator_fn is None:
+            click.echo(f"Error: Could not load evaluator schema '{evaluator_name}'")
+            click.echo(f"  Tried paths: {evaluator_paths_to_try}")
+            if evaluator_load_error:
+                click.echo(f"  Last error: {evaluator_load_error}")
             raise click.Abort()
 
-        # Load dataset
+        # Load dataset using Polars
+        import polars as pl
+
         click.echo(f"Loading dataset: {list(config.datasets.keys())[0]}")
         dataset_ref = list(config.datasets.values())[0]
 
         if dataset_ref.location.value == "git":
-            # Load from Git
+            # Load from Git (local filesystem)
             dataset_path = Path(base_path) / name / dataset_ref.path
             if not dataset_path.exists():
                 click.echo(f"Error: Dataset not found: {dataset_path}")
                 raise click.Abort()
 
             if dataset_ref.format == "csv":
-                dataset_df = pd.read_csv(dataset_path)
+                dataset_df = pl.read_csv(dataset_path)
             elif dataset_ref.format == "parquet":
-                dataset_df = pd.read_parquet(dataset_path)
+                dataset_df = pl.read_parquet(dataset_path)
             elif dataset_ref.format == "jsonl":
-                dataset_df = pd.read_json(dataset_path, lines=True)
+                dataset_df = pl.read_ndjson(dataset_path)
             else:
                 click.echo(f"Error: Format '{dataset_ref.format}' not yet supported")
                 raise click.Abort()
         elif dataset_ref.location.value in ["s3", "hybrid"]:
             # Load from S3 using FS provider
             from rem.services.fs import FS
+            from io import BytesIO
 
             fs = FS()
 
             try:
                 if dataset_ref.format == "csv":
                     content = fs.read(dataset_ref.path)
-                    from io import StringIO
-                    dataset_df = pd.read_csv(StringIO(content))
+                    dataset_df = pl.read_csv(BytesIO(content.encode() if isinstance(content, str) else content))
                 elif dataset_ref.format == "parquet":
-                    # For parquet, we need binary read
-                    import tempfile
-                    with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
-                        tmp_path = tmp.name
-                        # Download via FS
-                        content_bytes = fs.read(dataset_ref.path)
-                        tmp.write(content_bytes)
-                    dataset_df = pd.read_parquet(tmp_path)
-                    Path(tmp_path).unlink()  # Clean up temp file
+                    content_bytes = fs.read(dataset_ref.path)
+                    dataset_df = pl.read_parquet(BytesIO(content_bytes if isinstance(content_bytes, bytes) else content_bytes.encode()))
                 elif dataset_ref.format == "jsonl":
                     content = fs.read(dataset_ref.path)
-                    from io import StringIO
-                    dataset_df = pd.read_json(StringIO(content), lines=True)
+                    dataset_df = pl.read_ndjson(BytesIO(content.encode() if isinstance(content, str) else content))
                 else:
                     click.echo(f"Error: Format '{dataset_ref.format}' not yet supported")
                     raise click.Abort()
@@ -793,13 +790,13 @@ def run(
 
             client = PhoenixClient(config=phoenix_config)
 
-            experiment_name = f"{config.name}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+            experiment_name = f"{config.name}-{format_timestamp_for_experiment()}"
 
             click.echo(f"\n⏳ Running experiment: {experiment_name}")
             click.echo(f"   This may take several minutes...")
 
             experiment = client.run_experiment(
-                dataset=dataset_df,  # type: ignore[arg-type]
+                dataset=dataset_df,
                 task=task_fn,
                 evaluators=[evaluator_fn],
                 experiment_name=experiment_name,
@@ -809,12 +806,15 @@ def run(
                     "evaluator": config.evaluator_schema_ref.name,
                     "experiment_config": config.name,
                     **config.metadata
-                }
+                },
+                # Smart column detection for DataFrame -> Phoenix Dataset conversion
+                input_keys=["input"] if "input" in dataset_df.columns else None,
+                output_keys=["expected_output"] if "expected_output" in dataset_df.columns else None,
             )
 
             # Update experiment status
             config.status = ExperimentStatus.COMPLETED
-            config.last_run_at = datetime.now()
+            config.last_run_at = utc_now()
             if not version:  # Only save if not loading from Git
                 config.save(base_path)
 
@@ -835,7 +835,7 @@ def run(
                         "agent": config.agent_schema_ref.name,
                         "evaluator": config.evaluator_schema_ref.name,
                         "dataset_size": len(dataset_df),
-                        "completed_at": datetime.now().isoformat(),
+                        "completed_at": to_iso(utc_now()),
                         "phoenix_url": getattr(experiment, "url", None),
                         "task_runs": len(exp_data.get("task_runs", [])),
                     }
@@ -1015,20 +1015,24 @@ def dataset_add(
             --output-keys expected_label,expected_type
     """
     from rem.services.phoenix import PhoenixClient
-    import pandas as pd
+    import polars as pl
 
     try:
         client = PhoenixClient()
 
-        # Load CSV
-        df = pd.read_csv(from_csv)
+        # Load CSV with Polars
+        df = pl.read_csv(from_csv)
+        records = df.to_dicts()
 
         # Extract data
-        inputs = cast(list[dict[str, Any]], df[input_keys.split(",")].to_dict("records"))
-        outputs = cast(list[dict[str, Any]], df[output_keys.split(",")].to_dict("records"))
+        input_cols = input_keys.split(",")
+        output_cols = output_keys.split(",")
+        inputs = [{k: row.get(k) for k in input_cols} for row in records]
+        outputs = [{k: row.get(k) for k in output_cols} for row in records]
         metadata = None
         if metadata_keys:
-            metadata = cast(list[dict[str, Any]], df[metadata_keys.split(",")].to_dict("records"))
+            meta_cols = metadata_keys.split(",")
+            metadata = [{k: row.get(k) for k in meta_cols} for row in records]
 
         # Add to dataset
         dataset = client.add_examples_to_dataset(
@@ -1269,12 +1273,12 @@ def trace_list(
         rem experiments trace list --project rem-agents --days 7 --limit 50
     """
     from rem.services.phoenix import PhoenixClient
-    from datetime import datetime, timedelta
+    from rem.utils.date_utils import days_ago
 
     try:
         client = PhoenixClient()
 
-        start_time = datetime.now() - timedelta(days=days)
+        start_time = days_ago(days)
 
         traces_df = client.get_traces(
             project_name=project,

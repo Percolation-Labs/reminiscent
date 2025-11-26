@@ -1,0 +1,27 @@
+# Production patch for rem-api deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rem-api
+spec:
+  replicas: 3
+  template:
+    spec:
+      containers:
+        - name: rem-api
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "1000m"
+            limits:
+              memory: "4Gi"
+              cpu: "2000m"
+          env:
+            - name: LOG_LEVEL
+              value: "INFO"
+            - name: ENVIRONMENT
+              value: "production"
+            - name: ENABLE_METRICS
+              value: "true"
+            - name: ENABLE_TRACING
+              value: "true"

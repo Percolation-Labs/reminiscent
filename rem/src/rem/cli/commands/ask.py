@@ -89,8 +89,8 @@ async def run_agent_streaming(
         context: Optional AgentContext for session persistence
         max_iterations: Maximum iterations/requests (from agent schema or settings)
     """
-    from datetime import datetime, timezone
     from pydantic_ai import UsageLimits
+    from rem.utils.date_utils import to_iso_with_z, utc_now
 
     logger.info("Running agent in streaming mode...")
 
@@ -151,13 +151,13 @@ async def run_agent_streaming(
             user_message = {
                 "role": "user",
                 "content": user_message_content,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": to_iso_with_z(utc_now()),
             }
 
             assistant_message = {
                 "role": "assistant",
                 "content": "".join(assistant_response_parts),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": to_iso_with_z(utc_now()),
             }
 
             # Store messages with compression
@@ -200,8 +200,8 @@ async def run_agent_non_streaming(
     Returns:
         Output data if successful, None otherwise
     """
-    from datetime import datetime, timezone
     from pydantic_ai import UsageLimits
+    from rem.utils.date_utils import to_iso_with_z, utc_now
 
     logger.info("Running agent in non-streaming mode...")
 
@@ -248,13 +248,13 @@ async def run_agent_non_streaming(
             user_message = {
                 "role": "user",
                 "content": user_message_content,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": to_iso_with_z(utc_now()),
             }
 
             assistant_message = {
                 "role": "assistant",
                 "content": assistant_content,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": to_iso_with_z(utc_now()),
             }
 
             # Store messages with compression
@@ -357,8 +357,8 @@ async def _save_output_file(file_path: Path, data: dict[str, Any]) -> None:
 )
 @click.option(
     "--user-id",
-    default="test-user",
-    help="User ID for context (default: test-user)",
+    default=None,
+    help="User ID for context (default: from settings.test.effective_user_id)",
 )
 @click.option(
     "--session-id",
@@ -393,7 +393,7 @@ def ask(
     max_turns: int,
     version: str | None,
     stream: bool,
-    user_id: str,
+    user_id: str | None,
     session_id: str | None,
     input_file: Path | None,
     output_file: Path | None,
@@ -434,6 +434,9 @@ def ask(
         # Two arguments provided
         name = name_or_query
 
+    # Resolve user_id from settings if not provided
+    effective_user_id = user_id or settings.test.effective_user_id
+
     asyncio.run(
         _ask_async(
             name=name,
@@ -443,7 +446,7 @@ def ask(
             max_turns=max_turns,
             version=version,
             stream=stream,
-            user_id=user_id,
+            user_id=effective_user_id,
             session_id=session_id,
             input_file=input_file,
             output_file=output_file,

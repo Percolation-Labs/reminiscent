@@ -22,9 +22,12 @@ from ..core import CoreModel
 class UserTier(str, Enum):
     """User subscription tier for feature gating."""
 
+    ANONYMOUS = "anonymous"
     FREE = "free"
-    SILVER = "silver"
-    GOLD = "gold"
+    BASIC = "basic"
+    PRO = "pro"
+    SILVER = "silver"  # Deprecated? Keeping for backward compatibility if needed
+    GOLD = "gold"      # Deprecated? Keeping for backward compatibility if needed
 
 
 class User(CoreModel):
@@ -57,7 +60,11 @@ class User(CoreModel):
     )
     tier: UserTier = Field(
         default=UserTier.FREE,
-        description="User subscription tier (free, silver, gold) for feature gating",
+        description="User subscription tier (free, basic, pro) for feature gating",
+    )
+    anonymous_ids: list[str] = Field(
+        default_factory=list,
+        description="Linked anonymous session IDs used for merging history",
     )
     sec_policy: dict = Field(
         default_factory=dict,

@@ -57,8 +57,10 @@ Example .env file:
 """
 
 import os
-from pydantic import Field, field_validator
+import hashlib
+from pydantic import Field, field_validator, FieldValidationInfo
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from loguru import logger
 
 
 class LLMSettings(BaseSettings):
@@ -385,6 +387,22 @@ class AuthSettings(BaseSettings):
     # OAuth provider settings
     google: GoogleOAuthSettings = Field(default_factory=GoogleOAuthSettings)
     microsoft: MicrosoftOAuthSettings = Field(default_factory=MicrosoftOAuthSettings)
+
+    @field_validator("session_secret", mode="before")
+    @classmethod
+    def generate_dev_secret(cls, v: str | None, info: FieldValidationInfo) -> str:
+        # Only generate if not already set and not in production
+        if not v and info.data.get("environment") != "production":
+            # Deterministic secret for development
+            seed_string = f"{info.data.get('team', 'rem')}-{info.data.get('environment', 'development')}-auth-secret-salt"
+            logger.warning(
+                "AUTH__SESSION_SECRET not set. Generating deterministic secret for non-production environment. "
+                "DO NOT use in production."
+            )
+            return hashlib.sha256(seed_string.encode()).hexdigest()
+        elif not v and info.data.get("environment") == "production":
+            raise ValueError("AUTH__SESSION_SECRET must be set in production environment.")
+        return v
 
 
 class PostgresSettings(BaseSettings):
@@ -1212,15 +1230,17 @@ class Settings(BaseSettings):
 
 # Load configuration from ~/.rem/config.yaml before initializing settings
 # This allows user configuration to be merged with environment variables
-try:
-    from rem.config import load_config, merge_config_to_env
+# Set REM_SKIP_CONFIG_FILE=true to disable (useful for development with .env)
+if not os.getenv("REM_SKIP_CONFIG_FILE", "").lower() in ("true", "1", "yes"):
+    try:
+        from rem.config import load_config, merge_config_to_env
 
-    _config = load_config()
-    if _config:
-        merge_config_to_env(_config)
-except ImportError:
-    # config module not available (e.g., during initial setup)
-    pass
+        _config = load_config()
+        if _config:
+            merge_config_to_env(_config)
+    except ImportError:
+        # config module not available (e.g., during initial setup)
+        pass
 
 # Global settings singleton
 settings = Settings()

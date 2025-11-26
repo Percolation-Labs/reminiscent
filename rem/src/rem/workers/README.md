@@ -207,7 +207,7 @@ Reads recent activity to generate comprehensive user profiles.
 
 **CLI:**
 ```bash
-rem-dreaming user-model --tenant-id=tenant-123
+rem-dreaming user-model 
 ```
 
 **Frequency:** Daily (runs as part of full workflow)
@@ -235,13 +235,13 @@ Extracts temporal narratives from resources.
 **CLI:**
 ```bash
 # Process last 24 hours
-rem-dreaming moments --tenant-id=tenant-123
+rem-dreaming moments 
 
 # Custom lookback
-rem-dreaming moments --tenant-id=tenant-123 --lookback-hours=48
+rem-dreaming moments  --lookback-hours=48
 
 # Limit resources processed
-rem-dreaming moments --tenant-id=tenant-123 --limit=100
+rem-dreaming moments  --limit=100
 ```
 
 **Frequency:** Daily or on-demand
@@ -283,13 +283,13 @@ Builds semantic relationships between resources.
 **CLI:**
 ```bash
 # Semantic mode (fast, cheap)
-rem-dreaming affinity --tenant-id=tenant-123
+rem-dreaming affinity 
 
 # LLM mode (intelligent, expensive)
-rem-dreaming affinity --tenant-id=tenant-123 --use-llm --limit=100
+rem-dreaming affinity  --use-llm --limit=100
 
 # Custom lookback
-rem-dreaming affinity --tenant-id=tenant-123 --lookback-hours=168
+rem-dreaming affinity  --lookback-hours=168
 ```
 
 **Frequency:**
@@ -308,13 +308,13 @@ Runs all operations in sequence.
 **CLI:**
 ```bash
 # Single tenant
-rem-dreaming full --tenant-id=tenant-123
+rem-dreaming full 
 
 # All active tenants (daily cron)
 rem-dreaming full --all-tenants
 
 # Use LLM affinity mode
-rem-dreaming full --tenant-id=tenant-123 --use-llm-affinity
+rem-dreaming full  --use-llm-affinity
 ```
 
 **Frequency:** Daily at 3 AM UTC
@@ -455,16 +455,16 @@ export REM_API_URL=http://localhost:8000
 export OPENAI_API_KEY=sk-...
 
 # Run user model update
-python -m rem.cli.dreaming user-model --tenant-id=tenant-test
+python -m rem.cli.dreaming user-model 
 
 # Run moment construction
-python -m rem.cli.dreaming moments --tenant-id=tenant-test --lookback-hours=24
+python -m rem.cli.dreaming moments  --lookback-hours=24
 
 # Run affinity (semantic mode)
-python -m rem.cli.dreaming affinity --tenant-id=tenant-test
+python -m rem.cli.dreaming affinity 
 
 # Run full workflow
-python -m rem.cli.dreaming full --tenant-id=tenant-test
+python -m rem.cli.dreaming full 
 ```
 
 ### Testing with Docker
@@ -478,7 +478,7 @@ docker run --rm \
   -e REM_API_URL=http://host.docker.internal:8000 \
   -e OPENAI_API_KEY=$OPENAI_API_KEY \
   rem-stack:latest \
-  python -m rem.cli.dreaming full --tenant-id=tenant-test
+  python -m rem.cli.dreaming full 
 ```
 
 ## Architecture Decisions

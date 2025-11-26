@@ -49,48 +49,50 @@ Choose your path:
 **Best for**: First-time users who want to explore REM with curated example datasets.
 
 ```bash
-# Install tesseract for your platform e.g. macos brew install tesseract
+# Install system dependencies (tesseract for OCR)
+brew install tesseract  # macOS (Linux/Windows: see tesseract-ocr.github.io)
 
 # Install remdb
-pip install remdb[all]
+pip install "remdb[all]"
 
 # Clone example datasets
 git clone https://github.com/Percolation-Labs/remstack-lab.git
 cd remstack-lab
 
-# Configure REM (interactive wizard)
-rem configure --install
+# Start PostgreSQL with docker-compose
+curl -O https://gist.githubusercontent.com/percolating-sirsh/d117b673bc0edfdef1a5068ccd3cf3e5/raw/docker-compose.prebuilt.yml
+docker compose -f docker-compose.prebuilt.yml up -d postgres
 
-# Start PostgreSQL
-docker run -d \
-  --name rem-postgres \
-  -e POSTGRES_USER=rem \
-  -e POSTGRES_PASSWORD=rem \
-  -e POSTGRES_DB=rem \
-  -p 5050:5432 \
-  pgvector/pgvector:pg18
+# Configure REM (creates ~/.rem/config.yaml and installs database schema)
+# Add --claude-desktop to register with Claude Desktop app
+rem configure --install --claude-desktop
 
-# Load quickstart dataset
-rem db load datasets/quickstart/sample_data.yaml --user-id demo-user
+# Load quickstart dataset (uses default user)
+rem db load datasets/quickstart/sample_data.yaml
 
 # Optional: Set default LLM provider via environment variable
 # export LLM__DEFAULT_MODEL="openai:gpt-4.1-nano"  # Fast and cheap
 # export LLM__DEFAULT_MODEL="anthropic:claude-sonnet-4-5-20250929"  # High quality (default)
 
 # Ask questions
-rem ask --user-id demo-user "What documents exist in the system?"
-rem ask --user-id demo-user "Show me meetings about API design"
+rem ask "What documents exist in the system?"
+rem ask "Show me meetings about API design"
 
-# Try other datasets
-rem db load --file datasets/domains/recruitment/scenarios/candidate_pipeline/data.yaml --user-id my-company
-rem ask --user-id my-company "Show me candidates with Python experience"
+# Ingest files (PDF, DOCX, images, etc.) - note: requires remstack-lab
+rem process ingest datasets/formats/files/bitcoin_whitepaper.pdf --category research --tags bitcoin,whitepaper
+
+# Query ingested content
+rem ask "What is the Bitcoin whitepaper about?"
+
+# Try other datasets (use --user-id for multi-tenant scenarios)
+rem db load datasets/domains/recruitment/scenarios/candidate_pipeline/data.yaml --user-id acme-corp
+rem ask --user-id acme-corp "Show me candidates with Python experience"
 ```
 
 **What you get:**
 - Quickstart: 3 users, 3 resources, 3 moments, 4 messages
 - Domain datasets: recruitment, legal, enterprise, misc
 - Format examples: engrams, documents, conversations, files
-- Jupyter notebooks and experiments
 
 **Learn more**: [remstack-lab repository](https://github.com/Percolation-Labs/remstack-lab)
 
@@ -171,28 +173,28 @@ Configuration saved to `~/.rem/config.yaml` (can edit with `rem configure --edit
 # Clone datasets repository
 git clone https://github.com/Percolation-Labs/remstack-lab.git
 
-# Load quickstart dataset
-rem db load --file remstack-lab/datasets/quickstart/sample_data.yaml --user-id demo-user
+# Load quickstart dataset (uses default user)
+rem db load --file remstack-lab/datasets/quickstart/sample_data.yaml
 
 # Test with sample queries
-rem ask --user-id demo-user "What documents exist in the system?"
-rem ask --user-id demo-user "Show me meetings about API design"
-rem ask --user-id demo-user "Who is Sarah Chen?"
+rem ask "What documents exist in the system?"
+rem ask "Show me meetings about API design"
+rem ask "Who is Sarah Chen?"
 
-# Try domain-specific datasets
-rem db load --file remstack-lab/datasets/domains/recruitment/scenarios/candidate_pipeline/data.yaml --user-id my-company
-rem ask --user-id my-company "Show me candidates with Python experience"
+# Try domain-specific datasets (use --user-id for multi-tenant scenarios)
+rem db load --file remstack-lab/datasets/domains/recruitment/scenarios/candidate_pipeline/data.yaml --user-id acme-corp
+rem ask --user-id acme-corp "Show me candidates with Python experience"
 ```
 
 **Option B: Bring your own data**
 
 ```bash
-# Ingest your own files
+# Ingest your own files (uses default user)
 echo "REM is a bio-inspired memory system for agentic AI workloads." > test-doc.txt
-rem process ingest test-doc.txt --user-id test-user --category documentation --tags rem,ai
+rem process ingest test-doc.txt --category documentation --tags rem,ai
 
 # Query your ingested data
-rem ask --user-id test-user "What do you know about REM from my knowledge base?"
+rem ask "What do you know about REM from my knowledge base?"
 ```
 
 ### Step 4: Test the API
@@ -229,13 +231,13 @@ curl -X POST http://localhost:8000/api/v1/chat/completions \
 ```bash
 cd remstack-lab
 
-# Load any dataset
-rem db load --file datasets/quickstart/sample_data.yaml --user-id demo-user
+# Load any dataset (uses default user)
+rem db load --file datasets/quickstart/sample_data.yaml
 
 # Explore formats
-rem db load --file datasets/formats/engrams/scenarios/team_meeting/team_standup_meeting.yaml --user-id demo-user
+rem db load --file datasets/formats/engrams/scenarios/team_meeting/team_standup_meeting.yaml
 
-# Try domain-specific examples
+# Try domain-specific examples (use --user-id for multi-tenant scenarios)
 rem db load --file datasets/domains/recruitment/scenarios/candidate_pipeline/data.yaml --user-id acme-corp
 ```
 
@@ -330,30 +332,24 @@ json_schema_extra:
 ```bash
 # Ingest the schema (stores in database schemas table)
 rem process ingest my-research-assistant.yaml \
-  --user-id my-user \
   --category agents \
   --tags custom,research
 
 # Verify schema is in database (should show schema details)
-rem ask "LOOKUP 'my-research-assistant' FROM schemas" --user-id my-user
+rem ask "LOOKUP 'my-research-assistant' FROM schemas"
 ```
 
 **Step 3: Use Your Custom Agent**
 
 ```bash
 # Run a query with your custom agent
-rem ask research-assistant "Find documents about machine learning architecture" \
-  --user-id my-user
+rem ask research-assistant "Find documents about machine learning architecture"
 
 # With streaming
-rem ask research-assistant "Summarize recent API design documents" \
-  --user-id my-user \
-  --stream
+rem ask research-assistant "Summarize recent API design documents" --stream
 
 # With session continuity
-rem ask research-assistant "What did we discuss about ML?" \
-  --user-id my-user \
-  --session-id abc-123
+rem ask research-assistant "What did we discuss about ML?" --session-id abc-123
 ```
 
 ### Agent Schema Structure
@@ -424,10 +420,10 @@ Custom agents can also be used as **ontology extractors** to extract structured 
 **Schema not found error:**
 ```bash
 # Check if schema was ingested correctly
-rem ask "SEARCH 'my-agent' FROM schemas" --user-id my-user
+rem ask "SEARCH 'my-agent' FROM schemas"
 
-# List all schemas for your user
-rem ask "SELECT name, category, created_at FROM schemas ORDER BY created_at DESC LIMIT 10" --user-id my-user
+# List all schemas
+rem ask "SELECT name, category, created_at FROM schemas ORDER BY created_at DESC LIMIT 10"
 ```
 
 **Agent not loading tools:**
@@ -860,22 +856,14 @@ rem db schema validate --models src/rem/models/entities
 Process files with optional custom extractor (ontology extraction).
 
 ```bash
-# Process all completed files for tenant
-rem process files \
-  --tenant-id acme-corp \
-  --status completed \
-  --limit 10
+# Process all completed files
+rem process files --status completed --limit 10
 
 # Process with custom extractor
-rem process files \
-  --tenant-id acme-corp \
-  --extractor cv-parser-v1 \
-  --limit 50
+rem process files --extractor cv-parser-v1 --limit 50
 
-# Process files from the last 7 days
-rem process files \
-  --tenant-id acme-corp \
-  --lookback-hours 168
+# Process files for specific user
+rem process files --user-id user-123 --status completed
 ```
 
 #### `rem process ingest` - Ingest File into REM
@@ -883,14 +871,13 @@ rem process files \
 Ingest a file into REM with full pipeline (storage + parsing + embedding + database).
 
 ```bash
-# Ingest local file
+# Ingest local file with metadata
 rem process ingest /path/to/document.pdf \
-  --user-id user-123 \
   --category legal \
   --tags contract,2024
 
 # Ingest with minimal options
-rem process ingest ./meeting-notes.md --user-id user-123
+rem process ingest ./meeting-notes.md
 ```
 
 #### `rem process uri` - Parse File (Read-Only)
@@ -915,28 +902,17 @@ rem process uri s3://bucket/key.docx --output text
 Run full dreaming workflow: extractors → moments → affinity → user model.
 
 ```bash
-# Full workflow for user
-rem dreaming full \
-  --user-id user-123 \
-  --tenant-id acme-corp
+# Full workflow (uses default user from settings)
+rem dreaming full
 
 # Skip ontology extractors
-rem dreaming full \
-  --user-id user-123 \
-  --tenant-id acme-corp \
-  --skip-extractors
+rem dreaming full --skip-extractors
 
 # Process last 24 hours only
-rem dreaming full \
-  --user-id user-123 \
-  --tenant-id acme-corp \
-  --lookback-hours 24
+rem dreaming full --lookback-hours 24
 
-# Limit resources processed
-rem dreaming full \
-  --user-id user-123 \
-  --tenant-id acme-corp \
-  --limit 100
+# Limit resources processed for specific user
+rem dreaming full --user-id user-123 --limit 100
 ```
 
 #### `rem dreaming custom` - Custom Extractor
@@ -944,16 +920,11 @@ rem dreaming full \
 Run specific ontology extractor on user's data.
 
 ```bash
-# Run CV parser on user's files
-rem dreaming custom \
-  --user-id user-123 \
-  --tenant-id acme-corp \
-  --extractor cv-parser-v1
+# Run CV parser on files
+rem dreaming custom --extractor cv-parser-v1
 
-# Process last week's files
+# Process last week's files with limit
 rem dreaming custom \
-  --user-id user-123 \
-  --tenant-id acme-corp \
   --extractor contract-analyzer-v1 \
   --lookback-hours 168 \
   --limit 50
@@ -964,17 +935,11 @@ rem dreaming custom \
 Extract temporal narratives from resources.
 
 ```bash
-# Generate moments for user
-rem dreaming moments \
-  --user-id user-123 \
-  --tenant-id acme-corp \
-  --limit 50
+# Generate moments
+rem dreaming moments --limit 50
 
 # Process last 7 days
-rem dreaming moments \
-  --user-id user-123 \
-  --tenant-id acme-corp \
-  --lookback-hours 168
+rem dreaming moments --lookback-hours 168
 ```
 
 #### `rem dreaming affinity` - Build Relationships
@@ -982,17 +947,11 @@ rem dreaming moments \
 Build semantic relationships between resources using embeddings.
 
 ```bash
-# Build affinity graph for user
-rem dreaming affinity \
-  --user-id user-123 \
-  --tenant-id acme-corp \
-  --limit 100
+# Build affinity graph
+rem dreaming affinity --limit 100
 
 # Process recent resources only
-rem dreaming affinity \
-  --user-id user-123 \
-  --tenant-id acme-corp \
-  --lookback-hours 24
+rem dreaming affinity --lookback-hours 24
 ```
 
 #### `rem dreaming user-model` - Update User Model
@@ -1001,9 +960,7 @@ Update user model from recent activity (preferences, interests, patterns).
 
 ```bash
 # Update user model
-rem dreaming user-model \
-  --user-id user-123 \
-  --tenant-id acme-corp
+rem dreaming user-model
 ```
 
 ### Evaluation & Experiments
@@ -1368,6 +1325,55 @@ TraverseQuery ::= TRAVERSE [<edge_types:list>] WITH <initial_query:Query> [DEPTH
 **Stage 3** (80% answerable): Affinity graph built. SEARCH and TRAVERSE become available. Multi-hop graph queries work.
 
 **Stage 4** (100% answerable): Mature graph with rich historical data. All query types fully functional with high-quality results.
+
+## Troubleshooting
+
+### Apple Silicon Mac: "Failed to build kreuzberg" Error
+
+**Problem**: Installation fails with `ERROR: Failed building wheel for kreuzberg` on Apple Silicon Macs.
+
+**Root Cause**: REM uses `kreuzberg>=4.0.0rc1` for document parsing with native ONNX/Rust table extraction. Kreuzberg 4.0.0rc1 provides pre-built wheels for ARM64 macOS (`macosx_14_0_arm64.whl`) but NOT for x86_64 (Intel) macOS. If you're using an x86_64 Python binary (running under Rosetta 2), pip cannot find a compatible wheel and attempts to build from source, which fails.
+
+**Solution**: Use ARM64 (native) Python instead of x86_64 Python.
+
+**Step 1: Verify your Python architecture**
+
+```bash
+python3 -c "import platform; print(f'Machine: {platform.machine()}')"
+```
+
+- **Correct**: `Machine: arm64` (native ARM Python)
+- **Wrong**: `Machine: x86_64` (Intel Python under Rosetta)
+
+**Step 2: Install ARM Python via Homebrew** (if not already installed)
+
+```bash
+# Install ARM Python
+brew install python@3.12
+
+# Verify it's ARM
+/opt/homebrew/bin/python3.12 -c "import platform; print(platform.machine())"
+# Should output: arm64
+```
+
+**Step 3: Create venv with ARM Python**
+
+```bash
+# Use full path to ARM Python
+/opt/homebrew/bin/python3.12 -m venv .venv
+
+# Activate and install
+source .venv/bin/activate
+pip install "remdb[all]"
+```
+
+**Why This Happens**: Some users have both Intel Homebrew (`/usr/local`) and ARM Homebrew (`/opt/homebrew`) installed. If your system `python3` points to the Intel version at `/usr/local/bin/python3`, you'll hit this issue. The fix is to explicitly use the ARM Python from `/opt/homebrew/bin/python3.12`.
+
+**Verification**: After successful installation, you should see:
+```
+Using cached kreuzberg-4.0.0rc1-cp310-abi3-macosx_14_0_arm64.whl (19.8 MB)
+Successfully installed ... kreuzberg-4.0.0rc1 ... remdb-0.3.10
+```
 
 ## License
 

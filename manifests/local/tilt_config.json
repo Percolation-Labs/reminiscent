@@ -1,0 +1,4 @@
+{
+  "enable_minio": false,
+  "k8s_mode": false
+}

@@ -100,10 +100,10 @@ Before we begin, familiarize yourself with REM's CLI commands.
 | `rem --help` | Show all available commands | `rem --help` |
 | `rem configure` | Configure REM installation | `rem configure --install` |
 | `rem db` | Database operations (migrate, status, schema) | `rem db migrate` |
-| `rem process ingest` | Ingest file into memory (storage + parsing + embedding) | `rem process ingest path/to/file.pdf --user-id user-123` |
-| `rem process files` | Batch process existing files (re-run extractors) | `rem process files --tenant-id acme --status pending` |
-| `rem dreaming` | Run knowledge extraction workers | `rem dreaming full --user-id user-123` |
-| `rem ask` | Query REM memory conversationally | `rem ask "What documents do we have?" --user-id user-123` |
+| `rem process ingest` | Ingest file into memory (storage + parsing + embedding) | `rem process ingest path/to/file.pdf` |
+| `rem process files` | Batch process existing files (re-run extractors) | `rem process files --status pending` |
+| `rem dreaming` | Run knowledge extraction workers | `rem dreaming full` |
+| `rem ask` | Query REM memory conversationally | `rem ask "What documents do we have?"` |
 | `rem serve` | Start FastAPI server (chat completions + MCP) | `rem serve` |
 | `rem mcp` | Run standalone MCP server | `rem mcp` |
 | `rem experiments` | Manage evaluation experiments | `rem experiments run my-exp` |

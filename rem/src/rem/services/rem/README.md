@@ -302,3 +302,17 @@ See `tests/integration/test_rem_query_evolution.py` for stage-based validation a
 * **Unified View**: The underlying SQL function `rem_traverse` uses a view `all_graph_edges` that unions `graph_edges` from all entity tables (`resources`, `moments`, `users`, etc.). This enables polymorphic traversal without complex joins in the application layer.
 * **KV Store**: Edge destinations (`dst`) are resolved to entity IDs using the `kv_store`. This requires that all traversable entities have an entry in the `kv_store` (handled automatically by database triggers).
 * **Iterated Retrieval**: REM is architected for multi-turn retrieval where LLMs conduct conversational database exploration. Each query informs the next, enabling emergent information discovery without requiring upfront schema knowledge.
+
+## Scaling & Architectural Decisions
+
+### 1. Hybrid Adjacency List
+REM implements a **Hybrid Adjacency List** pattern to balance strict relational guarantees with graph flexibility:
+*   **Primary Storage (Source of Truth):** Standard PostgreSQL tables (`resources`, `moments`, etc.) enforce schema validation, constraints, and type safety.
+*   **Graph Overlay:** Relationships are stored as "inline edges" within a JSONB column (`graph_edges`) on each entity.
+*   **Performance Layer:** A denormalized `UNLOGGED` table (`kv_store`) acts as a high-speed cache, mapping human-readable keys to internal UUIDs and edges. This avoids the traditional "join bomb" of traversing normalized SQL tables while avoiding the operational complexity of a separate graph database (e.g., Neo4j).
+
+### 2. The Pareto Principle in Graph Algorithms
+We explicitly choose **Simplicity over Full-Scale Graph Analytics**.
+*   **Hypothesis:** For LLM Agent workloads, 80% of the value is derived from **local context retrieval** (1-3 hops via `LOOKUP` and `TRAVERSE`).
+*   **Diminishing Returns:** Global graph algorithms (PageRank, Community Detection) offer diminishing returns for real-time agentic retrieval tasks. Agents typically need to answer specific questions ("Who worked on file X?"), which is a local neighborhood problem, not a global cluster analysis problem.
+*   **Future Scaling:** If deeper analysis is needed, we prefer **Graph + Vector (RAG)** approaches (using semantic similarity to find implicit links) over complex explicit graph algorithms.

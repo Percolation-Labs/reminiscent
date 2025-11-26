@@ -37,9 +37,6 @@ images:
   - name: rem-api
     newName: ${ECR_REGISTRY}/rem-api
     newTag: ${IMAGE_TAG}  # e.g., v1.2.3
-  - name: rem-mcp
-    newName: ${ECR_REGISTRY}/rem-mcp
-    newTag: ${IMAGE_TAG}
   - name: rem-worker
     newName: ${ECR_REGISTRY}/rem-worker
     newTag: ${IMAGE_TAG}
@@ -56,15 +53,15 @@ configMapGenerator:
       - LOG_LEVEL=INFO
 
 # Patches for production environment
-patchesStrategicMerge:
-  - deployment-patch.yaml
-  - postgres-patch.yaml
+# Note: PostgreSQL is deployed separately via CloudNativePG
+# See: manifests/application/rem-stack/components/postgres/
+patches:
+  - path: api-patch.yaml
+  - path: worker-patch.yaml
 
 # Scale replicas for HA
 replicas:
   - name: rem-api
-    count: 3
-  - name: rem-mcp
     count: 3
 
 # Labels for version tracking

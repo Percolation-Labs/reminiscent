@@ -30,6 +30,18 @@ BEGIN
 END $$;
 
 -- ======================================================================
+-- RATE LIMITS (Unlogged for performance)
+-- ======================================================================
+
+CREATE UNLOGGED TABLE IF NOT EXISTS rate_limits (
+    key VARCHAR(255) PRIMARY KEY, -- e.g., "tenant_1:anon_abc:per_minute:TIMESTAMP"
+    count INTEGER NOT NULL DEFAULT 1,
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_rate_limits_expires_at ON rate_limits(expires_at);
+
+-- ======================================================================
 -- USERS (Model: User)
 -- ======================================================================
 
@@ -41,6 +53,7 @@ CREATE TABLE IF NOT EXISTS users (
     email VARCHAR(256),
     role VARCHAR(256),
     tier TEXT,
+    anonymous_ids TEXT[] DEFAULT ARRAY[]::TEXT[],
     sec_policy JSONB DEFAULT '{}'::jsonb,
     summary TEXT,
     interests TEXT[] DEFAULT ARRAY[]::TEXT[],

@@ -49,7 +49,7 @@ def prompt_postgres_config(use_defaults: bool = False) -> dict:
 
     # Default values
     host = "localhost"
-    port = 5050
+    port = 5051
     database = "rem"
     username = "rem"
     password = "rem"
@@ -431,8 +431,9 @@ def configure_command(install: bool, claude_desktop: bool, show: bool, edit: boo
             if os.name == "nt":  # Windows
                 config_dir = Path.home() / "AppData/Roaming/Claude"
             elif os.name == "posix":
-                if Path.home() / "Library/Application Support/Claude":
-                    config_dir = Path.home() / "Library/Application Support/Claude"
+                macos_path = Path.home() / "Library/Application Support/Claude"
+                if macos_path.exists():
+                    config_dir = macos_path
                 else:
                     config_dir = Path.home() / ".config/Claude"
             else:

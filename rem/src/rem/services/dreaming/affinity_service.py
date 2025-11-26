@@ -8,12 +8,11 @@ vector similarity (fast) or LLM analysis (intelligent).
 import json
 from datetime import datetime, timedelta
 from enum import Enum
-from pathlib import Path
 from typing import Any, Optional
 
-import yaml
 from loguru import logger
 
+from ...utils.schema_loader import load_agent_schema
 from ...agentic.providers.pydantic_ai import create_agent
 from ...agentic.serialization import serialize_agent_result
 from ...models.core import QueryType, RemQuery, SearchParameters
@@ -125,20 +124,7 @@ async def build_affinity(
     # Load LLM agent for relationship assessment if needed
     affinity_agent = None
     if mode == AffinityMode.LLM:
-        schema_path = (
-            Path(__file__).parent.parent.parent
-            / "schemas"
-            / "agents"
-            / "resource-affinity-assessor.yaml"
-        )
-
-        if not schema_path.exists():
-            raise FileNotFoundError(
-                f"ResourceAffinityAssessor schema not found: {schema_path}"
-            )
-
-        with open(schema_path) as f:
-            agent_schema = yaml.safe_load(f)
+        agent_schema = load_agent_schema("resource-affinity-assessor")
 
         affinity_agent_runtime = await create_agent(
             agent_schema_override=agent_schema,

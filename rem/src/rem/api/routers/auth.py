@@ -49,6 +49,8 @@ from authlib.integrations.starlette_client import OAuth
 from loguru import logger
 
 from ...settings import settings
+from ...services.postgres.service import PostgresService
+from ...services.user_service import UserService
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -168,6 +170,53 @@ async def callback(provider: str, request: Request):
         if not user_info:
             # Fetch from userinfo endpoint if not in ID token
             user_info = await client.userinfo(token=token)
+            
+        # --- REM Integration Start ---
+        if settings.postgres.enabled:
+            # Connect to DB
+            db = PostgresService()
+            try:
+                await db.connect()
+                user_service = UserService(db)
+                
+                # Get/Create User
+                user_entity = await user_service.get_or_create_user(
+                    email=user_info.get("email"),
+                    name=user_info.get("name", "New User"),
+                    avatar_url=user_info.get("picture"),
+                    tenant_id="default", # Single tenant for now
+                )
+                
+                # Link Anonymous Session
+                # TrackingMiddleware sets request.state.anon_id
+                anon_id = getattr(request.state, "anon_id", None)
+                # Fallback to cookie if middleware didn't run or state missing
+                if not anon_id:
+                    # Attempt to parse cookie manually if needed, but middleware 
+                    # usually handles the signature logic.
+                    # Just check raw cookie for simple case (not recommended if signed)
+                    pass 
+                
+                if anon_id:
+                    await user_service.link_anonymous_session(user_entity, anon_id)
+                    
+                # Enrich session user with DB info
+                db_info = {
+                    "id": str(user_entity.id),
+                    "tenant_id": user_entity.tenant_id,
+                    "tier": user_entity.tier.value if user_entity.tier else "free",
+                    "roles": [user_entity.role] if user_entity.role else [],
+                }
+                
+            except Exception as db_e:
+                logger.error(f"Database error during auth callback: {db_e}")
+                # Continue login even if DB fails, but warn
+                db_info = {"id": "db_error", "tier": "free"}
+            finally:
+                await db.disconnect()
+        else:
+            db_info = {"id": "no_db", "tier": "free"}
+        # --- REM Integration End ---
 
         # Store user info in session
         request.session["user"] = {
@@ -176,6 +225,11 @@ async def callback(provider: str, request: Request):
             "email": user_info.get("email"),
             "name": user_info.get("name"),
             "picture": user_info.get("picture"),
+            # Add DB info
+            "id": db_info.get("id"),
+            "tenant_id": db_info.get("tenant_id", "default"),
+            "tier": db_info.get("tier"),
+            "roles": db_info.get("roles", []),
         }
 
         # Store tokens in session for API access

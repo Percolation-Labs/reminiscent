@@ -128,15 +128,16 @@ def sanitize_tool_name(tool_name: str) -> str:
 
 
 def load_evaluator_schema(evaluator_name: str) -> dict[str, Any]:
-    """Load evaluator schema from schemas/evaluators/ directory.
+    """Load evaluator schema using centralized schema loader.
 
-    Searches for evaluator schema in rem/schemas/evaluators/
-    Supports .json, .yaml, and .yml files.
+    Uses the same unified search logic as agent schemas:
+    - "hello-world/default" → schemas/evaluators/hello-world/default.yaml
+    - "lookup-correctness" → schemas/evaluators/rem/lookup-correctness.yaml
+    - "rem-lookup-correctness" → schemas/evaluators/rem/lookup-correctness.yaml
 
     Args:
-        evaluator_name: Evaluator name (with or without extension)
-                       e.g., "rem-lookup-correctness" or
-                             "rem-lookup-correctness.yaml"
+        evaluator_name: Evaluator name or path
+                       e.g., "hello-world/default", "lookup-correctness"
 
     Returns:
         Evaluator schema dictionary with keys:
@@ -150,43 +151,13 @@ def load_evaluator_schema(evaluator_name: str) -> dict[str, Any]:
         FileNotFoundError: If evaluator schema not found
 
     Example:
-        >>> schema = load_evaluator_schema("rem-lookup-correctness")
+        >>> schema = load_evaluator_schema("hello-world/default")
         >>> print(schema["description"])
     """
-    # Get schemas directory (rem/schemas/evaluators/)
-    # rem.__file__ = rem/src/rem/__init__.py
-    # We need rem/schemas/evaluators/
-    import rem
-    rem_module_dir = Path(rem.__file__).parent  # rem/src/rem
-    rem_package_root = rem_module_dir.parent.parent  # rem/src/rem -> rem/src -> rem
-    schema_dir = rem_package_root / "schemas" / "evaluators"
+    from ...utils.schema_loader import load_agent_schema
 
-    # Try .yaml first (preferred format)
-    yaml_path = schema_dir / f"{evaluator_name}.yaml"
-    if yaml_path.exists():
-        logger.debug(f"Loading evaluator schema from {yaml_path}")
-        with open(yaml_path) as f:
-            return yaml.safe_load(f)
-
-    # Try .yml
-    yml_path = schema_dir / f"{evaluator_name}.yml"
-    if yml_path.exists():
-        logger.debug(f"Loading evaluator schema from {yml_path}")
-        with open(yml_path) as f:
-            return yaml.safe_load(f)
-
-    # Try .json
-    json_path = schema_dir / f"{evaluator_name}.json"
-    if json_path.exists():
-        logger.debug(f"Loading evaluator schema from {json_path}")
-        with open(json_path) as f:
-            return json.load(f)
-
-    raise FileNotFoundError(
-        f"Evaluator schema not found: {evaluator_name}\n"
-        f"Searched in: {schema_dir}\n"
-        f"Supported formats: .yaml, .yml, .json"
-    )
+    # Use centralized schema loader (searches evaluator paths too)
+    return load_agent_schema(evaluator_name)
 
 
 # =============================================================================
@@ -338,6 +309,22 @@ def create_evaluator_from_schema(
         # Already a dict
         schema = evaluator_schema_path
 
+    # Extract model from schema's provider_configs if not explicitly provided
+    if model_name is None:
+        json_schema_extra = schema.get("json_schema_extra", {})
+        provider_configs = json_schema_extra.get("provider_configs", [])
+        if provider_configs:
+            # Use first provider config
+            first_provider = provider_configs[0]
+            provider_name = first_provider.get("provider_name", "openai")
+            schema_model_name = first_provider.get("model_name", "gpt-4o-mini")
+            # Format as "provider:model" if not OpenAI (OpenAI is default)
+            if provider_name == "openai":
+                model_name = schema_model_name
+            else:
+                model_name = f"{provider_name}:{schema_model_name}"
+            logger.debug(f"Using model from schema provider_configs: {model_name}")
+
     # Create evaluator config
     evaluator_config = create_phoenix_evaluator(
         evaluator_schema=schema,
@@ -361,7 +348,8 @@ def create_evaluator_from_schema(
         Returns:
             Evaluation result with score, label, explanation
         """
-        logger.debug(f"Evaluating example: {example.get('input', '')[:100]}...")
+        input_preview = str(example.get('input', ''))[:100]
+        logger.debug(f"Evaluating example: {input_preview}...")
 
         # Phoenix llm_classify() expects a flat dict with string values
         # Build evaluation input by flattening nested dicts
@@ -393,6 +381,7 @@ def create_evaluator_from_schema(
 
         try:
             # Create single-row DataFrame for llm_classify
+            # Note: Phoenix's llm_classify requires pandas DataFrame (imported above)
             df = pd.DataFrame([eval_input])
 
             # Call Phoenix llm_classify
@@ -404,7 +393,7 @@ def create_evaluator_from_schema(
                 provide_explanation=True,
             )
 
-            # Extract result
+            # Extract result (results_df is pandas DataFrame from Phoenix)
             if not results_df.empty:
                 row = results_df.iloc[0]
                 label = row.get("label", "error")

@@ -1,7 +1,12 @@
 """
 Schema generation utility from Pydantic models.
 
-Scans a directory of Pydantic models and generates complete database schemas including:
+Generates complete database schemas from:
+1. REM's core models (Resource, Moment, User, etc.)
+2. Models registered via rem.register_model() or rem.register_models()
+3. Models discovered from a directory scan
+
+Output includes:
 - Primary tables
 - Embeddings tables
 - KV_STORE triggers
@@ -11,8 +16,12 @@ Scans a directory of Pydantic models and generates complete database schemas inc
 Usage:
     from rem.services.postgres.schema_generator import SchemaGenerator
 
+    # Generate from registry (includes core + registered models)
     generator = SchemaGenerator()
-    schema = generator.generate_from_directory("src/rem/models/entities")
+    schema = await generator.generate_from_registry()
+
+    # Or generate from directory (legacy)
+    schema = await generator.generate_from_directory("src/rem/models/entities")
 
     # Write to file
     with open("src/rem/sql/schema.sql", "w") as f:
@@ -228,11 +237,64 @@ class SchemaGenerator:
         self.schemas[table_name] = schema
         return schema
 
+    async def generate_from_registry(
+        self, output_file: str | None = None, include_core: bool = True
+    ) -> str:
+        """
+        Generate complete schema from the model registry.
+
+        Includes:
+        1. REM's core models (if include_core=True)
+        2. Models registered via rem.register_model() or rem.register_models()
+
+        Args:
+            output_file: Optional output file path (relative to output_dir)
+            include_core: If True, include REM's core models (default: True)
+
+        Returns:
+            Complete SQL schema as string
+
+        Example:
+            import rem
+            from rem.models.core import CoreModel
+
+            # Register custom model
+            @rem.register_model
+            class CustomEntity(CoreModel):
+                name: str
+
+            # Generate schema (includes core + custom)
+            generator = SchemaGenerator()
+            schema = await generator.generate_from_registry()
+        """
+        from ...registry import get_model_registry
+
+        registry = get_model_registry()
+        models = registry.get_models(include_core=include_core)
+
+        logger.info(f"Generating schema from registry: {len(models)} models")
+
+        # Generate schemas for each model
+        for model_name, ext in models.items():
+            await self.generate_schema_for_model(
+                ext.model,
+                table_name=ext.table_name,
+                entity_key_field=ext.entity_key_field,
+            )
+
+        return self._generate_sql_output(
+            source="model registry",
+            output_file=output_file,
+        )
+
     async def generate_from_directory(
         self, directory: str | Path, output_file: str | None = None
     ) -> str:
         """
         Generate complete schema from all models in a directory.
+
+        Note: For most use cases, prefer generate_from_registry() which uses
+        the model registry pattern.
 
         Args:
             directory: Path to directory with Pydantic models
@@ -248,12 +310,31 @@ class SchemaGenerator:
         for model_name, model in models.items():
             await self.generate_schema_for_model(model)
 
-        # Combine into single SQL file
+        return self._generate_sql_output(
+            source=f"directory: {directory}",
+            output_file=output_file,
+        )
+
+    def _generate_sql_output(
+        self, source: str, output_file: str | None = None
+    ) -> str:
+        """
+        Generate SQL output from accumulated schemas.
+
+        Args:
+            source: Description of schema source (for header comment)
+            output_file: Optional output file path (relative to output_dir)
+
+        Returns:
+            Complete SQL schema as string
+        """
+        import datetime
+
         sql_parts = [
             "-- REM Model Schema (install_models.sql)",
             "-- Generated from Pydantic models",
-            f"-- Source directory: {directory}",
-            "-- Generated at: " + __import__("datetime").datetime.now().isoformat(),
+            f"-- Source: {source}",
+            f"-- Generated at: {datetime.datetime.now().isoformat()}",
             "--",
             "-- DO NOT EDIT MANUALLY - Regenerate with: rem db schema generate",
             "--",

@@ -1,6 +1,6 @@
 [project]
 name = "remdb"
-version = "0.3.3"
+version = "0.3.13"
 description = "Resources Entities Moments - Bio-inspired memory system for agentic AI workloads"
 readme = "README.md"
 authors = [
@@ -15,7 +15,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 
 dependencies = [
     # Core Framework
@@ -56,8 +56,7 @@ dependencies = [
     # Schema Tools
     "json-schema-to-pydantic>=0.2.0",
     # Document Processing
-    "kreuzberg>=3.21.0",
-    "gmft>=0.3.0",
+    "kreuzberg>=3.21.0,<4.0.0",  # Document parsing with table extraction
     "semchunk>=2.2.0",
     "tiktoken>=0.5.0",
     "gitpython>=3.1.45",

@@ -9,7 +9,7 @@ Design Pattern:
 - Support short names: "contract-analyzer" → "schemas/agents/contract-analyzer.yaml"
 - Support relative/absolute paths
 - Consistent error messages and logging
-i
+
 Usage:
     # From API
     schema = load_agent_schema("rem")
@@ -19,6 +19,26 @@ Usage:
 
     # From agent factory
     schema = load_agent_schema("contract-analyzer")
+
+TODO: Git FS Integration
+    The schema loader currently uses importlib.resources for package schemas
+    and direct filesystem access for custom paths. The FS abstraction layer
+    (rem.services.fs.FS) could be used to abstract storage backends:
+
+    - Local filesystem (current)
+    - Git repositories (GitService)
+    - S3 (via FS provider)
+
+    This would enable loading schemas from versioned Git repos or S3 buckets
+    without changing the API. The FS provider pattern already exists and just
+    needs integration testing with the schema loader.
+
+    Example future usage:
+        # Load from Git at specific version
+        schema = load_agent_schema("git://rem/schemas/agents/rem.yaml?ref=v1.0.0")
+
+        # Load from S3
+        schema = load_agent_schema("s3://rem-schemas/agents/cv-parser.yaml")
 
 Schema Caching Status:
 
@@ -71,13 +91,14 @@ import yaml
 from loguru import logger
 
 
-# Standard search paths for agent schemas (in priority order)
+# Standard search paths for agent/evaluator schemas (in priority order)
 SCHEMA_SEARCH_PATHS = [
     "schemas/agents/{name}.yaml",          # Top-level agents (e.g., rem.yaml)
     "schemas/agents/core/{name}.yaml",     # Core system agents
     "schemas/agents/examples/{name}.yaml", # Example agents
-    "schemas/evaluators/{name}.yaml",
-    "schemas/{name}.yaml",
+    "schemas/evaluators/{name}.yaml",      # Nested evaluators (e.g., hello-world/default)
+    "schemas/evaluators/rem/{name}.yaml",  # REM evaluators (e.g., lookup-correctness)
+    "schemas/{name}.yaml",                 # Generic schemas
 ]
 
 # In-memory cache for filesystem schemas (no TTL - immutable)

@@ -382,9 +382,9 @@ def rebuild_cache(connection: str | None):
 
 @click.command()
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
-@click.option("--user-id", default="test-user", help="User ID for loaded data")
+@click.option("--user-id", default=None, help="User ID for loaded data (default: from settings)")
 @click.option("--dry-run", is_flag=True, help="Show what would be loaded without loading")
-def load(file_path: Path, user_id: str, dry_run: bool):
+def load(file_path: Path, user_id: str | None, dry_run: bool):
     """
     Load data from YAML file into database.
 
@@ -400,7 +400,11 @@ def load(file_path: Path, user_id: str, dry_run: bool):
         rem db load data.yaml --user-id my-user
         rem db load data.yaml --dry-run
     """
-    asyncio.run(_load_async(file_path, user_id, dry_run))
+    from ...settings import settings
+
+    # Resolve user_id from settings if not provided
+    effective_user_id = user_id or settings.test.effective_user_id
+    asyncio.run(_load_async(file_path, effective_user_id, dry_run))
 
 
 async def _load_async(file_path: Path, user_id: str, dry_run: bool):
@@ -466,6 +470,16 @@ async def _load_async(file_path: Path, user_id: str, dry_run: bool):
                         InlineEdge(**edge).model_dump(mode='json')
                         for edge in row_data["graph_edges"]
                     ]
+
+                # Convert any ISO timestamp strings with Z suffix to naive datetime
+                # This handles fields like starts_timestamp, ends_timestamp, etc.
+                from ...utils.date_utils import parse_iso
+                for key, value in list(row_data.items()):
+                    if isinstance(value, str) and (key.endswith("_timestamp") or key.endswith("_at")):
+                        try:
+                            row_data[key] = parse_iso(value)
+                        except (ValueError, TypeError):
+                            pass  # Not a valid datetime string, leave as-is
 
                 # Create model instance and upsert via repository
                 from ...services.postgres.repository import Repository
