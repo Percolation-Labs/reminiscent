@@ -46,7 +46,7 @@ spec:
         component: rem-consumer
 
     spec:
-      serviceAccountName: file-processor  # IRSA for S3 + SQS access
+      serviceAccountName: rem-app  # Uses rem-app Pod Identity (has S3 + SQS permissions)
 
       # Security context
       securityContext:
@@ -56,7 +56,7 @@ spec:
 
       containers:
       - name: processor
-        image: percolationlabs/rem:api-23da4cf
+        image: percolationlabs/rem:latest
         imagePullPolicy: Always
 
         # Run file processor worker

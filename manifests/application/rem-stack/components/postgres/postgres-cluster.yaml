@@ -2,7 +2,7 @@ apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
   name: rem-postgres
-  namespace: rem-api
+  namespace: siggy
 spec:
   instances: 3
   primaryUpdateStrategy: unsupervised
@@ -18,6 +18,14 @@ spec:
         name: rem-database-credentials
       # Run SQL migrations from ConfigMap on first startup
       # ConfigMap generated from rem/sql/migrations/*.sql via ./manifests/generate-sql-configmap.sh
+
+      # postInitSQL runs as superuser in postgres database context
+      # Phoenix needs isolated database to avoid table conflicts (both have 'users' table)
+      postInitSQL:
+        - CREATE DATABASE phoenixdb OWNER remuser
+        - GRANT ALL PRIVILEGES ON DATABASE phoenixdb TO remuser
+
+      # postInitApplicationSQLRefs runs as app user in remdb context
       postInitApplicationSQLRefs:
         configMapRefs:
           - name: rem-postgres-init-sql
@@ -133,24 +141,14 @@ spec:
         action: replace
 
   # Affinity rules for high availability
+  # NOTE: nodeSelector/tolerations for dedicated stateful nodes are configured
+  # in production overlay. Base config schedules on any node for MVP simplicity.
   affinity:
     enablePodAntiAffinity: true
     topologyKey: kubernetes.io/hostname
     podAntiAffinityType: required
 
-  # Node selector for stateful workloads
-  nodeSelector:
-    workload-type: stateful
-
-  # Tolerate stateful node taints
-  tolerations:
-    - key: workload-type
-      operator: Equal
-      value: stateful
-      effect: NoSchedule
-
-  # Service account for IRSA
+  # Service account for Pod Identity (no annotations needed)
   serviceAccountTemplate:
     metadata:
-      annotations:
-        eks.amazonaws.com/role-arn: ${REM_POSTGRES_ROLE_ARN}
+      name: postgres-backup

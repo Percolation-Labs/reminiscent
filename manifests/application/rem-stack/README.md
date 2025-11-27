@@ -89,6 +89,50 @@ The REM stack consists of **2 deployments** in the `rem-app` namespace:
   - SQL init scripts via ConfigMap (generated)
   - Scheduled backups to S3
 
+## PostgreSQL Configuration
+
+Two configurations are provided - MVP for early stage, scaled for growth:
+
+| Setting | Staging (MVP) | Production (Scaled) |
+|---------|---------------|---------------------|
+| **Image** | PostgreSQL 18.1 | PostgreSQL 18.1 |
+| **Instances** | 1 (no HA) | 2 (primary + replica) |
+| **Storage** | 20Gi | 100Gi |
+| **Storage Class** | gp3-postgres | gp3-postgres |
+| **Memory** | 1Gi / 2Gi | 4Gi / 8Gi |
+| **CPU** | 500m / 1000m | 2000m / 4000m |
+| **Est. Cost** | ~$50-80/month | ~$250-300/month |
+
+### Scaling Up (Online)
+
+All scaling operations are online except storage class changes:
+
+```yaml
+# overlays/staging/postgres-patch.yaml - just change the values:
+
+instances: 2      # Add replica - CNPG syncs automatically
+storage:
+  size: 100Gi     # Expand storage - live, can only increase
+resources:
+  requests:
+    memory: "4Gi" # More memory - rolling restart, zero downtime with 2+ replicas
+    cpu: "2000m"
+```
+
+**Scaling rules:**
+- **instances**: Add anytime, CNPG handles replication automatically
+- **storage**: Can only INCREASE (never decrease), live expansion supported
+- **resources**: Rolling restart - replica first, failover, then old primary
+- **storageClass**: Requires data migration (start with gp3-postgres to avoid)
+
+### Storage Classes (CDK-provisioned)
+
+| Class | IOPS | Throughput | Use Case |
+|-------|------|------------|----------|
+| `gp3` | 3000 | 125 MB/s | Dev/testing, general workloads |
+| `gp3-postgres` | 5000 | 250 MB/s | **Recommended** - easy to scale |
+| `io2-postgres` | 10000 | N/A | Mission-critical, <1ms latency |
+
 ## ConfigMaps
 
 The stack uses **2 ConfigMaps** in the `rem-app` namespace:

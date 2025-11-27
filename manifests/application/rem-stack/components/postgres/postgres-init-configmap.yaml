@@ -13,7 +13,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: rem-postgres-init-sql
-  namespace: rem-api
+  namespace: siggy
   labels:
     app: rem-postgres
     component: database

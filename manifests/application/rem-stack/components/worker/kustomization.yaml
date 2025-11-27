@@ -6,7 +6,8 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 resources:
-  - serviceaccount.yaml
+  # Uses rem-app service account (created in api component) with Pod Identity
   - deployment.yaml
+  # KEDA resources
   - keda-scaledobject.yaml
   - triggerauthentication.yaml

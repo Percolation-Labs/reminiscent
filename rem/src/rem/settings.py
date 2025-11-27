@@ -394,6 +394,15 @@ class AuthSettings(BaseSettings):
         ),
     )
 
+    mcp_requires_auth: bool = Field(
+        default=True,
+        description=(
+            "Require authentication for MCP endpoints. "
+            "MCP is a protected service and should always require login in production. "
+            "Set to false only for local development/testing."
+        ),
+    )
+
     session_secret: str = Field(
         default="",
         description="Secret key for session cookie signing (generate with secrets.token_hex(32))",

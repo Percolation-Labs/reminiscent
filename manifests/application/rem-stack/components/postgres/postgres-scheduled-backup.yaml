@@ -2,7 +2,7 @@ apiVersion: postgresql.cnpg.io/v1
 kind: ScheduledBackup
 metadata:
   name: rem-postgres-backup
-  namespace: rem-api
+  namespace: siggy
 spec:
   schedule: "0 2 * * *"  # Daily at 2 AM UTC
   backupOwnerReference: self

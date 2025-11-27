@@ -582,3 +582,69 @@ async def read_resource(uri: str) -> dict[str, Any]:
             "uri": uri,
             "data": {"content": result},
         }
+
+
+async def register_metadata(
+    confidence: float | None = None,
+    references: list[str] | None = None,
+    sources: list[str] | None = None,
+    flags: list[str] | None = None,
+) -> dict[str, Any]:
+    """
+    Register response metadata to be emitted as an SSE MetadataEvent.
+
+    Call this tool BEFORE generating your final response to provide structured
+    metadata that will be sent to the client alongside your natural language output.
+    This allows you to stream conversational responses while still providing
+    machine-readable confidence scores, references, and other metadata.
+
+    **Design Pattern**: Agents can call this once before their final response to
+    register metadata that the streaming layer will emit as a MetadataEvent.
+    This decouples structured metadata from the response format.
+
+    Args:
+        confidence: Confidence score (0.0-1.0) for the response quality.
+            - 0.9-1.0: High confidence, answer is well-supported
+            - 0.7-0.9: Medium confidence, some uncertainty
+            - 0.5-0.7: Low confidence, significant gaps
+            - <0.5: Very uncertain, may need clarification
+        references: List of reference identifiers (file paths, document IDs,
+            entity labels) that support the response.
+        sources: List of source descriptions (e.g., "REM database",
+            "search results", "user context").
+        flags: Optional flags for the response (e.g., "needs_review",
+            "uncertain", "incomplete").
+
+    Returns:
+        Dict with:
+        - status: "success"
+        - _metadata_event: True (marker for streaming layer)
+        - confidence, references, sources, flags: The registered values
+
+    Examples:
+        # High confidence answer with references
+        register_metadata(
+            confidence=0.95,
+            references=["sarah-chen", "q3-report-2024"],
+            sources=["REM database lookup"]
+        )
+
+        # Lower confidence with flags
+        register_metadata(
+            confidence=0.65,
+            flags=["needs_review", "incomplete_data"]
+        )
+    """
+    logger.info(
+        f"📊 Registering metadata: confidence={confidence}, "
+        f"refs={len(references or [])}, sources={len(sources or [])}"
+    )
+
+    return {
+        "status": "success",
+        "_metadata_event": True,  # Marker for streaming layer
+        "confidence": confidence,
+        "references": references,
+        "sources": sources,
+        "flags": flags,
+    }

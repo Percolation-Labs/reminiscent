@@ -1,0 +1,68 @@
+# =============================================================================
+# Staging PostgreSQL Configuration
+# =============================================================================
+#
+# SCALING GUIDE - Two configurations documented below:
+#
+# ┌─────────────────────────────────────────────────────────────────────────────┐
+# │ MVP (~$50-80/month)              │ SCALED (~$250-300/month)                 │
+# ├─────────────────────────────────────────────────────────────────────────────┤
+# │ instances: 1                     │ instances: 2                             │
+# │ storage: 20Gi                    │ storage: 100Gi                           │
+# │ storageClass: gp3-postgres       │ storageClass: gp3-postgres               │
+# │ memory: 1Gi / 2Gi                │ memory: 4Gi / 8Gi                        │
+# │ cpu: 500m / 1000m                │ cpu: 2000m / 4000m                       │
+# └─────────────────────────────────────────────────────────────────────────────┘
+#
+# HOW TO SCALE UP (all changes are online except storage class):
+#   - instances: Add replicas anytime, CNPG handles replication automatically
+#   - storage: Can only INCREASE (never decrease), live expansion supported
+#   - resources: Rolling restart - replica first, failover, then old primary
+#   - storageClass: Requires data migration (start with gp3-postgres to avoid)
+#
+# =============================================================================
+
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: rem-postgres
+  namespace: siggy
+spec:
+  # -----------------------------------------------------------------------------
+  # Replicas: 1 for MVP (no HA), 2+ for production (primary + replica)
+  # Scale up: Just increase this number, CNPG syncs automatically
+  # -----------------------------------------------------------------------------
+  instances: 1  # MVP: 1 | SCALED: 2
+
+  # PostgreSQL 18 with pgvector extension
+  imageName: ghcr.io/cloudnative-pg/postgresql:18.1
+
+  # -----------------------------------------------------------------------------
+  # Storage: Start small, expand later (can only increase, never decrease)
+  # gp3-postgres: 5000 IOPS, 250 MB/s - good baseline, easy to scale
+  # -----------------------------------------------------------------------------
+  storage:
+    size: 20Gi  # MVP: 20Gi | SCALED: 100Gi
+    storageClass: gp3-postgres  # Keep this - changing requires migration
+    resizeInUseVolumes: true    # Enables live volume expansion
+
+  # -----------------------------------------------------------------------------
+  # Resources: Scale CPU/memory as traffic grows
+  # Changes trigger rolling restart (zero downtime with 2+ replicas)
+  # -----------------------------------------------------------------------------
+  resources:
+    requests:
+      memory: "4Gi"   # MVP: 4Gi (must be >= shared_buffers)
+      cpu: "500m"     # MVP: 500m  | SCALED: 2000m
+    limits:
+      memory: "8Gi"   # MVP: 8Gi
+      cpu: "2000m"    # MVP: 2000m | SCALED: 4000m
+
+  # -----------------------------------------------------------------------------
+  # Affinity: MVP uses preferred anti-affinity (single node OK)
+  # SCALED: Change to required + add dedicated stateful nodepool
+  # -----------------------------------------------------------------------------
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+    podAntiAffinityType: preferred  # MVP: preferred (single node ok) | SCALED: required

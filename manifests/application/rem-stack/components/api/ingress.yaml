@@ -1,3 +1,15 @@
+# =============================================================================
+# API Ingress Configuration
+# =============================================================================
+#
+# VISIBILITY OPTIONS:
+#   - internet-facing: Public access (use for demos, production with auth)
+#   - internal: Private access only (use for internal/VPC-only deployments)
+#
+# To switch, change the 'scheme' annotation in your overlay patch.
+#
+# =============================================================================
+
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -6,24 +18,39 @@ metadata:
     app.kubernetes.io/name: rem-api
     app.kubernetes.io/component: api
   annotations:
-    alb.ingress.kubernetes.io/scheme: internet-facing
+    # -------------------------------------------------------------------------
+    # VISIBILITY: internet-facing (public) or internal (private)
+    # Override this in overlay patches for different environments
+    # -------------------------------------------------------------------------
+    alb.ingress.kubernetes.io/scheme: internet-facing  # PUBLIC | Change to 'internal' for private
+
+    # Target configuration
     alb.ingress.kubernetes.io/target-type: ip
+
+    # Health checks
     alb.ingress.kubernetes.io/healthcheck-protocol: HTTP
-    alb.ingress.kubernetes.io/healthcheck-path: /health/live
+    alb.ingress.kubernetes.io/healthcheck-path: /health
     alb.ingress.kubernetes.io/healthcheck-interval-seconds: "30"
     alb.ingress.kubernetes.io/healthcheck-timeout-seconds: "10"
     alb.ingress.kubernetes.io/healthy-threshold-count: "2"
     alb.ingress.kubernetes.io/unhealthy-threshold-count: "2"
-    alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS": 443}]'
-    alb.ingress.kubernetes.io/ssl-redirect: "443"
-    alb.ingress.kubernetes.io/certificate-arn: ${ACM_CERTIFICATE_ARN}
-    alb.ingress.kubernetes.io/tags: Environment=production,Application=rem-api
+
+    # HTTP only for MVP (no SSL cert required)
+    # To enable HTTPS, uncomment below and set ACM_CERTIFICATE_ARN
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+    # alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS": 443}]'
+    # alb.ingress.kubernetes.io/ssl-redirect: "443"
+    # alb.ingress.kubernetes.io/certificate-arn: ${ACM_CERTIFICATE_ARN}
+
+    # Tags and settings
+    alb.ingress.kubernetes.io/tags: Environment=staging,Application=rem-api
     alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=60
+
 spec:
   ingressClassName: alb
   rules:
-    - host: api.rem.example.com
-      http:
+    # Use ALB DNS name directly (no custom domain required for MVP)
+    - http:
         paths:
           - path: /
             pathType: Prefix

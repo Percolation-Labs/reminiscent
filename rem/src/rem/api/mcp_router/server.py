@@ -165,11 +165,18 @@ def create_mcp_server(is_local: bool = False) -> FastMCP:
     )
 
     # Register REM tools
-    from .tools import ask_rem_agent, ingest_into_rem, read_resource, search_rem
+    from .tools import (
+        ask_rem_agent,
+        ingest_into_rem,
+        read_resource,
+        register_metadata,
+        search_rem,
+    )
 
     mcp.tool()(search_rem)
     mcp.tool()(ask_rem_agent)
     mcp.tool()(read_resource)
+    mcp.tool()(register_metadata)
 
     # File ingestion tool (with local path support for local servers)
     # Wrap to inject is_local parameter

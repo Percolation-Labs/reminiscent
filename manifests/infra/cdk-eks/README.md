@@ -132,6 +132,26 @@ npx cdk deploy REMApplicationClusterA --profile rem --require-approval never
 
 **Note**: The `--profile rem` flag is **required** even if you have `AWS_PROFILE=rem` set in your environment. CDK CLI does not automatically use the environment variable and will fall back to default credentials, which may be for a different AWS account.
 
+**Tip: Log Output for Monitoring**
+
+For long-running deployments (~20 minutes), capture output to a file for easier monitoring:
+
+```bash
+# Recommended: Output to file AND terminal simultaneously
+npx cdk deploy REMApplicationClusterA --profile rem --require-approval never 2>&1 | tee deploy.log
+
+# Monitor progress in another terminal
+tail -f deploy.log
+
+# Or search for specific events
+grep -E "(CREATE_|UPDATE_|DELETE_|FAILED)" deploy.log
+```
+
+This is especially useful when:
+- Deployment spans multiple terminal sessions
+- You need to review errors after the fact
+- Debugging Lambda rate limiting or CloudFormation failures
+
 #### What to Expect During Deployment
 
 **Total Deployment Time**: ~18-20 minutes (1157-1200 seconds)

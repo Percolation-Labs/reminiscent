@@ -1,0 +1,11 @@
+# Phoenix - OTEL/Observability Platform
+# Receives traces from rem-api and stores in PostgreSQL
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - deployment.yaml
+  - external-secret.yaml
+  - phoenix-secrets-external.yaml
+  - postgres-external-secret.yaml

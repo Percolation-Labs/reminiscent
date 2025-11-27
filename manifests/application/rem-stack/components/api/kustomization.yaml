@@ -7,7 +7,7 @@ kind: Kustomization
 
 resources:
   - serviceaccount.yaml
-  - secretstore.yaml
+  # secretstore.yaml removed - using ClusterSecretStore from platform layer
   - external-secret.yaml
   - configmap.yaml
   - deployment.yaml

@@ -1,0 +1,15 @@
+# ClusterSecretStores for External Secrets Operator
+#
+# This kustomization bundles all ClusterSecretStore resources:
+#   - aws-parameter-store: Access AWS SSM Parameter Store
+#   - kubernetes-secrets: Access Kubernetes secrets (for CNPG-generated creds)
+#
+# Deploy after ESO is ready:
+#   kubectl apply -k manifests/platform/external-secrets/
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - cluster-secret-store.yaml
+  - kubernetes-cluster-secret-store.yaml

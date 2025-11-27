@@ -303,6 +303,68 @@ def _prepare_schema_for_qwen(schema: dict[str, Any]) -> dict[str, Any]:
     return schema_copy
 
 
+def _convert_properties_to_prompt(properties: dict[str, Any]) -> str:
+    """
+    Convert schema properties to prompt guidance text.
+
+    When structured_output is disabled, this converts the properties
+    definition into natural language guidance that informs the agent
+    about the expected response structure without forcing JSON output.
+
+    Args:
+        properties: JSON Schema properties dict
+
+    Returns:
+        Prompt text describing the expected response elements
+
+    Example:
+        properties = {
+            "answer": {"type": "string", "description": "The answer"},
+            "confidence": {"type": "number", "description": "Confidence 0-1"}
+        }
+        # Returns:
+        # "## Response Structure\n\nYour response should include:\n- **answer**: The answer\n..."
+    """
+    if not properties:
+        return ""
+
+    lines = ["## Response Guidelines", "", "Your response should address the following elements:"]
+
+    for field_name, field_def in properties.items():
+        field_type = field_def.get("type", "any")
+        description = field_def.get("description", "")
+
+        # Format based on type
+        if field_type == "array":
+            type_hint = "list"
+        elif field_type == "number":
+            type_hint = "number"
+            # Include min/max if specified
+            if "minimum" in field_def or "maximum" in field_def:
+                min_val = field_def.get("minimum", "")
+                max_val = field_def.get("maximum", "")
+                if min_val != "" and max_val != "":
+                    type_hint = f"number ({min_val}-{max_val})"
+        elif field_type == "boolean":
+            type_hint = "yes/no"
+        else:
+            type_hint = field_type
+
+        # Build field description
+        field_line = f"- **{field_name}**"
+        if type_hint and type_hint != "string":
+            field_line += f" ({type_hint})"
+        if description:
+            field_line += f": {description}"
+
+        lines.append(field_line)
+
+    lines.append("")
+    lines.append("Respond naturally in prose, addressing these elements where relevant.")
+
+    return "\n".join(lines)
+
+
 def _create_schema_wrapper(
     result_type: type[BaseModel], strip_description: bool = True
 ) -> type[BaseModel]:
@@ -462,10 +524,11 @@ async def create_agent(
         # agent_schema = load_agent_schema(context.agent_schema_uri)
         pass
 
-    # Determine model: override > context.default_model > settings
-    model = (
-        model_override or (context.default_model if context else settings.llm.default_model)
-    )
+    # Determine model: validate override against allowed list, fallback to context or settings
+    from rem.agentic.llm_provider_models import get_valid_model_or_default
+
+    default_model = context.default_model if context else settings.llm.default_model
+    model = get_valid_model_or_default(model_override, default_model)
 
     # Extract schema fields
     system_prompt = agent_schema.get("description", "") if agent_schema else ""
@@ -526,14 +589,25 @@ async def create_agent(
         # TODO: Convert resources to tools (MCP convenience syntax)
         pass
 
+    # Check if structured output is disabled for this schema
+    # When structured_output: false, properties become part of prompt instead of output_type
+    use_structured_output = metadata.get("structured_output", True)
+
     # Create dynamic result_type from schema if not provided
     if result_type is None and agent_schema and "properties" in agent_schema:
-        # Pre-process schema for Qwen compatibility (strips min/max, sets additionalProperties=False)
-        # This ensures the generated Pydantic model doesn't have incompatible constraints
-        sanitized_schema = _prepare_schema_for_qwen(agent_schema)
-        result_type = _create_model_from_schema(sanitized_schema)
-        logger.debug(f"Created dynamic Pydantic model: {result_type.__name__}")
-        logger.debug(f"Created dynamic Pydantic model: {result_type.__name__}")
+        if use_structured_output:
+            # Pre-process schema for Qwen compatibility (strips min/max, sets additionalProperties=False)
+            # This ensures the generated Pydantic model doesn't have incompatible constraints
+            sanitized_schema = _prepare_schema_for_qwen(agent_schema)
+            result_type = _create_model_from_schema(sanitized_schema)
+            logger.debug(f"Created dynamic Pydantic model: {result_type.__name__}")
+        else:
+            # Convert properties to prompt guidance instead of structured output
+            # This informs the agent about expected response structure without forcing it
+            properties_prompt = _convert_properties_to_prompt(agent_schema.get("properties", {}))
+            if properties_prompt:
+                system_prompt = system_prompt + "\n\n" + properties_prompt
+            logger.debug("Structured output disabled - properties converted to prompt guidance")
 
     # Create agent with optional output_type for structured output and tools
     if result_type:

@@ -21,7 +21,7 @@ spec:
         instrumentation.opentelemetry.io/inject-python: "rem-api-instrumentation"
 
     spec:
-      serviceAccountName: rem-api
+      serviceAccountName: rem-app
 
       initContainers:
         # Wait for database to be ready
@@ -31,7 +31,7 @@ spec:
             - sh
             - -c
             - |
-              until nc -z rem-postgres-rw.rem-api.svc.cluster.local 5432; do
+              until nc -z rem-postgres-rw.siggy.svc.cluster.local 5432; do
                 echo "Waiting for PostgreSQL..."
                 sleep 2
               done
@@ -39,7 +39,7 @@ spec:
 
       containers:
         - name: rem-api
-          image: percolationlabs/rem:api-23da4cf
+          image: percolationlabs/rem:latest
           imagePullPolicy: Always
 
           ports:
@@ -55,23 +55,20 @@ spec:
           env:
             # Database configuration (nested Pydantic settings pattern)
             - name: POSTGRES__HOST
-              value: rem-postgres-rw.rem-api.svc.cluster.local
+              value: rem-postgres-rw.siggy.svc.cluster.local
             - name: POSTGRES__PORT
               value: "5432"
             - name: POSTGRES__DATABASE
-              valueFrom:
-                secretKeyRef:
-                  name: rem-postgres-app
-                  key: dbname
+              value: remdb  # Database name from postgres-cluster.yaml bootstrap.initdb.database
             - name: POSTGRES__USER
               valueFrom:
                 secretKeyRef:
-                  name: rem-postgres-app
+                  name: rem-database-credentials
                   key: username
             - name: POSTGRES__PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: rem-postgres-app
+                  name: rem-database-credentials
                   key: password
             - name: POSTGRES__POOL_SIZE
               value: "20"

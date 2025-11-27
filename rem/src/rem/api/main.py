@@ -242,6 +242,7 @@ def create_app() -> FastAPI:
             protected_paths=["/api/v1"],
             excluded_paths=["/api/auth", "/api/v1/mcp/auth"],
             allow_anonymous=settings.auth.allow_anonymous,
+            mcp_requires_auth=settings.auth.mcp_requires_auth,
         )
 
     # Add session middleware for OAuth state management

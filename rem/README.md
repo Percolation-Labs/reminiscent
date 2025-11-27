@@ -1211,6 +1211,30 @@ S3__BUCKET_NAME=rem-storage
 S3__REGION=us-east-1
 ```
 
+### Building Docker Images
+
+We tag Docker images with three labels for traceability:
+1. `latest` - Always points to most recent build
+2. `<git-sha>` - Short commit hash for exact version tracing
+3. `<version>` - Semantic version from `pyproject.toml`
+
+```bash
+# Build and push multi-platform image to Docker Hub
+VERSION=$(grep '^version' pyproject.toml | cut -d'"' -f2) && \
+docker buildx build --platform linux/amd64,linux/arm64 \
+    -t percolationlabs/rem:latest \
+    -t percolationlabs/rem:$(git rev-parse --short HEAD) \
+    -t percolationlabs/rem:$VERSION \
+    --push \
+    -f Dockerfile .
+
+# Load locally for testing (single platform, no push)
+docker buildx build --platform linux/arm64 \
+    -t percolationlabs/rem:latest \
+    --load \
+    -f Dockerfile .
+```
+
 ### Production Deployment (Optional)
 
 For production deployment to AWS EKS with Kubernetes, see the main repository README:

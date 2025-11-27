@@ -17,7 +17,7 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 # Single namespace for all application components
-namespace: rem-api
+namespace: siggy
 
 # Common labels applied to all resources
 commonLabels:
@@ -32,20 +32,17 @@ commonAnnotations:
 resources:
   - ../components/api
   - ../components/worker
-  - ../components/dreaming-worker
+  # NOTE: dreaming-worker disabled for MVP - needs fixes:
+  #   - Hardcoded namespace (rem-app vs siggy)
+  #   - IRSA placeholder ${REM_WORKER_ROLE_ARN} needs Pod Identity
+  #   - Secret references need alignment
+  # - ../components/dreaming-worker
   # Postgres is separate - deploy to its own namespace
   # kubectl apply -k ../components/postgres --namespace postgres
 
-# Images - will be overridden in overlays with semantic versions
-images:
-  - name: rem-api
-    newName: ${ECR_REGISTRY}/rem-api
-    newTag: latest
-  - name: rem-worker
-    newName: ${ECR_REGISTRY}/rem-worker
-    newTag: latest
+# Note: percolationlabs/rem:latest is used directly in component manifests
 
-# Generate ConfigMap with version info
+# Generate ConfigMaps
 configMapGenerator:
   - name: rem-version-info
     literals:
@@ -53,6 +50,15 @@ configMapGenerator:
       - GIT_COMMIT=unset
       - BUILD_DATE=unset
       - ENVIRONMENT=base
+
+  # Application config - required by deployments
+  # Override in environment overlays (staging, prod)
+  - name: rem-config
+    literals:
+      - ENVIRONMENT=base
+      - AWS_REGION=us-east-1
+      - S3__BUCKET_NAME=unset  # Override in overlay
+      - OTEL_COLLECTOR_ENDPOINT=http://localhost:4317
 
 # Generate labels for version tracking
 labels:

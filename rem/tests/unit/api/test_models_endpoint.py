@@ -82,7 +82,7 @@ class TestModelsEndpoint:
             assert ":" in model_id, f"Model ID '{model_id}' should contain ':'"
             parts = model_id.split(":", 1)
             assert len(parts) == 2
-            assert parts[0] in ["openai", "anthropic", "google"]
+            assert parts[0] in ["openai", "anthropic", "google", "cerebras"]
 
 
 class TestGetModelEndpoint:

@@ -1,23 +1,15 @@
 # Kustomize Overlay: Production Environment
 #
-# This overlay customizes the base REM stack for production:
-# - High availability (3 replicas for stateless services)
-# - Higher resource allocations
-# - Strict security policies
-# - Production-grade PostgreSQL (3 instances)
+# Production configuration - matches staging for consistency.
+# Uses percolationlabs/rem:latest from Docker Hub.
+#
+# Features:
+#   - PostgreSQL: 2 replicas, 100Gi gp3-postgres storage (5000 IOPS)
+#   - API: percolationlabs/rem:latest (3 replicas for HA)
+#   - High resource allocations
 #
 # Usage:
 #   kubectl apply -k manifests/application/rem-stack/overlays/prod
-#
-# With semantic version:
-#   cd manifests/application/rem-stack/overlays/prod
-#   kustomize edit set image rem-api=<registry>/rem-api:v1.2.3
-#   kubectl apply -k .
-#
-# Tagging strategy:
-#   - v1.2.3   (stable release)
-#   - v1.2.4   (patch release)
-#   - v1.3.0   (minor release)
 
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
@@ -25,39 +17,32 @@ kind: Kustomization
 # Reference base configuration
 resources:
   - ../../base
+  - ../../components/postgres
 
-# Namespace: rem-app (inherited from base)
+# Namespace: rem-api (inherited from base)
 
 # Environment labels
 commonLabels:
   environment: production
 
-# Override images with production tags (semantic versioning)
-images:
-  - name: rem-api
-    newName: ${ECR_REGISTRY}/rem-api
-    newTag: ${IMAGE_TAG}  # e.g., v1.2.3
-  - name: rem-worker
-    newName: ${ECR_REGISTRY}/rem-worker
-    newTag: ${IMAGE_TAG}
+# Note: percolationlabs/rem:latest is used directly in component manifests
 
 # ConfigMap generator for production environment
 configMapGenerator:
   - name: rem-version-info
     behavior: merge
     literals:
-      - VERSION=${IMAGE_TAG}
+      - VERSION=latest
       - ENVIRONMENT=production
       - GIT_COMMIT=${GIT_COMMIT:-unknown}
       - BUILD_DATE=${BUILD_DATE:-unknown}
       - LOG_LEVEL=INFO
 
 # Patches for production environment
-# Note: PostgreSQL is deployed separately via CloudNativePG
-# See: manifests/application/rem-stack/components/postgres/
 patches:
   - path: api-patch.yaml
   - path: worker-patch.yaml
+  - path: postgres-patch.yaml
 
 # Scale replicas for HA
 replicas:
@@ -67,6 +52,6 @@ replicas:
 # Labels for version tracking
 labels:
   - pairs:
-      app.kubernetes.io/version: ${IMAGE_TAG}
+      app.kubernetes.io/version: latest
     includeSelectors: true
     includeTemplates: true

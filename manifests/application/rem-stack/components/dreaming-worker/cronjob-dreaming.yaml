@@ -43,19 +43,16 @@ spec:
           # Service account for IRSA (AWS access)
           serviceAccountName: rem-dreaming-sa
 
-          # Prefer spot instances for cost savings
+          # Prefer spot instances for cost savings (toleration only, no nodeSelector for MVP)
           tolerations:
           - key: karpenter.sh/capacity-type
             operator: Equal
             value: spot
             effect: NoSchedule
 
-          nodeSelector:
-            karpenter.sh/nodepool: stateless
-
           containers:
           - name: dreaming-worker
-            image: ${ECR_REGISTRY}/rem-stack:${IMAGE_TAG}
+            image: percolationlabs/rem:latest
             imagePullPolicy: IfNotPresent
 
             command:
@@ -171,12 +168,9 @@ spec:
             value: spot
             effect: NoSchedule
 
-          nodeSelector:
-            karpenter.sh/nodepool: stateless
-
           containers:
           - name: affinity-worker
-            image: ${ECR_REGISTRY}/rem-stack:${IMAGE_TAG}
+            image: percolationlabs/rem:latest
             imagePullPolicy: IfNotPresent
 
             command:
@@ -251,12 +245,9 @@ spec:
             value: spot
             effect: NoSchedule
 
-          nodeSelector:
-            karpenter.sh/nodepool: stateless
-
           containers:
           - name: affinity-llm-worker
-            image: ${ECR_REGISTRY}/rem-stack:${IMAGE_TAG}
+            image: percolationlabs/rem:latest
             imagePullPolicy: IfNotPresent
 
             command:

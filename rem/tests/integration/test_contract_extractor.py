@@ -28,12 +28,17 @@ def event_loop():
 
 @pytest.fixture
 async def postgres_service() -> PostgresService:
-    """Create PostgresService instance and ensure a clean database for each test."""
+    """Create PostgresService instance and ensure a clean database for each test.
+
+    Note: Database schema should already exist from prior migrations.
+    This fixture only cleans up data, not schema.
+    """
     pg = PostgresService()
     await pg.connect()
 
     # Ensure a clean database state for each test by truncating data
     # Do NOT drop schema as it removes functions/tables for other tests
+    # Do NOT re-run migrations as indexes may already exist
     cleanup_sql_commands = [
         "TRUNCATE TABLE resources CASCADE",
         "TRUNCATE TABLE users CASCADE",
@@ -47,12 +52,6 @@ async def postgres_service() -> PostgresService:
         except Exception as e:
             # Tables might not exist yet, that's ok
             pass
-
-    # Read and execute 002_install_models.sql
-    install_models_sql_path = Path("src/rem/sql/migrations/002_install_models.sql")
-    with open(install_models_sql_path, "r") as f:
-        install_models_sql = f.read()
-    await pg.execute_ddl(install_models_sql)
 
     yield pg
     await pg.disconnect()

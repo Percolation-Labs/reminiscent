@@ -5,10 +5,12 @@
 # ==============================================================================
 #
 # Build and Push (Multi-Platform with buildx):
-#   # Push to registry:
+#   # Push to registry (3 tags: latest, git SHA, semantic version):
+#   VERSION=$(grep '^version' pyproject.toml | cut -d'"' -f2) && \
 #   docker buildx build --platform linux/amd64,linux/arm64 \
 #     -t percolationlabs/rem:latest \
 #     -t percolationlabs/rem:$(git rev-parse --short HEAD) \
+#     -t percolationlabs/rem:$VERSION \
 #     --push \
 #     -f Dockerfile .
 #
@@ -35,8 +37,8 @@ RUN apt-get update && \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Enable bytecode compilation for faster startup
-ENV UV_COMPILE_BYTECODE=1
+# Disable bytecode compilation to avoid timeout on large files (language_data/name_data.py)
+ENV UV_COMPILE_BYTECODE=0
 
 # Copy dependency files first for better layer caching
 COPY pyproject.toml uv.lock README.md ./

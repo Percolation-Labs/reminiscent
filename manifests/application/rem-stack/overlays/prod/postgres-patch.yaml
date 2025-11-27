@@ -1,0 +1,31 @@
+# Production PostgreSQL configuration
+# - PostgreSQL 18 with pgvector
+# - gp3-postgres storage class for high performance (5000 IOPS, 250 MB/s)
+# - 100Gi storage for generous capacity
+# - 2 replicas for high availability (matches staging)
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: rem-postgres
+  namespace: siggy
+spec:
+  # 2 replicas: 1 primary + 1 replica for HA (matches staging)
+  instances: 2
+
+  # PostgreSQL 18 with pgvector extension
+  imageName: ghcr.io/cloudnative-pg/postgresql:18.1
+
+  # High-performance storage for production
+  storage:
+    size: 100Gi
+    storageClass: gp3-postgres  # 5000 IOPS, 250 MB/s throughput
+    resizeInUseVolumes: true
+
+  # Resource allocation - matches staging for consistent performance
+  resources:
+    requests:
+      memory: "4Gi"
+      cpu: "2000m"
+    limits:
+      memory: "8Gi"
+      cpu: "4000m"

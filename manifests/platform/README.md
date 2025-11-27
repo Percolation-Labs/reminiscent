@@ -10,10 +10,11 @@ All platform components are deployed as ArgoCD Applications using the OCI reposi
 
 1. **cert-manager**: Certificate management
 2. **external-secrets-operator**: Secret management from AWS Parameter Store
-3. **cloudnative-pg**: PostgreSQL operator for database clusters
-4. **opentelemetry-operator**: OTEL instrumentation and collection
-5. **aws-load-balancer-controller**: ALB/NLB provisioning
-6. **arize-phoenix**: LLM observability platform
+3. **cluster-secret-stores**: ClusterSecretStores for AWS SSM and K8s secrets
+4. **cloudnative-pg**: PostgreSQL operator for database clusters
+5. **opentelemetry-operator**: OTEL instrumentation and collection
+6. **aws-load-balancer-controller**: ALB/NLB provisioning
+7. **arize-phoenix**: LLM observability platform
 
 ## Deployment
 
@@ -23,7 +24,35 @@ All platform components are deployed as ArgoCD Applications using the OCI reposi
 2. **kubeconfig** configured: `export KUBECONFIG=~/.kube/rem-cluster-config`
 3. **Secrets** in AWS Parameter Store (see Configuration section below)
 
-### Install ArgoCD
+### Install Platform Operators (Manual - without ArgoCD)
+
+If not using ArgoCD, install operators manually:
+
+```bash
+# Add Helm repos
+helm repo add external-secrets https://charts.external-secrets.io
+helm repo add cnpg https://cloudnative-pg.github.io/charts
+helm repo update
+
+# Install External Secrets Operator
+# IMPORTANT: Use namespace external-secrets-system to match CDK Pod Identity association
+helm install external-secrets external-secrets/external-secrets \
+  -n external-secrets-system --create-namespace --wait
+
+# Install CloudNativePG operator
+helm install cnpg cnpg/cloudnative-pg \
+  -n cnpg-system --create-namespace --wait
+
+# Apply ClusterSecretStores (connects to AWS Parameter Store and Kubernetes secrets)
+kubectl apply -k manifests/platform/external-secrets/
+
+# Verify ClusterSecretStores are Ready
+kubectl get clustersecretstore
+```
+
+**Note:** If using ArgoCD (below), ClusterSecretStores are deployed automatically via the `cluster-secret-stores` Application.
+
+### Install ArgoCD (Optional - for GitOps)
 
 ```bash
 # Install ArgoCD
@@ -37,7 +66,7 @@ kubectl wait --for=condition=available --timeout=300s deployment/argocd-server -
 kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d
 ```
 
-### Deploy Platform Components
+### Deploy Platform Components (ArgoCD)
 
 ```bash
 # Deploy all platform components via App-of-Apps
@@ -54,11 +83,12 @@ watch kubectl get applications -n argocd
 ArgoCD manages dependencies and deploys in this order:
 
 1. **cert-manager** (required by opentelemetry-operator)
-2. **external-secrets-operator** (required by applications)
-3. **cloudnative-pg** (required by applications with databases)
-4. **opentelemetry-operator** (required by instrumented applications)
-5. **aws-load-balancer-controller** (required for ingress)
-6. **arize-phoenix** (required by OTEL collectors)
+2. **external-secrets-operator** (required by ClusterSecretStores)
+3. **cluster-secret-stores** (required by applications using ExternalSecrets)
+4. **cloudnative-pg** (required by applications with databases)
+5. **opentelemetry-operator** (required by instrumented applications)
+6. **aws-load-balancer-controller** (required for ingress)
+7. **arize-phoenix** (required by OTEL collectors)
 
 ## OCI Registry Pattern
 
@@ -90,42 +120,61 @@ Before deploying platform layer:
 
 ### AWS Parameter Store Secrets
 
-Before deploying, populate required secrets:
+Before deploying, populate required secrets (replace `siggy` with your namespace):
 
 ```bash
-# LLM API keys
-aws ssm put-parameter --name /rem/llm/anthropic-api-key --value "sk-ant-..." --type SecureString
-aws ssm put-parameter --name /rem/llm/openai-api-key --value "sk-..." --type SecureString
+# PostgreSQL credentials (required)
+aws ssm put-parameter --name /siggy/postgres/username --value "remuser" --type String
+aws ssm put-parameter --name /siggy/postgres/password --value "$(openssl rand -base64 24)" --type SecureString
+
+# LLM API keys (required)
+aws ssm put-parameter --name /siggy/llm/anthropic-api-key --value "sk-ant-..." --type SecureString
+aws ssm put-parameter --name /siggy/llm/openai-api-key --value "sk-..." --type SecureString
+
+# Phoenix secrets (required for observability)
+aws ssm put-parameter --name /siggy/phoenix/api-key --value "$(openssl rand -base64 32)" --type SecureString
+aws ssm put-parameter --name /siggy/phoenix/secret --value "$(openssl rand -base64 32)" --type SecureString
+aws ssm put-parameter --name /siggy/phoenix/admin-secret --value "$(openssl rand -base64 32)" --type SecureString
 
 # Optional: OAuth credentials
-aws ssm put-parameter --name /rem/auth/google-client-id --value "..." --type String
-aws ssm put-parameter --name /rem/auth/google-client-secret --value "..." --type SecureString
+aws ssm put-parameter --name /siggy/auth/google-client-id --value "..." --type String
+aws ssm put-parameter --name /siggy/auth/google-client-secret --value "..." --type SecureString
 ```
 
-### IRSA Roles
+### Pod Identity
 
-Platform components use IRSA roles created by Pulumi:
-- **external-secrets**: Access to Parameter Store
-- **cloudnative-pg**: S3 backups
-- **aws-load-balancer-controller**: ALB/NLB management
-- **otel-collector**: CloudWatch/X-Ray export
+Platform components use **EKS Pod Identity** (not IRSA) for AWS access. Pod Identity associations are created by CDK:
 
-Get role ARNs: `cd manifests/infra/eks-yaml && pulumi stack output`
+| Service Account | Namespace | Purpose |
+|-----------------|-----------|---------|
+| `external-secrets` | `external-secrets-system` | SSM Parameter Store access |
+| `postgres-backup` | `postgres-cluster` | S3 backups for CNPG |
+| `aws-load-balancer-controller` | `kube-system` | ALB/NLB management |
+| `otel-collector` | `observability` | CloudWatch/X-Ray export |
+| `rem-app` | `siggy` | Application AWS access (S3, SQS) |
+
+Pod Identity requires no service account annotations - IAM roles are associated via AWS API.
+
+Verify associations:
+```bash
+aws eks list-pod-identity-associations --cluster-name <cluster-name> --region us-east-1
+```
 
 ## Verification
 
 ```bash
-# Check all applications
-kubectl get applications -n argocd
-
-# Check platform pods
-kubectl get pods -n cert-manager
-kubectl get pods -n external-secrets
+# Check platform operators (manual install)
+kubectl get pods -n external-secrets-system
 kubectl get pods -n cnpg-system
-kubectl get pods -n opentelemetry-operator-system
+
+# Check ClusterSecretStore is Ready
+kubectl get clustersecretstore aws-parameter-store
 
 # Check External Secrets syncing
 kubectl get externalsecrets -A
+
+# Check ArgoCD applications (if using ArgoCD)
+kubectl get applications -n argocd
 ```
 
 ## Troubleshooting
@@ -144,15 +193,17 @@ kubectl patch application <name> -n argocd --type merge \
 ### External Secrets Not Syncing
 
 ```bash
-# Check SecretStore
-kubectl describe secretstore -n <namespace>
+# Check ClusterSecretStore status
+kubectl describe clustersecretstore aws-parameter-store
 
 # Check operator logs
-kubectl logs -n external-secrets deployment/external-secrets
+kubectl logs -n external-secrets-system deployment/external-secrets
 
-# Verify IRSA
-kubectl describe sa external-secrets -n external-secrets
-# Should have: eks.amazonaws.com/role-arn annotation
+# Verify Pod Identity is working (operator should have AWS_* env vars)
+kubectl exec -n external-secrets-system deploy/external-secrets -- env | grep AWS
+
+# Check ExternalSecret status
+kubectl describe externalsecret <name> -n <namespace>
 ```
 
 ### CloudNativePG Issues

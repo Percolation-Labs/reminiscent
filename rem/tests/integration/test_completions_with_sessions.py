@@ -70,7 +70,7 @@ async def client():
 async def test_completions_without_session(client):
     """Test basic completion without session management."""
     response = await client.post(
-        "/v1/chat/completions",
+        "/api/v1/chat/completions",
         json={
             "model": "openai:gpt-4o-mini",
             "messages": [{"role": "user", "content": "Say 'Hello'"}],
@@ -93,7 +93,7 @@ async def test_completions_without_session(client):
 async def test_completions_with_new_session(client, db, tenant_id, session_id, user_id):
     """Test completion with new session (no prior history)."""
     response = await client.post(
-        "/v1/chat/completions",
+        "/api/v1/chat/completions",
         json={
             "model": "openai:gpt-4o-mini",
             "messages": [{"role": "user", "content": "What is 2+2?"}],
@@ -132,7 +132,7 @@ async def test_completions_with_session_continuity(
     """Test multi-turn conversation with session continuity."""
     # Turn 1
     response1 = await client.post(
-        "/v1/chat/completions",
+        "/api/v1/chat/completions",
         json={
             "model": "openai:gpt-4o-mini",
             "messages": [{"role": "user", "content": "My name is Alice"}],
@@ -150,7 +150,7 @@ async def test_completions_with_session_continuity(
 
     # Turn 2 - Ask about information from Turn 1
     response2 = await client.post(
-        "/v1/chat/completions",
+        "/api/v1/chat/completions",
         json={
             "model": "openai:gpt-4o-mini",
             "messages": [{"role": "user", "content": "What is my name?"}],
@@ -192,7 +192,7 @@ async def test_completions_with_long_response_compression(
     """Test that long responses are compressed and stored properly."""
     # Ask for detailed explanation (likely long response)
     response = await client.post(
-        "/v1/chat/completions",
+        "/api/v1/chat/completions",
         json={
             "model": "openai:gpt-4o-mini",
             "messages": [
@@ -245,7 +245,7 @@ async def test_completions_session_isolation(client, db, tenant_id, user_id):
     # Conversation in session 1
     # Use simple-assistant agent to avoid REM query overhead
     await client.post(
-        "/v1/chat/completions",
+        "/api/v1/chat/completions",
         json={
             "model": "openai:gpt-4o-mini",
             "messages": [{"role": "user", "content": "I like cats"}],
@@ -262,7 +262,7 @@ async def test_completions_session_isolation(client, db, tenant_id, user_id):
     # Conversation in session 2
     # Use simple-assistant agent to avoid REM query overhead
     await client.post(
-        "/v1/chat/completions",
+        "/api/v1/chat/completions",
         json={
             "model": "openai:gpt-4o-mini",
             "messages": [{"role": "user", "content": "I like dogs"}],
@@ -314,7 +314,7 @@ async def test_completions_tenant_isolation(client, db, tenant_id):
     # Same session ID but different users
     # Use simple-assistant agent to avoid REM query overhead
     await client.post(
-        "/v1/chat/completions",
+        "/api/v1/chat/completions",
         json={
             "model": "openai:gpt-4o-mini",
             "messages": [{"role": "user", "content": "User 1 message"}],
@@ -329,7 +329,7 @@ async def test_completions_tenant_isolation(client, db, tenant_id):
     )
 
     await client.post(
-        "/v1/chat/completions",
+        "/api/v1/chat/completions",
         json={
             "model": "openai:gpt-4o-mini",
             "messages": [{"role": "user", "content": "User 2 message"}],
@@ -368,7 +368,7 @@ async def test_completions_tenant_isolation(client, db, tenant_id):
 async def test_completions_usage_tracking(client, tenant_id, session_id, user_id):
     """Test that token usage is tracked in responses."""
     response = await client.post(
-        "/v1/chat/completions",
+        "/api/v1/chat/completions",
         json={
             "model": "openai:gpt-4o-mini",
             "messages": [{"role": "user", "content": "Count to 5"}],

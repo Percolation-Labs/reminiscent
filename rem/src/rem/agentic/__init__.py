@@ -17,6 +17,14 @@ from .schema import (
 )
 from .providers.pydantic_ai import create_agent_from_schema_file, create_agent, AgentRuntime
 from .query_helper import ask_rem, REMQueryOutput
+from .llm_provider_models import (
+    ModelInfo,
+    AVAILABLE_MODELS,
+    ALLOWED_MODEL_IDS,
+    is_valid_model,
+    get_valid_model_or_default,
+    get_model_by_id,
+)
 
 __all__ = [
     # Context and Query
@@ -36,4 +44,11 @@ __all__ = [
     # REM Query Helpers
     "ask_rem",
     "REMQueryOutput",
+    # LLM Provider Models
+    "ModelInfo",
+    "AVAILABLE_MODELS",
+    "ALLOWED_MODEL_IDS",
+    "is_valid_model",
+    "get_valid_model_or_default",
+    "get_model_by_id",
 ]

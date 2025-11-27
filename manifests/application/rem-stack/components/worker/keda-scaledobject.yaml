@@ -52,7 +52,7 @@ spec:
   - type: aws-sqs-queue
     metadata:
       # SQS Queue URL (from CDK stack output: FileProcessingQueueUrl)
-      queueURL: https://sqs.us-east-1.amazonaws.com/852140462228/application-cluster-a-file-processing-dev
+      queueURL: https://sqs.us-east-1.amazonaws.com/227209289001/siggy-application-cluster-a-file-processing-staging
       queueLength: "10"      # Target: 1 pod per 10 messages
       awsRegion: us-east-1
     authenticationRef:
