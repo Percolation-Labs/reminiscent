@@ -627,7 +627,7 @@ rem ask "What documents are similar to ml-paper-1.pdf?" --user-id user-123
 
 **Behind the scenes:**
 - Agent uses `LOOKUP "ml-paper-1" FROM files` to find file
-- Then uses `TRAVERSE FROM resources WHERE file_id = '{file_id}' TYPE "similar_to" DEPTH 2`
+- Then uses `TRAVERSE similar_to WITH LOOKUP "ml-paper-1" DEPTH 2`
 - Returns connected resources via graph edges
 
 ### 7.4 Multi-Hop Traversal

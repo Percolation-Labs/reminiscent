@@ -5,6 +5,8 @@ Core entity types for the REM system:
 - Resources: Base content units (documents, conversations, artifacts)
 - ImageResources: Image-specific resources with CLIP embeddings
 - Messages: Communication content
+- Sessions: Conversation sessions (normal or evaluation mode)
+- Feedback: User feedback on messages/sessions with trace integration
 - Users: User entities
 - Files: File metadata and tracking
 - Moments: Temporal narratives (meetings, coding sessions, conversations)
@@ -19,6 +21,7 @@ All entities inherit from CoreModel and support:
 - Natural language labels for conversational queries
 """
 
+from .feedback import Feedback, FeedbackCategory
 from .file import File
 from .image_resource import ImageResource
 from .message import Message
@@ -27,12 +30,17 @@ from .ontology import Ontology
 from .ontology_config import OntologyConfig
 from .resource import Resource
 from .schema import Schema
+from .session import Session, SessionMode
 from .user import User, UserTier
 
 __all__ = [
     "Resource",
     "ImageResource",
     "Message",
+    "Session",
+    "SessionMode",
+    "Feedback",
+    "FeedbackCategory",
     "User",
     "UserTier",
     "File",

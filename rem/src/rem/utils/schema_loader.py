@@ -209,12 +209,13 @@ def load_agent_schema(
     Search Order:
     1. Check cache (if use_cache=True and schema found in FS cache)
     2. Exact path if it exists (absolute or relative)
-    3. Package resources: schemas/agents/{name}.yaml (top-level)
-    4. Package resources: schemas/agents/core/{name}.yaml
-    5. Package resources: schemas/agents/examples/{name}.yaml
-    6. Package resources: schemas/evaluators/{name}.yaml
-    7. Package resources: schemas/{name}.yaml
-    8. Database LOOKUP: schemas table (if enable_db_fallback=True and user_id provided)
+    3. Custom paths from rem.register_schema_path() and SCHEMA__PATHS env var
+    4. Package resources: schemas/agents/{name}.yaml (top-level)
+    5. Package resources: schemas/agents/core/{name}.yaml
+    6. Package resources: schemas/agents/examples/{name}.yaml
+    7. Package resources: schemas/evaluators/{name}.yaml
+    8. Package resources: schemas/{name}.yaml
+    9. Database LOOKUP: schemas table (if enable_db_fallback=True and user_id provided)
 
     Args:
         schema_name_or_path: Schema name or file path
@@ -268,7 +269,28 @@ def load_agent_schema(
     # 2. Normalize name for package resource search
     base_name = cache_key
 
-    # 3. Try package resources with standard search paths
+    # 3. Try custom schema paths (from registry + SCHEMA__PATHS env var)
+    from ..registry import get_schema_paths
+
+    custom_paths = get_schema_paths()
+    for custom_dir in custom_paths:
+        # Try various patterns within each custom directory
+        for pattern in [
+            f"{base_name}.yaml",
+            f"{base_name}.yml",
+            f"agents/{base_name}.yaml",
+            f"evaluators/{base_name}.yaml",
+        ]:
+            custom_path = Path(custom_dir) / pattern
+            if custom_path.exists():
+                logger.debug(f"Loading schema from custom path: {custom_path}")
+                with open(custom_path, "r") as f:
+                    schema = yaml.safe_load(f)
+                logger.debug(f"Loaded schema with keys: {list(schema.keys())}")
+                # Don't cache custom paths (they may change during development)
+                return cast(dict[str, Any], schema)
+
+    # 4. Try package resources with standard search paths
     for search_pattern in SCHEMA_SEARCH_PATHS:
         search_path = search_pattern.format(name=base_name)
 
@@ -293,7 +315,7 @@ def load_agent_schema(
             logger.debug(f"Could not load from {search_path}: {e}")
             continue
 
-    # 4. Try database LOOKUP fallback (if enabled and user_id provided)
+    # 5. Try database LOOKUP fallback (if enabled and user_id provided)
     if enable_db_fallback and user_id:
         try:
             logger.debug(f"Attempting database LOOKUP for schema: {base_name} (user_id={user_id})")
@@ -305,8 +327,13 @@ def load_agent_schema(
             logger.debug(f"Database schema lookup failed: {e}")
             # Fall through to error below
 
-    # 5. Schema not found in any location
+    # 6. Schema not found in any location
     searched_paths = [pattern.format(name=base_name) for pattern in SCHEMA_SEARCH_PATHS]
+
+    custom_paths_note = ""
+    if custom_paths:
+        custom_paths_note = f"\n  - Custom paths: {', '.join(custom_paths)}"
+
     db_search_note = ""
     if enable_db_fallback:
         if user_id:
@@ -317,7 +344,8 @@ def load_agent_schema(
     raise FileNotFoundError(
         f"Schema not found: {schema_name_or_path}\n"
         f"Searched locations:\n"
-        f"  - Exact path: {path}\n"
+        f"  - Exact path: {path}"
+        f"{custom_paths_note}\n"
         f"  - Package resources: {', '.join(searched_paths)}"
         f"{db_search_note}"
     )

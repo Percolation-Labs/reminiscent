@@ -45,10 +45,17 @@ Usage (model registration - works with or without API):
 """
 
 from .registry import (
+    # Model registration
     register_model,
     register_models,
     get_model_registry,
     clear_model_registry,
+    # Schema path registration
+    register_schema_path,
+    register_schema_paths,
+    get_schema_paths,
+    get_schema_path_registry,
+    clear_schema_path_registry,
 )
 
 
@@ -113,4 +120,10 @@ __all__ = [
     "register_models",
     "get_model_registry",
     "clear_model_registry",
+    # Schema path registration
+    "register_schema_path",
+    "register_schema_paths",
+    "get_schema_paths",
+    "get_schema_path_registry",
+    "clear_schema_path_registry",
 ]

@@ -29,14 +29,14 @@ from ...services.postgres.schema_generator import SchemaGenerator
     "--output",
     "-o",
     type=click.Path(path_type=Path),
-    default="install_models.sql",
-    help="Output SQL file (default: install_models.sql)",
+    default="002_install_models.sql",
+    help="Output SQL file (default: 002_install_models.sql)",
 )
 @click.option(
     "--output-dir",
     type=click.Path(path_type=Path),
     default=None,
-    help=f"Base output directory (default: {settings.sql_dir})",
+    help=f"Base output directory (default: {settings.sql_dir}/migrations)",
 )
 def generate(models: Path, output: Path, output_dir: Path | None):
     """
@@ -48,13 +48,13 @@ def generate(models: Path, output: Path, output_dir: Path | None):
     - KV_STORE triggers for cache maintenance
     - Indexes (foreground only)
 
-    Output is written to src/rem/sql/install_models.sql by default.
+    Output is written to src/rem/sql/migrations/002_install_models.sql by default.
 
     Example:
         rem db schema generate --models src/rem/models/entities
 
     This creates:
-    - src/rem/sql/install_models.sql - Entity tables and triggers
+    - src/rem/sql/migrations/002_install_models.sql - Entity tables and triggers
     - src/rem/sql/background_indexes.sql - HNSW indexes (apply after data load)
 
     After generation, apply with:
@@ -62,8 +62,8 @@ def generate(models: Path, output: Path, output_dir: Path | None):
     """
     click.echo(f"Discovering models in {models}")
 
-    # Use settings.sql_dir if not provided
-    actual_output_dir = output_dir or Path(settings.sql_dir)
+    # Default to migrations directory
+    actual_output_dir = output_dir or Path(settings.sql_dir) / "migrations"
     generator = SchemaGenerator(output_dir=actual_output_dir)
 
     # Generate schema
@@ -73,10 +73,10 @@ def generate(models: Path, output: Path, output_dir: Path | None):
         click.echo(f"✓ Schema generated: {len(generator.schemas)} tables")
         click.echo(f"✓ Written to: {actual_output_dir / output.name}")
 
-        # Generate background indexes
+        # Generate background indexes in parent sql dir
         background_indexes = generator.generate_background_indexes()
         if background_indexes:
-            bg_file = actual_output_dir / "background_indexes.sql"
+            bg_file = Path(settings.sql_dir) / "background_indexes.sql"
             bg_file.write_text(background_indexes)
             click.echo(f"✓ Background indexes: {bg_file}")
 

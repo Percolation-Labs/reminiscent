@@ -2,13 +2,18 @@
 OAuth Authentication Middleware for FastAPI.
 
 Protects API endpoints by requiring valid session.
-Redirects unauthenticated requests to login page.
+Supports anonymous access with rate limiting when allow_anonymous=True.
 
 Design Pattern:
 - Check session for user on protected paths
-- Return 401 for API calls (JSON)
-- Redirect to login for browser requests (HTML)
+- If allow_anonymous=True: Allow unauthenticated requests (marked as ANONYMOUS tier)
+- If allow_anonymous=False: Return 401 for API calls, redirect browsers to login
 - Exclude auth endpoints and public paths
+
+Access Modes (configured in settings.auth):
+- enabled=true, allow_anonymous=true: Auth available, anonymous gets rate-limited access
+- enabled=true, allow_anonymous=false: Auth required for all requests
+- enabled=false: Middleware not loaded, all requests pass through
 
 Usage:
     from rem.auth.middleware import AuthMiddleware
@@ -17,6 +22,7 @@ Usage:
         AuthMiddleware,
         protected_paths=["/api/v1"],
         excluded_paths=["/api/auth", "/health"],
+        allow_anonymous=settings.auth.allow_anonymous,
     )
 """
 
@@ -32,6 +38,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
     Checks for valid user session on protected paths.
     Compatible with OAuth flows from auth router.
+    Supports anonymous access with rate limiting.
     """
 
     def __init__(
@@ -39,6 +46,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         app,
         protected_paths: list[str] | None = None,
         excluded_paths: list[str] | None = None,
+        allow_anonymous: bool = True,
     ):
         """
         Initialize auth middleware.
@@ -47,10 +55,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
             app: ASGI application
             protected_paths: Paths that require authentication
             excluded_paths: Paths to exclude from auth check
+            allow_anonymous: Allow unauthenticated requests (rate-limited)
         """
         super().__init__(app)
         self.protected_paths = protected_paths or ["/api/v1"]
         self.excluded_paths = excluded_paths or ["/api/auth", "/health", "/docs", "/openapi.json"]
+        self.allow_anonymous = allow_anonymous
 
     async def dispatch(self, request: Request, call_next):
         """
@@ -61,7 +71,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             call_next: Next middleware in chain
 
         Returns:
-            Response (401/redirect if unauthorized, normal response if authorized)
+            Response (401/redirect if unauthorized, normal response if authorized/anonymous)
         """
         path = request.url.path
 
@@ -75,26 +85,34 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         # Check for valid session
         user = request.session.get("user")
-        if not user:
-            logger.warning(f"Unauthorized access attempt: {path}")
 
-            # Return 401 for API requests (JSON)
-            # Check Accept header to determine if client expects JSON
-            accept = request.headers.get("accept", "")
-            if "application/json" in accept or path.startswith("/api/"):
-                return JSONResponse(
-                    status_code=401,
-                    content={"detail": "Authentication required"},
-                    headers={
-                        "WWW-Authenticate": 'Bearer realm="REM API"',
-                    },
-                )
+        if user:
+            # Authenticated user - add to request state
+            request.state.user = user
+            request.state.is_anonymous = False
+            return await call_next(request)
 
-            # Redirect to login for browser requests
-            # TODO: Store original URL for post-login redirect
-            return RedirectResponse(url="/api/auth/google/login", status_code=302)
+        # No user session - handle anonymous access
+        if self.allow_anonymous:
+            # Allow anonymous access - rate limiting handled downstream
+            request.state.user = None
+            request.state.is_anonymous = True
+            logger.debug(f"Anonymous access: {path}")
+            return await call_next(request)
 
-        # Add user to request state for downstream handlers
-        request.state.user = user
+        # Anonymous not allowed - require authentication
+        logger.warning(f"Unauthorized access attempt: {path}")
 
-        return await call_next(request)
+        # Return 401 for API requests (JSON)
+        accept = request.headers.get("accept", "")
+        if "application/json" in accept or path.startswith("/api/"):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Authentication required"},
+                headers={
+                    "WWW-Authenticate": 'Bearer realm="REM API"',
+                },
+            )
+
+        # Redirect to login for browser requests
+        return RedirectResponse(url="/api/auth/google/login", status_code=302)

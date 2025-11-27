@@ -1,9 +1,9 @@
 -- REM Model Schema (install_models.sql)
 -- Generated from Pydantic models
--- Source directory: src/rem/models/entities
--- Generated at: 2025-11-21T22:20:29.773072
+-- Source: directory: src/rem/models/entities
+-- Generated at: 2025-11-27T12:00:40.135678
 --
--- DO NOT EDIT MANUALLY - Regenerate with: rem schema generate
+-- DO NOT EDIT MANUALLY - Regenerate with: rem db schema generate
 --
 -- This script creates:
 -- 1. Primary entity tables
@@ -19,11 +19,11 @@ DO $$
 BEGIN
     -- Check that install.sql has been run
     IF NOT EXISTS (SELECT 1 FROM pg_tables WHERE tablename = 'kv_store') THEN
-        RAISE EXCEPTION 'KV_STORE table not found. Run sql/install.sql first.';
+        RAISE EXCEPTION 'KV_STORE table not found. Run migrations/001_install.sql first.';
     END IF;
 
     IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') THEN
-        RAISE EXCEPTION 'pgvector extension not found. Run sql/install.sql first.';
+        RAISE EXCEPTION 'pgvector extension not found. Run migrations/001_install.sql first.';
     END IF;
 
     RAISE NOTICE 'Prerequisites check passed';
@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS users (
     email VARCHAR(256),
     role VARCHAR(256),
     tier TEXT,
+    anonymous_ids TEXT[] DEFAULT ARRAY[]::TEXT[],
     sec_policy JSONB DEFAULT '{}'::jsonb,
     summary TEXT,
     interests TEXT[] DEFAULT ARRAY[]::TEXT[],
@@ -55,11 +56,11 @@ CREATE TABLE IF NOT EXISTS users (
     tags TEXT[] DEFAULT ARRAY[]::TEXT[]
 );
 
-CREATE INDEX IF NOT EXISTS idx_users_tenant ON users (tenant_id);
-CREATE INDEX IF NOT EXISTS idx_users_user ON users (user_id);
-CREATE INDEX IF NOT EXISTS idx_users_graph_edges ON users USING GIN (graph_edges);
-CREATE INDEX IF NOT EXISTS idx_users_metadata ON users USING GIN (metadata);
-CREATE INDEX IF NOT EXISTS idx_users_tags ON users USING GIN (tags);
+CREATE INDEX idx_users_tenant ON users (tenant_id);
+CREATE INDEX idx_users_user ON users (user_id);
+CREATE INDEX idx_users_graph_edges ON users USING GIN (graph_edges);
+CREATE INDEX idx_users_metadata ON users USING GIN (metadata);
+CREATE INDEX idx_users_tags ON users USING GIN (tags);
 
 -- Embeddings for users
 CREATE TABLE IF NOT EXISTS embeddings_users (
@@ -77,14 +78,14 @@ CREATE TABLE IF NOT EXISTS embeddings_users (
 );
 
 -- Index for entity lookup (get all embeddings for entity)
-CREATE INDEX IF NOT EXISTS idx_embeddings_users_entity ON embeddings_users (entity_id);
+CREATE INDEX idx_embeddings_users_entity ON embeddings_users (entity_id);
 
 -- Index for field + provider lookup
-CREATE INDEX IF NOT EXISTS idx_embeddings_users_field_provider ON embeddings_users (field_name, provider);
+CREATE INDEX idx_embeddings_users_field_provider ON embeddings_users (field_name, provider);
 
 -- HNSW index for vector similarity search (created in background)
 -- Note: This will be created by background thread after data load
--- CREATE INDEX IF NOT EXISTS idx_embeddings_users_vector_hnsw ON embeddings_users
+-- CREATE INDEX idx_embeddings_users_vector_hnsw ON embeddings_users
 -- USING hnsw (embedding vector_cosine_ops);
 
 -- KV_STORE trigger for users
@@ -109,7 +110,7 @@ BEGIN
             graph_edges,
             updated_at
         ) VALUES (
-            NEW.name,  -- Use name as entity_key (json_schema_extra)
+            NEW.name::VARCHAR,
             'users',
             NEW.id,
             NEW.tenant_id,
@@ -145,7 +146,7 @@ CREATE TABLE IF NOT EXISTS image_resources (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id VARCHAR(100) NOT NULL,
     user_id VARCHAR(256),
-    name VARCHAR(256) NOT NULL,
+    name VARCHAR(256),
     uri VARCHAR(256),
     ordinal INTEGER,
     content TEXT,
@@ -168,11 +169,11 @@ CREATE TABLE IF NOT EXISTS image_resources (
     tags TEXT[] DEFAULT ARRAY[]::TEXT[]
 );
 
-CREATE INDEX IF NOT EXISTS idx_image_resources_tenant ON image_resources (tenant_id);
-CREATE INDEX IF NOT EXISTS idx_image_resources_user ON image_resources (user_id);
-CREATE INDEX IF NOT EXISTS idx_image_resources_graph_edges ON image_resources USING GIN (graph_edges);
-CREATE INDEX IF NOT EXISTS idx_image_resources_metadata ON image_resources USING GIN (metadata);
-CREATE INDEX IF NOT EXISTS idx_image_resources_tags ON image_resources USING GIN (tags);
+CREATE INDEX idx_image_resources_tenant ON image_resources (tenant_id);
+CREATE INDEX idx_image_resources_user ON image_resources (user_id);
+CREATE INDEX idx_image_resources_graph_edges ON image_resources USING GIN (graph_edges);
+CREATE INDEX idx_image_resources_metadata ON image_resources USING GIN (metadata);
+CREATE INDEX idx_image_resources_tags ON image_resources USING GIN (tags);
 
 -- Embeddings for image_resources
 CREATE TABLE IF NOT EXISTS embeddings_image_resources (
@@ -190,14 +191,14 @@ CREATE TABLE IF NOT EXISTS embeddings_image_resources (
 );
 
 -- Index for entity lookup (get all embeddings for entity)
-CREATE INDEX IF NOT EXISTS idx_embeddings_image_resources_entity ON embeddings_image_resources (entity_id);
+CREATE INDEX idx_embeddings_image_resources_entity ON embeddings_image_resources (entity_id);
 
 -- Index for field + provider lookup
-CREATE INDEX IF NOT EXISTS idx_embeddings_image_resources_field_provider ON embeddings_image_resources (field_name, provider);
+CREATE INDEX idx_embeddings_image_resources_field_provider ON embeddings_image_resources (field_name, provider);
 
 -- HNSW index for vector similarity search (created in background)
 -- Note: This will be created by background thread after data load
--- CREATE INDEX IF NOT EXISTS idx_embeddings_image_resources_vector_hnsw ON embeddings_image_resources
+-- CREATE INDEX idx_embeddings_image_resources_vector_hnsw ON embeddings_image_resources
 -- USING hnsw (embedding vector_cosine_ops);
 
 -- KV_STORE trigger for image_resources
@@ -222,7 +223,7 @@ BEGIN
             graph_edges,
             updated_at
         ) VALUES (
-            NEW.name,  -- Use name as entity_key (json_schema_extra)
+            NEW.name::VARCHAR,
             'image_resources',
             NEW.id,
             NEW.tenant_id,
@@ -251,6 +252,88 @@ AFTER INSERT OR UPDATE OR DELETE ON image_resources
 FOR EACH ROW EXECUTE FUNCTION fn_image_resources_kv_store_upsert();
 
 -- ======================================================================
+-- FEEDBACKS (Model: Feedback)
+-- ======================================================================
+
+CREATE TABLE IF NOT EXISTS feedbacks (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id VARCHAR(100) NOT NULL,
+    user_id VARCHAR(256),
+    session_id VARCHAR(256) NOT NULL,
+    message_id VARCHAR(256),
+    rating INTEGER,
+    categories TEXT[] DEFAULT ARRAY[]::TEXT[],
+    comment TEXT,
+    trace_id VARCHAR(256),
+    span_id VARCHAR(256),
+    phoenix_synced BOOLEAN,
+    phoenix_annotation_id VARCHAR(256),
+    annotator_kind VARCHAR(256),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP,
+    graph_edges JSONB DEFAULT '[]'::jsonb,
+    metadata JSONB DEFAULT '{}'::jsonb,
+    tags TEXT[] DEFAULT ARRAY[]::TEXT[]
+);
+
+CREATE INDEX idx_feedbacks_tenant ON feedbacks (tenant_id);
+CREATE INDEX idx_feedbacks_user ON feedbacks (user_id);
+CREATE INDEX idx_feedbacks_graph_edges ON feedbacks USING GIN (graph_edges);
+CREATE INDEX idx_feedbacks_metadata ON feedbacks USING GIN (metadata);
+CREATE INDEX idx_feedbacks_tags ON feedbacks USING GIN (tags);
+
+-- KV_STORE trigger for feedbacks
+-- Trigger function to maintain KV_STORE for feedbacks
+CREATE OR REPLACE FUNCTION fn_feedbacks_kv_store_upsert()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF (TG_OP = 'DELETE') THEN
+        -- Remove from KV_STORE on delete
+        DELETE FROM kv_store
+        WHERE entity_id = OLD.id;
+        RETURN OLD;
+    ELSIF (TG_OP = 'INSERT' OR TG_OP = 'UPDATE') THEN
+        -- Upsert to KV_STORE (O(1) lookup by entity_key)
+        INSERT INTO kv_store (
+            entity_key,
+            entity_type,
+            entity_id,
+            tenant_id,
+            user_id,
+            metadata,
+            graph_edges,
+            updated_at
+        ) VALUES (
+            NEW.id::VARCHAR,
+            'feedbacks',
+            NEW.id,
+            NEW.tenant_id,
+            NEW.user_id,
+            NEW.metadata,
+            COALESCE(NEW.graph_edges, '[]'::jsonb),
+            CURRENT_TIMESTAMP
+        )
+        ON CONFLICT (tenant_id, entity_key)
+        DO UPDATE SET
+            entity_id = EXCLUDED.entity_id,
+            user_id = EXCLUDED.user_id,
+            metadata = EXCLUDED.metadata,
+            graph_edges = EXCLUDED.graph_edges,
+            updated_at = CURRENT_TIMESTAMP;
+
+        RETURN NEW;
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create trigger
+DROP TRIGGER IF EXISTS trg_feedbacks_kv_store ON feedbacks;
+CREATE TRIGGER trg_feedbacks_kv_store
+AFTER INSERT OR UPDATE OR DELETE ON feedbacks
+FOR EACH ROW EXECUTE FUNCTION fn_feedbacks_kv_store_upsert();
+
+-- ======================================================================
 -- MOMENTS (Model: Moment)
 -- ======================================================================
 
@@ -258,7 +341,7 @@ CREATE TABLE IF NOT EXISTS moments (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id VARCHAR(100) NOT NULL,
     user_id VARCHAR(256),
-    name VARCHAR(256) NOT NULL,
+    name VARCHAR(256),
     moment_type VARCHAR(256),
     category VARCHAR(256),
     starts_timestamp TIMESTAMP NOT NULL,
@@ -276,11 +359,11 @@ CREATE TABLE IF NOT EXISTS moments (
     tags TEXT[] DEFAULT ARRAY[]::TEXT[]
 );
 
-CREATE INDEX IF NOT EXISTS idx_moments_tenant ON moments (tenant_id);
-CREATE INDEX IF NOT EXISTS idx_moments_user ON moments (user_id);
-CREATE INDEX IF NOT EXISTS idx_moments_graph_edges ON moments USING GIN (graph_edges);
-CREATE INDEX IF NOT EXISTS idx_moments_metadata ON moments USING GIN (metadata);
-CREATE INDEX IF NOT EXISTS idx_moments_tags ON moments USING GIN (tags);
+CREATE INDEX idx_moments_tenant ON moments (tenant_id);
+CREATE INDEX idx_moments_user ON moments (user_id);
+CREATE INDEX idx_moments_graph_edges ON moments USING GIN (graph_edges);
+CREATE INDEX idx_moments_metadata ON moments USING GIN (metadata);
+CREATE INDEX idx_moments_tags ON moments USING GIN (tags);
 
 -- Embeddings for moments
 CREATE TABLE IF NOT EXISTS embeddings_moments (
@@ -298,14 +381,14 @@ CREATE TABLE IF NOT EXISTS embeddings_moments (
 );
 
 -- Index for entity lookup (get all embeddings for entity)
-CREATE INDEX IF NOT EXISTS idx_embeddings_moments_entity ON embeddings_moments (entity_id);
+CREATE INDEX idx_embeddings_moments_entity ON embeddings_moments (entity_id);
 
 -- Index for field + provider lookup
-CREATE INDEX IF NOT EXISTS idx_embeddings_moments_field_provider ON embeddings_moments (field_name, provider);
+CREATE INDEX idx_embeddings_moments_field_provider ON embeddings_moments (field_name, provider);
 
 -- HNSW index for vector similarity search (created in background)
 -- Note: This will be created by background thread after data load
--- CREATE INDEX IF NOT EXISTS idx_embeddings_moments_vector_hnsw ON embeddings_moments
+-- CREATE INDEX idx_embeddings_moments_vector_hnsw ON embeddings_moments
 -- USING hnsw (embedding vector_cosine_ops);
 
 -- KV_STORE trigger for moments
@@ -330,7 +413,7 @@ BEGIN
             graph_edges,
             updated_at
         ) VALUES (
-            NEW.name,  -- Use name as entity_key (json_schema_extra)
+            NEW.name::VARCHAR,
             'moments',
             NEW.id,
             NEW.tenant_id,
@@ -376,11 +459,11 @@ CREATE TABLE IF NOT EXISTS persons (
     tags TEXT[] DEFAULT ARRAY[]::TEXT[]
 );
 
-CREATE INDEX IF NOT EXISTS idx_persons_tenant ON persons (tenant_id);
-CREATE INDEX IF NOT EXISTS idx_persons_user ON persons (user_id);
-CREATE INDEX IF NOT EXISTS idx_persons_graph_edges ON persons USING GIN (graph_edges);
-CREATE INDEX IF NOT EXISTS idx_persons_metadata ON persons USING GIN (metadata);
-CREATE INDEX IF NOT EXISTS idx_persons_tags ON persons USING GIN (tags);
+CREATE INDEX idx_persons_tenant ON persons (tenant_id);
+CREATE INDEX idx_persons_user ON persons (user_id);
+CREATE INDEX idx_persons_graph_edges ON persons USING GIN (graph_edges);
+CREATE INDEX idx_persons_metadata ON persons USING GIN (metadata);
+CREATE INDEX idx_persons_tags ON persons USING GIN (tags);
 
 -- KV_STORE trigger for persons
 -- Trigger function to maintain KV_STORE for persons
@@ -404,7 +487,7 @@ BEGIN
             graph_edges,
             updated_at
         ) VALUES (
-            NEW.name,  -- Use name as entity_key (json_schema_extra)
+            NEW.id::VARCHAR,
             'persons',
             NEW.id,
             NEW.tenant_id,
@@ -433,6 +516,113 @@ AFTER INSERT OR UPDATE OR DELETE ON persons
 FOR EACH ROW EXECUTE FUNCTION fn_persons_kv_store_upsert();
 
 -- ======================================================================
+-- SESSIONS (Model: Session)
+-- ======================================================================
+
+CREATE TABLE IF NOT EXISTS sessions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id VARCHAR(100) NOT NULL,
+    user_id VARCHAR(256),
+    name VARCHAR(256) NOT NULL,
+    mode TEXT,
+    description TEXT,
+    original_trace_id VARCHAR(256),
+    settings_overrides JSONB,
+    prompt TEXT,
+    agent_schema_uri VARCHAR(256),
+    message_count INTEGER,
+    total_tokens INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP,
+    graph_edges JSONB DEFAULT '[]'::jsonb,
+    metadata JSONB DEFAULT '{}'::jsonb,
+    tags TEXT[] DEFAULT ARRAY[]::TEXT[]
+);
+
+CREATE INDEX idx_sessions_tenant ON sessions (tenant_id);
+CREATE INDEX idx_sessions_user ON sessions (user_id);
+CREATE INDEX idx_sessions_graph_edges ON sessions USING GIN (graph_edges);
+CREATE INDEX idx_sessions_metadata ON sessions USING GIN (metadata);
+CREATE INDEX idx_sessions_tags ON sessions USING GIN (tags);
+
+-- Embeddings for sessions
+CREATE TABLE IF NOT EXISTS embeddings_sessions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    entity_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    field_name VARCHAR(100) NOT NULL,
+    provider VARCHAR(50) NOT NULL DEFAULT 'openai',
+    model VARCHAR(100) NOT NULL DEFAULT 'text-embedding-3-small',
+    embedding vector(1536) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    -- Unique: one embedding per entity per field per provider
+    UNIQUE (entity_id, field_name, provider)
+);
+
+-- Index for entity lookup (get all embeddings for entity)
+CREATE INDEX idx_embeddings_sessions_entity ON embeddings_sessions (entity_id);
+
+-- Index for field + provider lookup
+CREATE INDEX idx_embeddings_sessions_field_provider ON embeddings_sessions (field_name, provider);
+
+-- HNSW index for vector similarity search (created in background)
+-- Note: This will be created by background thread after data load
+-- CREATE INDEX idx_embeddings_sessions_vector_hnsw ON embeddings_sessions
+-- USING hnsw (embedding vector_cosine_ops);
+
+-- KV_STORE trigger for sessions
+-- Trigger function to maintain KV_STORE for sessions
+CREATE OR REPLACE FUNCTION fn_sessions_kv_store_upsert()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF (TG_OP = 'DELETE') THEN
+        -- Remove from KV_STORE on delete
+        DELETE FROM kv_store
+        WHERE entity_id = OLD.id;
+        RETURN OLD;
+    ELSIF (TG_OP = 'INSERT' OR TG_OP = 'UPDATE') THEN
+        -- Upsert to KV_STORE (O(1) lookup by entity_key)
+        INSERT INTO kv_store (
+            entity_key,
+            entity_type,
+            entity_id,
+            tenant_id,
+            user_id,
+            metadata,
+            graph_edges,
+            updated_at
+        ) VALUES (
+            NEW.name::VARCHAR,
+            'sessions',
+            NEW.id,
+            NEW.tenant_id,
+            NEW.user_id,
+            NEW.metadata,
+            COALESCE(NEW.graph_edges, '[]'::jsonb),
+            CURRENT_TIMESTAMP
+        )
+        ON CONFLICT (tenant_id, entity_key)
+        DO UPDATE SET
+            entity_id = EXCLUDED.entity_id,
+            user_id = EXCLUDED.user_id,
+            metadata = EXCLUDED.metadata,
+            graph_edges = EXCLUDED.graph_edges,
+            updated_at = CURRENT_TIMESTAMP;
+
+        RETURN NEW;
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create trigger
+DROP TRIGGER IF EXISTS trg_sessions_kv_store ON sessions;
+CREATE TRIGGER trg_sessions_kv_store
+AFTER INSERT OR UPDATE OR DELETE ON sessions
+FOR EACH ROW EXECUTE FUNCTION fn_sessions_kv_store_upsert();
+
+-- ======================================================================
 -- RESOURCES (Model: Resource)
 -- ======================================================================
 
@@ -440,7 +630,7 @@ CREATE TABLE IF NOT EXISTS resources (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id VARCHAR(100) NOT NULL,
     user_id VARCHAR(256),
-    name VARCHAR(256) NOT NULL,
+    name VARCHAR(256),
     uri VARCHAR(256),
     ordinal INTEGER,
     content TEXT,
@@ -455,11 +645,11 @@ CREATE TABLE IF NOT EXISTS resources (
     tags TEXT[] DEFAULT ARRAY[]::TEXT[]
 );
 
-CREATE INDEX IF NOT EXISTS idx_resources_tenant ON resources (tenant_id);
-CREATE INDEX IF NOT EXISTS idx_resources_user ON resources (user_id);
-CREATE INDEX IF NOT EXISTS idx_resources_graph_edges ON resources USING GIN (graph_edges);
-CREATE INDEX IF NOT EXISTS idx_resources_metadata ON resources USING GIN (metadata);
-CREATE INDEX IF NOT EXISTS idx_resources_tags ON resources USING GIN (tags);
+CREATE INDEX idx_resources_tenant ON resources (tenant_id);
+CREATE INDEX idx_resources_user ON resources (user_id);
+CREATE INDEX idx_resources_graph_edges ON resources USING GIN (graph_edges);
+CREATE INDEX idx_resources_metadata ON resources USING GIN (metadata);
+CREATE INDEX idx_resources_tags ON resources USING GIN (tags);
 
 -- Embeddings for resources
 CREATE TABLE IF NOT EXISTS embeddings_resources (
@@ -477,14 +667,14 @@ CREATE TABLE IF NOT EXISTS embeddings_resources (
 );
 
 -- Index for entity lookup (get all embeddings for entity)
-CREATE INDEX IF NOT EXISTS idx_embeddings_resources_entity ON embeddings_resources (entity_id);
+CREATE INDEX idx_embeddings_resources_entity ON embeddings_resources (entity_id);
 
 -- Index for field + provider lookup
-CREATE INDEX IF NOT EXISTS idx_embeddings_resources_field_provider ON embeddings_resources (field_name, provider);
+CREATE INDEX idx_embeddings_resources_field_provider ON embeddings_resources (field_name, provider);
 
 -- HNSW index for vector similarity search (created in background)
 -- Note: This will be created by background thread after data load
--- CREATE INDEX IF NOT EXISTS idx_embeddings_resources_vector_hnsw ON embeddings_resources
+-- CREATE INDEX idx_embeddings_resources_vector_hnsw ON embeddings_resources
 -- USING hnsw (embedding vector_cosine_ops);
 
 -- KV_STORE trigger for resources
@@ -509,7 +699,7 @@ BEGIN
             graph_edges,
             updated_at
         ) VALUES (
-            NEW.name,  -- Use name as entity_key (json_schema_extra)
+            NEW.name::VARCHAR,
             'resources',
             NEW.id,
             NEW.tenant_id,
@@ -546,8 +736,13 @@ CREATE TABLE IF NOT EXISTS messages (
     tenant_id VARCHAR(100) NOT NULL,
     user_id VARCHAR(256),
     content TEXT NOT NULL,
-    message_type TEXT,
-    session_id TEXT,
+    message_type VARCHAR(256),
+    session_id VARCHAR(256),
+    prompt TEXT,
+    model VARCHAR(256),
+    token_count INTEGER,
+    trace_id VARCHAR(256),
+    span_id VARCHAR(256),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     deleted_at TIMESTAMP,
@@ -556,11 +751,11 @@ CREATE TABLE IF NOT EXISTS messages (
     tags TEXT[] DEFAULT ARRAY[]::TEXT[]
 );
 
-CREATE INDEX IF NOT EXISTS idx_messages_tenant ON messages (tenant_id);
-CREATE INDEX IF NOT EXISTS idx_messages_user ON messages (user_id);
-CREATE INDEX IF NOT EXISTS idx_messages_graph_edges ON messages USING GIN (graph_edges);
-CREATE INDEX IF NOT EXISTS idx_messages_metadata ON messages USING GIN (metadata);
-CREATE INDEX IF NOT EXISTS idx_messages_tags ON messages USING GIN (tags);
+CREATE INDEX idx_messages_tenant ON messages (tenant_id);
+CREATE INDEX idx_messages_user ON messages (user_id);
+CREATE INDEX idx_messages_graph_edges ON messages USING GIN (graph_edges);
+CREATE INDEX idx_messages_metadata ON messages USING GIN (metadata);
+CREATE INDEX idx_messages_tags ON messages USING GIN (tags);
 
 -- Embeddings for messages
 CREATE TABLE IF NOT EXISTS embeddings_messages (
@@ -578,14 +773,14 @@ CREATE TABLE IF NOT EXISTS embeddings_messages (
 );
 
 -- Index for entity lookup (get all embeddings for entity)
-CREATE INDEX IF NOT EXISTS idx_embeddings_messages_entity ON embeddings_messages (entity_id);
+CREATE INDEX idx_embeddings_messages_entity ON embeddings_messages (entity_id);
 
 -- Index for field + provider lookup
-CREATE INDEX IF NOT EXISTS idx_embeddings_messages_field_provider ON embeddings_messages (field_name, provider);
+CREATE INDEX idx_embeddings_messages_field_provider ON embeddings_messages (field_name, provider);
 
 -- HNSW index for vector similarity search (created in background)
 -- Note: This will be created by background thread after data load
--- CREATE INDEX IF NOT EXISTS idx_embeddings_messages_vector_hnsw ON embeddings_messages
+-- CREATE INDEX idx_embeddings_messages_vector_hnsw ON embeddings_messages
 -- USING hnsw (embedding vector_cosine_ops);
 
 -- KV_STORE trigger for messages
@@ -610,7 +805,7 @@ BEGIN
             graph_edges,
             updated_at
         ) VALUES (
-            NEW.id::VARCHAR,  -- Messages use id as entity_key (no name field)
+            NEW.id::VARCHAR,
             'messages',
             NEW.id,
             NEW.tenant_id,
@@ -661,11 +856,11 @@ CREATE TABLE IF NOT EXISTS files (
     tags TEXT[] DEFAULT ARRAY[]::TEXT[]
 );
 
-CREATE INDEX IF NOT EXISTS idx_files_tenant ON files (tenant_id);
-CREATE INDEX IF NOT EXISTS idx_files_user ON files (user_id);
-CREATE INDEX IF NOT EXISTS idx_files_graph_edges ON files USING GIN (graph_edges);
-CREATE INDEX IF NOT EXISTS idx_files_metadata ON files USING GIN (metadata);
-CREATE INDEX IF NOT EXISTS idx_files_tags ON files USING GIN (tags);
+CREATE INDEX idx_files_tenant ON files (tenant_id);
+CREATE INDEX idx_files_user ON files (user_id);
+CREATE INDEX idx_files_graph_edges ON files USING GIN (graph_edges);
+CREATE INDEX idx_files_metadata ON files USING GIN (metadata);
+CREATE INDEX idx_files_tags ON files USING GIN (tags);
 
 -- Embeddings for files
 CREATE TABLE IF NOT EXISTS embeddings_files (
@@ -683,14 +878,14 @@ CREATE TABLE IF NOT EXISTS embeddings_files (
 );
 
 -- Index for entity lookup (get all embeddings for entity)
-CREATE INDEX IF NOT EXISTS idx_embeddings_files_entity ON embeddings_files (entity_id);
+CREATE INDEX idx_embeddings_files_entity ON embeddings_files (entity_id);
 
 -- Index for field + provider lookup
-CREATE INDEX IF NOT EXISTS idx_embeddings_files_field_provider ON embeddings_files (field_name, provider);
+CREATE INDEX idx_embeddings_files_field_provider ON embeddings_files (field_name, provider);
 
 -- HNSW index for vector similarity search (created in background)
 -- Note: This will be created by background thread after data load
--- CREATE INDEX IF NOT EXISTS idx_embeddings_files_vector_hnsw ON embeddings_files
+-- CREATE INDEX idx_embeddings_files_vector_hnsw ON embeddings_files
 -- USING hnsw (embedding vector_cosine_ops);
 
 -- KV_STORE trigger for files
@@ -715,7 +910,7 @@ BEGIN
             graph_edges,
             updated_at
         ) VALUES (
-            NEW.name,  -- Use name as entity_key (json_schema_extra)
+            NEW.id::VARCHAR,
             'files',
             NEW.id,
             NEW.tenant_id,
@@ -752,7 +947,7 @@ CREATE TABLE IF NOT EXISTS ontologies (
     tenant_id VARCHAR(100) NOT NULL,
     user_id VARCHAR(256),
     name VARCHAR(256) NOT NULL,
-    file_id TEXT NOT NULL,
+    file_id UUID NOT NULL,
     agent_schema_id VARCHAR(256) NOT NULL,
     provider_name VARCHAR(256) NOT NULL,
     model_name VARCHAR(256) NOT NULL,
@@ -768,11 +963,11 @@ CREATE TABLE IF NOT EXISTS ontologies (
     tags TEXT[] DEFAULT ARRAY[]::TEXT[]
 );
 
-CREATE INDEX IF NOT EXISTS idx_ontologies_tenant ON ontologies (tenant_id);
-CREATE INDEX IF NOT EXISTS idx_ontologies_user ON ontologies (user_id);
-CREATE INDEX IF NOT EXISTS idx_ontologies_graph_edges ON ontologies USING GIN (graph_edges);
-CREATE INDEX IF NOT EXISTS idx_ontologies_metadata ON ontologies USING GIN (metadata);
-CREATE INDEX IF NOT EXISTS idx_ontologies_tags ON ontologies USING GIN (tags);
+CREATE INDEX idx_ontologies_tenant ON ontologies (tenant_id);
+CREATE INDEX idx_ontologies_user ON ontologies (user_id);
+CREATE INDEX idx_ontologies_graph_edges ON ontologies USING GIN (graph_edges);
+CREATE INDEX idx_ontologies_metadata ON ontologies USING GIN (metadata);
+CREATE INDEX idx_ontologies_tags ON ontologies USING GIN (tags);
 
 -- KV_STORE trigger for ontologies
 -- Trigger function to maintain KV_STORE for ontologies
@@ -796,7 +991,7 @@ BEGIN
             graph_edges,
             updated_at
         ) VALUES (
-            NEW.name,  -- Use name as entity_key (json_schema_extra)
+            NEW.id::VARCHAR,
             'ontologies',
             NEW.id,
             NEW.tenant_id,
@@ -850,11 +1045,11 @@ CREATE TABLE IF NOT EXISTS ontology_configs (
     tags TEXT[] DEFAULT ARRAY[]::TEXT[]
 );
 
-CREATE INDEX IF NOT EXISTS idx_ontology_configs_tenant ON ontology_configs (tenant_id);
-CREATE INDEX IF NOT EXISTS idx_ontology_configs_user ON ontology_configs (user_id);
-CREATE INDEX IF NOT EXISTS idx_ontology_configs_graph_edges ON ontology_configs USING GIN (graph_edges);
-CREATE INDEX IF NOT EXISTS idx_ontology_configs_metadata ON ontology_configs USING GIN (metadata);
-CREATE INDEX IF NOT EXISTS idx_ontology_configs_tags ON ontology_configs USING GIN (tags);
+CREATE INDEX idx_ontology_configs_tenant ON ontology_configs (tenant_id);
+CREATE INDEX idx_ontology_configs_user ON ontology_configs (user_id);
+CREATE INDEX idx_ontology_configs_graph_edges ON ontology_configs USING GIN (graph_edges);
+CREATE INDEX idx_ontology_configs_metadata ON ontology_configs USING GIN (metadata);
+CREATE INDEX idx_ontology_configs_tags ON ontology_configs USING GIN (tags);
 
 -- Embeddings for ontology_configs
 CREATE TABLE IF NOT EXISTS embeddings_ontology_configs (
@@ -872,14 +1067,14 @@ CREATE TABLE IF NOT EXISTS embeddings_ontology_configs (
 );
 
 -- Index for entity lookup (get all embeddings for entity)
-CREATE INDEX IF NOT EXISTS idx_embeddings_ontology_configs_entity ON embeddings_ontology_configs (entity_id);
+CREATE INDEX idx_embeddings_ontology_configs_entity ON embeddings_ontology_configs (entity_id);
 
 -- Index for field + provider lookup
-CREATE INDEX IF NOT EXISTS idx_embeddings_ontology_configs_field_provider ON embeddings_ontology_configs (field_name, provider);
+CREATE INDEX idx_embeddings_ontology_configs_field_provider ON embeddings_ontology_configs (field_name, provider);
 
 -- HNSW index for vector similarity search (created in background)
 -- Note: This will be created by background thread after data load
--- CREATE INDEX IF NOT EXISTS idx_embeddings_ontology_configs_vector_hnsw ON embeddings_ontology_configs
+-- CREATE INDEX idx_embeddings_ontology_configs_vector_hnsw ON embeddings_ontology_configs
 -- USING hnsw (embedding vector_cosine_ops);
 
 -- KV_STORE trigger for ontology_configs
@@ -904,7 +1099,7 @@ BEGIN
             graph_edges,
             updated_at
         ) VALUES (
-            NEW.name,  -- Use name as entity_key (json_schema_extra)
+            NEW.id::VARCHAR,
             'ontology_configs',
             NEW.id,
             NEW.tenant_id,
@@ -954,11 +1149,11 @@ CREATE TABLE IF NOT EXISTS schemas (
     tags TEXT[] DEFAULT ARRAY[]::TEXT[]
 );
 
-CREATE INDEX IF NOT EXISTS idx_schemas_tenant ON schemas (tenant_id);
-CREATE INDEX IF NOT EXISTS idx_schemas_user ON schemas (user_id);
-CREATE INDEX IF NOT EXISTS idx_schemas_graph_edges ON schemas USING GIN (graph_edges);
-CREATE INDEX IF NOT EXISTS idx_schemas_metadata ON schemas USING GIN (metadata);
-CREATE INDEX IF NOT EXISTS idx_schemas_tags ON schemas USING GIN (tags);
+CREATE INDEX idx_schemas_tenant ON schemas (tenant_id);
+CREATE INDEX idx_schemas_user ON schemas (user_id);
+CREATE INDEX idx_schemas_graph_edges ON schemas USING GIN (graph_edges);
+CREATE INDEX idx_schemas_metadata ON schemas USING GIN (metadata);
+CREATE INDEX idx_schemas_tags ON schemas USING GIN (tags);
 
 -- Embeddings for schemas
 CREATE TABLE IF NOT EXISTS embeddings_schemas (
@@ -976,14 +1171,14 @@ CREATE TABLE IF NOT EXISTS embeddings_schemas (
 );
 
 -- Index for entity lookup (get all embeddings for entity)
-CREATE INDEX IF NOT EXISTS idx_embeddings_schemas_entity ON embeddings_schemas (entity_id);
+CREATE INDEX idx_embeddings_schemas_entity ON embeddings_schemas (entity_id);
 
 -- Index for field + provider lookup
-CREATE INDEX IF NOT EXISTS idx_embeddings_schemas_field_provider ON embeddings_schemas (field_name, provider);
+CREATE INDEX idx_embeddings_schemas_field_provider ON embeddings_schemas (field_name, provider);
 
 -- HNSW index for vector similarity search (created in background)
 -- Note: This will be created by background thread after data load
--- CREATE INDEX IF NOT EXISTS idx_embeddings_schemas_vector_hnsw ON embeddings_schemas
+-- CREATE INDEX idx_embeddings_schemas_vector_hnsw ON embeddings_schemas
 -- USING hnsw (embedding vector_cosine_ops);
 
 -- KV_STORE trigger for schemas
@@ -1008,7 +1203,7 @@ BEGIN
             graph_edges,
             updated_at
         ) VALUES (
-            NEW.name,  -- Use name as entity_key (json_schema_extra)
+            NEW.id::VARCHAR,
             'schemas',
             NEW.id,
             NEW.tenant_id,
@@ -1049,8 +1244,9 @@ SET applied_at = CURRENT_TIMESTAMP,
 DO $$
 BEGIN
     RAISE NOTICE '============================================================';
-    RAISE NOTICE 'REM Model Schema Applied: 10 tables';
+    RAISE NOTICE 'REM Model Schema Applied: 12 tables';
     RAISE NOTICE '============================================================';
+    RAISE NOTICE '  ✓ feedbacks';
     RAISE NOTICE '  ✓ files (1 embeddable fields)';
     RAISE NOTICE '  ✓ image_resources (1 embeddable fields)';
     RAISE NOTICE '  ✓ messages (1 embeddable fields)';
@@ -1060,143 +1256,10 @@ BEGIN
     RAISE NOTICE '  ✓ persons';
     RAISE NOTICE '  ✓ resources (1 embeddable fields)';
     RAISE NOTICE '  ✓ schemas (1 embeddable fields)';
+    RAISE NOTICE '  ✓ sessions (1 embeddable fields)';
     RAISE NOTICE '  ✓ users (1 embeddable fields)';
     RAISE NOTICE '';
     RAISE NOTICE 'Next: Run background indexes if needed';
     RAISE NOTICE '  rem db migrate --background-indexes';
     RAISE NOTICE '============================================================';
 END $$;
--- ============================================================================
--- REM TRAVERSE (Graph Traversal)
--- ============================================================================
-
--- REM TRAVERSE: Recursive graph traversal following edges
--- Explores graph_edges starting from entity_key up to max_depth
--- Uses cached kv_store.graph_edges for fast traversal (no polymorphic view!)
--- When keys_only=false, automatically fetches full entity records
-CREATE OR REPLACE FUNCTION rem_traverse(
-    p_entity_key VARCHAR(255),
-    p_tenant_id VARCHAR(100),  -- Backward compat parameter (not used for filtering)
-    p_user_id VARCHAR(100),
-    p_max_depth INTEGER DEFAULT 1,
-    p_rel_type VARCHAR(100) DEFAULT NULL,
-    p_keys_only BOOLEAN DEFAULT FALSE
-)
-RETURNS TABLE(
-    depth INTEGER,
-    entity_key VARCHAR(255),
-    entity_type VARCHAR(100),
-    entity_id UUID,
-    rel_type VARCHAR(100),
-    rel_weight REAL,
-    path TEXT[],
-    entity_record JSONB
-) AS $$
-DECLARE
-    graph_keys RECORD;
-    entities_by_table JSONB := '{}'::jsonb;
-    table_keys JSONB;
-BEGIN
-    -- First, build graph structure from KV store
-    FOR graph_keys IN
-        WITH RECURSIVE graph_traversal AS (
-            -- Base case: Find starting entity
-            SELECT
-                0 AS depth,
-                kv.entity_key,
-                kv.entity_type,
-                kv.entity_id,
-                NULL::VARCHAR(100) AS rel_type,
-                NULL::REAL AS rel_weight,
-                ARRAY[kv.entity_key]::TEXT[] AS path
-            FROM kv_store kv
-            WHERE kv.user_id = p_user_id
-            AND kv.entity_key = p_entity_key
-
-            UNION ALL
-
-            -- Recursive case: Follow outbound edges from discovered entities
-            SELECT
-                gt.depth + 1,
-                target_kv.entity_key,
-                target_kv.entity_type,
-                target_kv.entity_id,
-                (edge->>'rel_type')::VARCHAR(100) AS rel_type,
-                COALESCE((edge->>'weight')::REAL, 1.0) AS rel_weight,
-                gt.path || target_kv.entity_key AS path
-            FROM graph_traversal gt
-            -- Join to KV store to get source entity (with cached graph_edges!)
-            JOIN kv_store source_kv ON source_kv.entity_key = gt.entity_key
-                AND source_kv.user_id = p_user_id
-            -- Extract edges directly from cached kv_store.graph_edges (NO polymorphic view!)
-            CROSS JOIN LATERAL jsonb_array_elements(COALESCE(source_kv.graph_edges, '[]'::jsonb)) AS edge
-            -- Lookup target entity in KV store
-            JOIN kv_store target_kv ON target_kv.entity_key = (edge->>'dst')::VARCHAR(255)
-                AND target_kv.user_id = p_user_id
-            WHERE gt.depth < p_max_depth
-            -- Filter by relationship type if specified
-            AND (p_rel_type IS NULL OR (edge->>'rel_type')::VARCHAR(100) = p_rel_type)
-            -- Prevent cycles by checking path
-            AND NOT (target_kv.entity_key = ANY(gt.path))
-        )
-        SELECT DISTINCT ON (entity_key)
-            gt.depth,
-            gt.entity_key,
-            gt.entity_type,
-            gt.entity_id,
-            gt.rel_type,
-            gt.rel_weight,
-            gt.path
-        FROM graph_traversal gt
-        WHERE gt.depth > 0  -- Exclude starting entity
-        ORDER BY gt.entity_key, gt.depth
-    LOOP
-        IF p_keys_only THEN
-            -- Return just graph structure (no entity_record)
-            depth := graph_keys.depth;
-            entity_key := graph_keys.entity_key;
-            entity_type := graph_keys.entity_type;
-            entity_id := graph_keys.entity_id;
-            rel_type := graph_keys.rel_type;
-            rel_weight := graph_keys.rel_weight;
-            path := graph_keys.path;
-            entity_record := NULL;
-            RETURN NEXT;
-        ELSE
-            -- Build JSONB mapping {table: [keys]} for batch fetch
-            IF entities_by_table ? graph_keys.entity_type THEN
-                table_keys := entities_by_table->graph_keys.entity_type;
-                entities_by_table := jsonb_set(
-                    entities_by_table,
-                    ARRAY[graph_keys.entity_type],
-                    table_keys || jsonb_build_array(graph_keys.entity_key)
-                );
-            ELSE
-                entities_by_table := jsonb_set(
-                    entities_by_table,
-                    ARRAY[graph_keys.entity_type],
-                    jsonb_build_array(graph_keys.entity_key)
-                );
-            END IF;
-        END IF;
-    END LOOP;
-
-    -- If keys_only=false, fetch full records using rem_fetch
-    IF NOT p_keys_only AND entities_by_table != '{}'::jsonb THEN
-        RETURN QUERY
-        SELECT
-            NULL::INTEGER AS depth,
-            f.entity_key::VARCHAR(255),
-            f.entity_type::VARCHAR(100),
-            NULL::UUID AS entity_id,
-            NULL::VARCHAR(100) AS rel_type,
-            NULL::REAL AS rel_weight,
-            NULL::TEXT[] AS path,
-            f.entity_record
-        FROM rem_fetch(entities_by_table, p_user_id) f;
-    END IF;
-END;
-$$ LANGUAGE plpgsql STABLE;
-
-COMMENT ON FUNCTION rem_traverse IS
-'REM TRAVERSE query: Recursive graph traversal using cached kv_store.graph_edges. When keys_only=false (default), automatically fetches full entity records via rem_fetch.';

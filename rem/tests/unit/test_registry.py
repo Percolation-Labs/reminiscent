@@ -6,7 +6,12 @@ This tests the library extension pattern where users:
 2. Extend it like normal FastAPI (routes, middleware)
 3. Access app.mcp_server to add MCP tools/resources
 4. Register models for schema generation
+5. Register schema paths for custom agent/evaluator discovery
 """
+
+import os
+import tempfile
+from pathlib import Path
 
 import pytest
 from pydantic import Field
@@ -17,16 +22,22 @@ from rem import (
     register_models,
     get_model_registry,
     clear_model_registry,
+    register_schema_path,
+    register_schema_paths,
+    get_schema_paths,
+    clear_schema_path_registry,
 )
 from rem.models.core import CoreModel
 
 
 @pytest.fixture(autouse=True)
 def clean_registry():
-    """Clear model registry before and after each test."""
+    """Clear model and schema path registries before and after each test."""
     clear_model_registry()
+    clear_schema_path_registry()
     yield
     clear_model_registry()
+    clear_schema_path_registry()
 
 
 class TestCreateApp:
@@ -289,3 +300,175 @@ class TestIntegrationPattern:
         # Model registered
         registry = get_model_registry()
         assert "Analysis" in registry.get_models(include_core=False)
+
+
+class TestSchemaPathRegistry:
+    """Test schema path registration for custom agent/evaluator discovery."""
+
+    def test_register_schema_path(self):
+        """register_schema_path() adds a path to the registry."""
+        register_schema_path("/app/custom-agents")
+
+        paths = get_schema_paths()
+        assert "/app/custom-agents" in paths
+
+    def test_register_schema_paths_multiple(self):
+        """register_schema_paths() adds multiple paths at once."""
+        register_schema_paths("/app/agents", "/app/evaluators", "/shared/schemas")
+
+        paths = get_schema_paths()
+        assert "/app/agents" in paths
+        assert "/app/evaluators" in paths
+        assert "/shared/schemas" in paths
+
+    def test_paths_maintain_order(self):
+        """Paths are returned in registration order."""
+        register_schema_path("/first")
+        register_schema_path("/second")
+        register_schema_path("/third")
+
+        paths = get_schema_paths()
+        # First three should be in order (env var paths may follow)
+        assert paths.index("/first") < paths.index("/second")
+        assert paths.index("/second") < paths.index("/third")
+
+    def test_no_duplicate_paths(self):
+        """Registering the same path twice doesn't create duplicates."""
+        register_schema_path("/app/agents")
+        register_schema_path("/app/agents")
+        register_schema_path("/app/agents")
+
+        paths = get_schema_paths()
+        assert paths.count("/app/agents") == 1
+
+    def test_clear_schema_path_registry(self):
+        """clear_schema_path_registry() removes all registered paths."""
+        register_schema_path("/app/agents")
+        register_schema_path("/app/evaluators")
+
+        clear_schema_path_registry()
+
+        # After clearing, only env var paths should remain (if any)
+        paths = get_schema_paths()
+        assert "/app/agents" not in paths
+        assert "/app/evaluators" not in paths
+
+    def test_schema_paths_from_env_var(self, monkeypatch):
+        """SCHEMA__PATHS env var adds paths to search."""
+        # This tests the integration with settings
+        # Note: The env var is read at settings initialization time,
+        # so we test via the path_list property directly
+        from rem.settings import SchemaSettings
+
+        settings = SchemaSettings(paths="/env/path1;/env/path2")
+        assert "/env/path1" in settings.path_list
+        assert "/env/path2" in settings.path_list
+
+    def test_env_var_empty_paths_filtered(self):
+        """Empty paths in SCHEMA__PATHS are filtered out."""
+        from rem.settings import SchemaSettings
+
+        settings = SchemaSettings(paths="/valid;;/another;")
+        assert "" not in settings.path_list
+        assert "/valid" in settings.path_list
+        assert "/another" in settings.path_list
+
+
+class TestSchemaLoaderWithCustomPaths:
+    """Test schema loading with custom paths."""
+
+    def test_load_schema_from_custom_path(self):
+        """Schema loader finds schemas in registered custom paths."""
+        from rem.utils.schema_loader import load_agent_schema
+
+        # Create a temporary directory with a custom schema
+        with tempfile.TemporaryDirectory() as tmpdir:
+            schema_content = """
+type: object
+description: Test custom agent
+properties:
+  result:
+    type: string
+"""
+            schema_path = Path(tmpdir) / "my-custom-agent.yaml"
+            schema_path.write_text(schema_content)
+
+            # Register the temp directory
+            register_schema_path(tmpdir)
+
+            # Load should find it
+            schema = load_agent_schema("my-custom-agent")
+            assert schema["description"] == "Test custom agent"
+            assert schema["properties"]["result"]["type"] == "string"
+
+    def test_custom_path_takes_precedence_over_package(self):
+        """Custom paths are searched before package resources."""
+        from rem.utils.schema_loader import load_agent_schema
+
+        # Create a custom schema that shadows a built-in one
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create a schema with same name as built-in "rem" agent
+            schema_content = """
+type: object
+description: CUSTOM rem agent (should take precedence)
+properties:
+  custom_field:
+    type: string
+"""
+            schema_path = Path(tmpdir) / "rem.yaml"
+            schema_path.write_text(schema_content)
+
+            # Register BEFORE the test
+            register_schema_path(tmpdir)
+
+            # Load should find custom version
+            schema = load_agent_schema("rem", use_cache=False)
+            assert "CUSTOM" in schema["description"]
+
+    def test_agents_subdirectory_in_custom_path(self):
+        """Schema loader checks agents/ subdirectory in custom paths."""
+        from rem.utils.schema_loader import load_agent_schema
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create agents subdirectory
+            agents_dir = Path(tmpdir) / "agents"
+            agents_dir.mkdir()
+
+            schema_content = """
+type: object
+description: Agent in subdirectory
+properties:
+  output:
+    type: string
+"""
+            schema_path = agents_dir / "subdir-agent.yaml"
+            schema_path.write_text(schema_content)
+
+            register_schema_path(tmpdir)
+
+            schema = load_agent_schema("subdir-agent")
+            assert schema["description"] == "Agent in subdirectory"
+
+    def test_evaluators_subdirectory_in_custom_path(self):
+        """Schema loader checks evaluators/ subdirectory in custom paths."""
+        from rem.utils.schema_loader import load_agent_schema
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create evaluators subdirectory
+            evaluators_dir = Path(tmpdir) / "evaluators"
+            evaluators_dir.mkdir()
+
+            schema_content = """
+type: object
+description: Custom evaluator
+properties:
+  score:
+    type: number
+"""
+            schema_path = evaluators_dir / "custom-eval.yaml"
+            schema_path.write_text(schema_content)
+
+            register_schema_path(tmpdir)
+
+            schema = load_agent_schema("custom-eval")
+            assert schema["description"] == "Custom evaluator"

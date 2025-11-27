@@ -115,6 +115,15 @@ remstack/
 - Schema evolution via Pydantic models (no Alembic)
 - OTEL disabled locally, enabled in prod via `OTEL__ENABLED=true`
 
+**Schema Workflow (when adding/modifying entity models):**
+```bash
+# 1. Edit models in src/rem/models/entities/
+# 2. Regenerate migration file
+rem db schema generate -m src/rem/models/entities
+# 3. Apply to database
+rem db migrate
+```
+
 ---
 
 ## REM Query Dialect

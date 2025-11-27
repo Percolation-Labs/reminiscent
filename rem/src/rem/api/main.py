@@ -214,15 +214,39 @@ def create_app() -> FastAPI:
                 yield
 
     app = FastAPI(
-        title="REM API",
-        description="Resources Entities Moments system for agentic AI",
+        title=f"{settings.app_name} API",
+        description=f"{settings.app_name} - Resources Entities Moments system for agentic AI",
         version="0.1.0",
         lifespan=combined_lifespan,
         root_path=settings.root_path if settings.root_path else "",
         redirect_slashes=False,  # Don't redirect /mcp/ -> /mcp
     )
 
+    # Add request logging middleware
+    app.add_middleware(RequestLoggingMiddleware)
+
+    # Add SSE buffering middleware (for MCP SSE transport)
+    app.add_middleware(SSEBufferingMiddleware)
+
+    # Add Anonymous Tracking & Rate Limiting (Runs AFTER Auth if Auth is enabled)
+    # Must be added BEFORE AuthMiddleware in code to be INNER in the stack
+    from .middleware.tracking import AnonymousTrackingMiddleware
+    app.add_middleware(AnonymousTrackingMiddleware)
+
+    # Add authentication middleware (if enabled)
+    if settings.auth.enabled:
+        from ..auth.middleware import AuthMiddleware
+
+        app.add_middleware(
+            AuthMiddleware,
+            protected_paths=["/api/v1"],
+            excluded_paths=["/api/auth", "/api/v1/mcp/auth"],
+            allow_anonymous=settings.auth.allow_anonymous,
+        )
+
     # Add session middleware for OAuth state management
+    # Must be added AFTER AuthMiddleware in code so it runs BEFORE (middleware runs in reverse)
+    # AuthMiddleware needs request.session to be available
     session_secret = settings.auth.session_secret or secrets.token_hex(32)
     if not settings.auth.session_secret:
         logger.warning(
@@ -239,32 +263,12 @@ def create_app() -> FastAPI:
         https_only=settings.environment == "production",
     )
 
-    # Add request logging middleware
-    app.add_middleware(RequestLoggingMiddleware)
-
-    # Add SSE buffering middleware (for MCP SSE transport)
-    app.add_middleware(SSEBufferingMiddleware)
-    
-    # Add Anonymous Tracking & Rate Limiting (Runs AFTER Auth if Auth is enabled)
-    # Must be added BEFORE AuthMiddleware in code to be INNER in the stack
-    from .middleware.tracking import AnonymousTrackingMiddleware
-    app.add_middleware(AnonymousTrackingMiddleware)
-
-    # Add authentication middleware (if enabled)
-    if settings.auth.enabled:
-        from ..auth.middleware import AuthMiddleware
-
-        app.add_middleware(
-            AuthMiddleware,
-            protected_paths=["/api/v1"],
-            excluded_paths=["/api/auth", "/api/v1/mcp/auth"],
-        )
-
     # Add CORS middleware LAST (runs first in middleware chain)
     # Must expose mcp-session-id header for MCP session management
     CORS_ORIGIN_WHITELIST = [
-        "http://localhost:5173",  # Local development (Vite)
         "http://localhost:3000",  # Local development (React)
+        "http://localhost:5000",  # Local development (Flask/other)
+        "http://localhost:5173",  # Local development (Vite)
     ]
 
     app.add_middleware(
@@ -282,7 +286,7 @@ def create_app() -> FastAPI:
         """API information endpoint."""
         # TODO: If auth enabled and no user, return 401 with WWW-Authenticate
         return {
-            "name": "REM API",
+            "name": f"{settings.app_name} API",
             "version": "0.1.0",
             "mcp_endpoint": "/api/v1/mcp",
             "docs": "/docs",
@@ -296,8 +300,16 @@ def create_app() -> FastAPI:
 
     # Register API routers
     from .routers.chat import router as chat_router
+    from .routers.models import router as models_router
+    from .routers.messages import router as messages_router
+    from .routers.feedback import router as feedback_router
+    from .routers.admin import router as admin_router
 
     app.include_router(chat_router)
+    app.include_router(models_router)
+    app.include_router(messages_router)
+    app.include_router(feedback_router)
+    app.include_router(admin_router)
 
     # Register auth router (if enabled)
     if settings.auth.enabled:

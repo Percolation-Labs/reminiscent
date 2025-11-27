@@ -363,6 +363,153 @@ data: {"id":"chatcmpl-abc123","choices":[{"delta":{},"finish_reason":"stop","ind
 data: [DONE]
 ```
 
+## Extended SSE Event Protocol
+
+Beyond OpenAI-compatible text streaming, REM supports custom SSE event types for rich UI interactions. These use named `event:` fields to distinguish from standard `data:` chunks.
+
+### Event Types
+
+| Event Type | Purpose | UI Display |
+|------------|---------|------------|
+| `text_delta` | Content chunks | Main response area (OpenAI-compatible) |
+| `reasoning` | Model thinking | Collapsible "thinking" section |
+| `progress` | Step indicators | Progress bar/stepper |
+| `tool_call` | Tool invocations | Tool status panel |
+| `action_request` | User input solicitation | Buttons, forms, modals |
+| `metadata` | System info | Hidden or badge display |
+| `error` | Error notification | Error toast/alert |
+| `done` | Stream completion | Cleanup signal |
+
+### Event Format
+
+**OpenAI-compatible (text_delta):**
+```
+data: {"type": "text_delta", "content": "Hello "}
+
+data: {"type": "text_delta", "content": "world!"}
+```
+
+**Named events (all others):**
+```
+event: reasoning
+data: {"type": "reasoning", "content": "Analyzing the request...", "step": 1}
+
+event: progress
+data: {"type": "progress", "step": 1, "total_steps": 3, "label": "Searching", "status": "in_progress"}
+
+event: tool_call
+data: {"type": "tool_call", "tool_name": "search_rem", "status": "started", "arguments": {"query": "..."}}
+
+event: action_request
+data: {"type": "action_request", "card": {"id": "feedback-1", "prompt": "Was this helpful?", "actions": [...]}}
+
+event: metadata
+data: {"type": "metadata", "confidence": 0.95, "sources": ["doc1.md"], "hidden": false}
+
+event: done
+data: {"type": "done", "reason": "stop"}
+```
+
+### Action Request Cards (Adaptive Cards-inspired)
+
+Action requests solicit user input using a schema inspired by [Microsoft Adaptive Cards](https://adaptivecards.io/):
+
+```json
+{
+  "type": "action_request",
+  "card": {
+    "id": "confirm-delete-123",
+    "prompt": "Are you sure you want to delete this item?",
+    "display_style": "modal",
+    "actions": [
+      {
+        "type": "Action.Submit",
+        "id": "confirm",
+        "title": "Delete",
+        "style": "destructive",
+        "data": {"action": "delete", "item_id": "123"}
+      },
+      {
+        "type": "Action.Submit",
+        "id": "cancel",
+        "title": "Cancel",
+        "style": "secondary",
+        "data": {"action": "cancel"}
+      }
+    ],
+    "inputs": [
+      {
+        "type": "Input.Text",
+        "id": "reason",
+        "label": "Reason (optional)",
+        "placeholder": "Why are you deleting this?"
+      }
+    ],
+    "timeout_ms": 30000
+  }
+}
+```
+
+**Action Types:**
+- `Action.Submit` - Send data to server
+- `Action.OpenUrl` - Navigate to URL
+- `Action.ShowCard` - Reveal nested content
+
+**Input Types:**
+- `Input.Text` - Text field (single or multiline)
+- `Input.ChoiceSet` - Dropdown/radio selection
+- `Input.Toggle` - Checkbox/toggle
+
+### SSE Simulator Endpoint
+
+For frontend development and testing, use the simulator which generates all event types without LLM costs:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-Agent-Schema: simulator" \
+  -d '{"messages": [{"role": "user", "content": "demo"}], "stream": true}'
+```
+
+The simulator produces a scripted sequence demonstrating:
+1. Reasoning events (4 steps)
+2. Progress indicators
+3. Simulated tool calls
+4. Rich markdown content
+5. Metadata with confidence
+6. Action request for feedback
+
+See `rem/agentic/agents/sse_simulator.py` for implementation details.
+
+### Frontend Integration
+
+```typescript
+// Parse SSE events in React/TypeScript
+const eventSource = new EventSource('/api/v1/chat/completions');
+
+eventSource.onmessage = (e) => {
+  // Default handler for data-only events (text_delta)
+  const event = JSON.parse(e.data);
+  if (event.type === 'text_delta') {
+    appendContent(event.content);
+  }
+};
+
+eventSource.addEventListener('reasoning', (e) => {
+  const event = JSON.parse(e.data);
+  appendReasoning(event.content);
+});
+
+eventSource.addEventListener('action_request', (e) => {
+  const event = JSON.parse(e.data);
+  showActionCard(event.card);
+});
+
+eventSource.addEventListener('done', () => {
+  eventSource.close();
+});
+```
+
 ## Architecture
 
 ### Middleware Ordering
@@ -437,6 +584,8 @@ When a user exceeds their rate limit (based on their tier), the API returns a 42
 ## Related Documentation
 
 - [Chat Router](routers/chat/completions.py) - Chat completions implementation
+- [SSE Events](routers/chat/sse_events.py) - SSE event type definitions
+- [SSE Simulator](../../agentic/agents/sse_simulator.py) - Event simulator for testing
 - [MCP Router](mcp_router/server.py) - MCP server implementation
 - [Agent Schemas](../../schemas/agents/) - Available agent schemas
 - [Session Compression](../../services/session/compression.py) - Compression implementation

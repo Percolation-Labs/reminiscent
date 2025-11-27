@@ -75,6 +75,7 @@ from .commands.experiments import experiments as experiments_group
 from .commands.configure import register_command as register_configure_command
 from .commands.serve import register_command as register_serve_command
 from .commands.mcp import register_command as register_mcp_command
+from .commands.scaffold import scaffold as scaffold_command
 
 register_schema_commands(schema)
 register_db_commands(db)
@@ -85,6 +86,7 @@ register_configure_command(cli)
 register_serve_command(cli)
 register_mcp_command(cli)
 cli.add_command(experiments_group)
+cli.add_command(scaffold_command)
 
 
 def main():

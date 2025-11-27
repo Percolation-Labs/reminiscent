@@ -1,8 +1,9 @@
 """
-REM Model Registry - Register custom models for database schema generation.
+REM Extension Registry - Register custom models and schema paths.
 
-This module provides model registration for downstream applications extending REM.
-Models registered here are included in schema generation (`rem db schema generate`).
+This module provides registration for downstream applications extending REM:
+1. Models - for database schema generation
+2. Schema paths - for agent/evaluator schema discovery
 
 Usage:
     import rem
@@ -17,8 +18,13 @@ Usage:
     # Or register multiple at once
     rem.register_models(ModelA, ModelB, ModelC)
 
-    # Then generate schema includes your models:
-    # rem db schema generate
+    # Register schema search paths
+    rem.register_schema_path("/app/custom-agents")
+    rem.register_schema_paths("/app/agents", "/app/evaluators")
+
+    # Then:
+    # - Schema generation includes your models: rem db schema generate
+    # - Schema loading finds your custom agents: load_agent_schema("my-agent")
 """
 
 from dataclasses import dataclass
@@ -176,10 +182,89 @@ class ModelRegistry:
 
 
 # =============================================================================
-# MODULE-LEVEL SINGLETON
+# SCHEMA PATH REGISTRY
+# =============================================================================
+
+
+class SchemaPathRegistry:
+    """
+    Registry for custom schema search paths.
+
+    Paths registered here are searched BEFORE built-in package schemas
+    when loading agent/evaluator schemas.
+
+    Search order:
+    1. Exact path (if file exists)
+    2. Paths from this registry (in registration order)
+    3. Paths from SCHEMA__PATHS env var
+    4. Built-in package schemas
+    5. Database LOOKUP
+    """
+
+    def __init__(self) -> None:
+        self._paths: list[str] = []
+
+    def clear(self) -> None:
+        """Clear all registered paths. Useful for testing."""
+        self._paths.clear()
+        logger.debug("Schema path registry cleared")
+
+    def register(self, path: str) -> None:
+        """
+        Register a schema search path.
+
+        Args:
+            path: Directory path to search for schemas
+
+        Example:
+            import rem
+            rem.register_schema_path("/app/custom-agents")
+        """
+        if path not in self._paths:
+            self._paths.append(path)
+            logger.debug(f"Registered schema path: {path}")
+
+    def register_many(self, *paths: str) -> None:
+        """
+        Register multiple schema paths at once.
+
+        Example:
+            import rem
+            rem.register_schema_paths("/app/agents", "/app/evaluators")
+        """
+        for path in paths:
+            self.register(path)
+
+    def get_paths(self) -> list[str]:
+        """
+        Get all registered paths (registry + settings).
+
+        Returns paths in search order:
+        1. Programmatically registered paths (this registry)
+        2. Paths from SCHEMA__PATHS environment variable
+
+        Returns:
+            List of directory paths to search
+        """
+        from .settings import settings
+
+        # Combine registry paths with settings paths
+        all_paths = self._paths.copy()
+
+        # Add paths from settings (SCHEMA__PATHS env var)
+        for path in settings.schema_search.path_list:
+            if path not in all_paths:
+                all_paths.append(path)
+
+        return all_paths
+
+
+# =============================================================================
+# MODULE-LEVEL SINGLETONS
 # =============================================================================
 
 _model_registry = ModelRegistry()
+_schema_path_registry = SchemaPathRegistry()
 
 
 def register_model(
@@ -229,3 +314,54 @@ def get_model_registry() -> ModelRegistry:
 def clear_model_registry() -> None:
     """Clear all model registrations. Useful for testing."""
     _model_registry.clear()
+
+
+# =============================================================================
+# SCHEMA PATH FUNCTIONS
+# =============================================================================
+
+
+def register_schema_path(path: str) -> None:
+    """
+    Register a schema search path.
+
+    Paths registered here are searched BEFORE built-in package schemas.
+
+    Example:
+        import rem
+        rem.register_schema_path("/app/custom-agents")
+
+        # Now load_agent_schema("my-agent") will find /app/custom-agents/my-agent.yaml
+    """
+    _schema_path_registry.register(path)
+
+
+def register_schema_paths(*paths: str) -> None:
+    """
+    Register multiple schema paths at once.
+
+    Example:
+        import rem
+        rem.register_schema_paths("/app/agents", "/app/evaluators")
+    """
+    _schema_path_registry.register_many(*paths)
+
+
+def get_schema_path_registry() -> SchemaPathRegistry:
+    """Get the global schema path registry instance."""
+    return _schema_path_registry
+
+
+def get_schema_paths() -> list[str]:
+    """
+    Get all registered schema paths (registry + SCHEMA__PATHS env var).
+
+    Returns:
+        List of directory paths to search for schemas
+    """
+    return _schema_path_registry.get_paths()
+
+
+def clear_schema_path_registry() -> None:
+    """Clear all schema path registrations. Useful for testing."""
+    _schema_path_registry.clear()

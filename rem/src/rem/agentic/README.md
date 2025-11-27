@@ -640,6 +640,82 @@ If `query_agent_model` is not set, the agent uses `settings.llm.default_model`.
 - PostgreSQL dialect aware (knows about KV_STORE, embeddings tables)
 - Can generate multi-step query plans for complex questions
 
+## SSE Simulator
+
+The SSE Simulator is a **programmatic** event generator (not an LLM-based agent) that produces
+a scripted sequence of SSE events for testing and demonstrating the streaming protocol.
+
+### Purpose
+
+- Frontend development without LLM costs
+- Testing SSE parsing and rendering
+- Demonstrating the full event protocol
+- Load testing streaming infrastructure
+
+### Usage
+
+```python
+from rem.agentic.agents import stream_simulator_events
+from rem.api.routers.chat.sse_events import format_sse_event
+
+# Generate all event types
+async for event in stream_simulator_events("demo"):
+    print(format_sse_event(event))
+
+# Minimal demo (text + done only)
+from rem.agentic.agents import stream_minimal_demo
+async for event in stream_minimal_demo("Hello world!"):
+    print(event)
+
+# Error simulation
+from rem.agentic.agents import stream_error_demo
+async for event in stream_error_demo(error_after_words=10):
+    print(event)
+```
+
+### Event Sequence
+
+The full simulator produces events in this order:
+
+1. **Reasoning** (4 steps) - Model thinking process
+2. **Progress** (step 1/4) - Starting
+3. **Tool calls** (2 tools) - Simulated tool invocations
+4. **Progress** (step 2/4) - Generating
+5. **Text deltas** - Streamed markdown content
+6. **Progress** (step 3/4) - Formatting
+7. **Metadata** - Confidence, sources, flags
+8. **Progress** (step 4/4) - Preparing actions
+9. **Action request** - Feedback card with buttons and inputs
+10. **Progress** (all complete)
+11. **Done** - Stream completion
+
+### Configuration Options
+
+```python
+await stream_simulator_events(
+    prompt="demo",
+    delay_ms=50,              # Delay between events
+    include_reasoning=True,   # Emit reasoning events
+    include_progress=True,    # Emit progress events
+    include_tool_calls=True,  # Emit tool call events
+    include_actions=True,     # Emit action request at end
+    include_metadata=True,    # Emit metadata event
+)
+```
+
+### HTTP Endpoint
+
+Use the simulator via the chat completions endpoint:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-Agent-Schema: simulator" \
+  -d '{"messages": [{"role": "user", "content": "demo"}], "stream": true}'
+```
+
+See `rem/api/README.md` for full SSE event protocol documentation.
+
 ## Future Work
 
 - [ ] Phoenix evaluator integration

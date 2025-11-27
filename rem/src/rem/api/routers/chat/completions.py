@@ -79,9 +79,9 @@ from .models import (
     ChatCompletionUsage,
     ChatMessage,
 )
-from .streaming import stream_openai_response
+from .streaming import stream_openai_response, stream_simulator_response
 
-router = APIRouter(prefix="/v1", tags=["chat"])
+router = APIRouter(prefix="/api/v1", tags=["chat"])
 
 # Default agent schema file
 DEFAULT_AGENT_SCHEMA = "rem"
@@ -132,6 +132,96 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
     # Extract AgentContext first to get schema name
     temp_context = AgentContext.from_headers(dict(request.headers))
     schema_name = temp_context.agent_schema_uri or DEFAULT_AGENT_SCHEMA
+
+    # Special handling for simulator schema - no LLM, just generates demo SSE events
+    # Check BEFORE loading schema since simulator doesn't need a schema file
+    # Still builds full context and saves messages like a real agent
+    if schema_name == "simulator":
+        logger.info("Using SSE simulator (no LLM)")
+
+        # Build context just like real agents (loads session history, user context)
+        new_messages = [msg.model_dump() for msg in body.messages]
+        context, messages = await ContextBuilder.build_from_headers(
+            headers=dict(request.headers),
+            new_messages=new_messages,
+        )
+
+        # Get the last user message as prompt
+        prompt = body.messages[-1].content if body.messages else "demo"
+        request_id = f"sim-{uuid.uuid4().hex[:24]}"
+
+        # Generate message IDs upfront for correlation
+        user_message_id = str(uuid.uuid4())
+        assistant_message_id = str(uuid.uuid4())
+
+        # Simulated assistant response content (for persistence)
+        simulated_content = (
+            f"[SSE Simulator Response]\n\n"
+            f"This is a simulated response demonstrating all SSE event types:\n"
+            f"- reasoning events (model thinking)\n"
+            f"- text_delta events (streamed content)\n"
+            f"- progress events (multi-step operations)\n"
+            f"- tool_call events (function invocations)\n"
+            f"- action_request events (UI solicitation)\n"
+            f"- metadata events (confidence, sources, message IDs)\n\n"
+            f"Original prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}"
+        )
+
+        # Save messages to database (if session_id and postgres enabled)
+        if settings.postgres.enabled and context.session_id:
+            user_message = {
+                "id": user_message_id,
+                "role": "user",
+                "content": prompt,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+            assistant_message = {
+                "id": assistant_message_id,
+                "role": "assistant",
+                "content": simulated_content,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+
+            store = SessionMessageStore(user_id=context.user_id or settings.test.effective_user_id)
+            await store.store_session_messages(
+                session_id=context.session_id,
+                messages=[user_message, assistant_message],
+                user_id=context.user_id,
+                compress=True,
+            )
+            logger.info(f"Saved simulator conversation to session {context.session_id}")
+
+        if body.stream:
+            return StreamingResponse(
+                stream_simulator_response(
+                    prompt=prompt,
+                    model="simulator-v1.0.0",
+                    # Pass message correlation IDs
+                    message_id=assistant_message_id,
+                    in_reply_to=user_message_id,
+                    session_id=context.session_id,
+                ),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+            )
+        else:
+            # Non-streaming simulator returns simple JSON
+            return ChatCompletionResponse(
+                id=request_id,
+                created=int(time.time()),
+                model="simulator-v1.0.0",
+                choices=[
+                    ChatCompletionChoice(
+                        index=0,
+                        message=ChatMessage(
+                            role="assistant",
+                            content=simulated_content,
+                        ),
+                        finish_reason="stop",
+                    )
+                ],
+                usage=ChatCompletionUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+            )
 
     # Load schema using centralized utility
     try:

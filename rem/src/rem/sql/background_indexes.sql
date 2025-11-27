@@ -16,6 +16,11 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_embeddings_moments_vector_hnsw
 ON embeddings_moments
 USING hnsw (embedding vector_cosine_ops);
 
+-- HNSW vector index for embeddings_sessions
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_embeddings_sessions_vector_hnsw
+ON embeddings_sessions
+USING hnsw (embedding vector_cosine_ops);
+
 -- HNSW vector index for embeddings_resources
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_embeddings_resources_vector_hnsw
 ON embeddings_resources

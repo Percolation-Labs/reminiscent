@@ -16,6 +16,7 @@ Best Practices:
 - UUID for identifiers in Union types
 """
 
+import types
 from datetime import date, datetime, time
 from typing import Any, Union, get_args, get_origin
 from uuid import UUID
@@ -78,8 +79,9 @@ def get_sql_type(field_info: FieldInfo, field_name: str) -> str:
         return "TEXT"
 
     # Handle Union types (including Optional[T] which is Union[T, None])
+    # Also handles Python 3.10+ `X | None` syntax which uses types.UnionType
     origin = get_origin(annotation)
-    if origin is Union:
+    if origin is Union or isinstance(annotation, types.UnionType):
         args = get_args(annotation)
         # Filter out NoneType
         non_none_args = [arg for arg in args if arg is not type(None)]

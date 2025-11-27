@@ -516,32 +516,51 @@ results = await service.vector_search(
 
 ## Migrations
 
-Run migrations in order:
+### Using the CLI (Recommended)
 
 ```bash
-psql -d remdb -f sql/migrations/001_setup_extensions.sql
-psql -d remdb -f sql/migrations/002_kv_store_cache.sql
-psql -d remdb -f sql/generated_schema.sql
+# Apply all migrations
+rem db migrate
+
+# Check migration status
+rem db status
 ```
 
-Background indexes (after data load):
+### Migration Files
 
+Located in `src/rem/sql/migrations/`:
+- `001_install.sql` - Core infrastructure (extensions, functions, kv_store)
+- `002_install_models.sql` - Entity tables (auto-generated from Pydantic models)
+- `003_seed_default_user.sql` - Default user setup
+
+Background indexes (after data load):
 ```bash
-psql -d remdb -f sql/background_indexes.sql
+rem db migrate --background-indexes
 ```
 
 ## CLI Usage
 
-Generate schema from models:
+### Generate Schema from Models
+
+When you add or modify Pydantic models, regenerate the schema:
 
 ```bash
-rem schema generate --models src/rem/models/entities --output sql/schema.sql
+# Generate 002_install_models.sql from entity models
+rem db schema generate --models src/rem/models/entities
+
+# Output: src/rem/sql/migrations/002_install_models.sql
+# Then apply: rem db migrate
 ```
 
-Validate models:
+**Workflow for adding new models:**
+1. Add/modify models in `src/rem/models/entities/`
+2. Run `rem db schema generate -m src/rem/models/entities`
+3. Run `rem db migrate` to apply changes
+
+### Validate Models
 
 ```bash
-rem schema validate --models src/rem/models/entities
+rem db schema validate --models src/rem/models/entities
 ```
 
 ## Configuration

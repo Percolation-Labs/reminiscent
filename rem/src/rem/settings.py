@@ -74,7 +74,7 @@ class LLMSettings(BaseSettings):
         LLM__EVALUATOR_MODEL or EVALUATOR_MODEL - Model for LLM-as-judge evaluation
         LLM__OPENAI_API_KEY or OPENAI_API_KEY - OpenAI API key
         LLM__ANTHROPIC_API_KEY or ANTHROPIC_API_KEY - Anthropic API key
-        LLM__EMBEDDING_PROVIDER or EMBEDDING_PROVIDER - Default embedding provider (openai, cohere, jina, etc.)
+        LLM__EMBEDDING_PROVIDER or EMBEDDING_PROVIDER - Default embedding provider (openai)
         LLM__EMBEDDING_MODEL or EMBEDDING_MODEL - Default embedding model name
     """
 
@@ -129,7 +129,7 @@ class LLMSettings(BaseSettings):
 
     embedding_provider: str = Field(
         default="openai",
-        description="Default embedding provider (openai, cohere, jina, etc.)",
+        description="Default embedding provider (currently only openai supported)",
     )
 
     embedding_model: str = Field(
@@ -361,10 +361,16 @@ class AuthSettings(BaseSettings):
     - Custom OIDC provider
 
     Environment variables:
-        AUTH__ENABLED - Enable authentication (default: false)
+        AUTH__ENABLED - Enable authentication (default: true)
+        AUTH__ALLOW_ANONYMOUS - Allow rate-limited anonymous access (default: true)
         AUTH__SESSION_SECRET - Secret for session cookie signing
         AUTH__GOOGLE__* - Google OAuth settings
         AUTH__MICROSOFT__* - Microsoft OAuth settings
+
+    Access modes:
+    - enabled=true, allow_anonymous=true: Auth available, anonymous gets rate-limited access
+    - enabled=true, allow_anonymous=false: Auth required for all requests
+    - enabled=false: No auth, all requests treated as default user (dev mode)
     """
 
     model_config = SettingsConfigDict(
@@ -375,8 +381,17 @@ class AuthSettings(BaseSettings):
     )
 
     enabled: bool = Field(
-        default=False,
-        description="Enable authentication (disabled by default for testing)",
+        default=True,
+        description="Enable authentication (OAuth endpoints and middleware)",
+    )
+
+    allow_anonymous: bool = Field(
+        default=True,
+        description=(
+            "Allow anonymous (unauthenticated) access with rate limits. "
+            "When true, requests without auth get ANONYMOUS tier rate limits. "
+            "When false, all requests require authentication."
+        ),
     )
 
     session_secret: str = Field(
@@ -980,6 +995,54 @@ class APISettings(BaseSettings):
     )
 
 
+class SchemaSettings(BaseSettings):
+    """
+    Schema search path settings for agent and evaluator schemas.
+
+    Allows extending REM's schema search with custom directories.
+    Custom paths are searched BEFORE built-in package schemas.
+
+    Environment variables:
+        SCHEMA__PATHS - Semicolon-separated list of directories to search
+                        Example: "/app/schemas;/shared/agents;./local-schemas"
+
+    Search Order:
+    1. Exact path (if file exists)
+    2. Custom paths from SCHEMA__PATHS (in order)
+    3. Built-in package schemas (schemas/agents/, schemas/evaluators/, etc.)
+    4. Database LOOKUP (if enabled)
+
+    Example:
+        # In .env or environment
+        SCHEMA__PATHS=/app/custom-agents;/shared/evaluators
+
+        # Then in code
+        from rem.utils.schema_loader import load_agent_schema
+        schema = load_agent_schema("my-custom-agent")  # Found in /app/custom-agents/
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="SCHEMA__",
+        extra="ignore",
+    )
+
+    paths: str = Field(
+        default="",
+        description=(
+            "Semicolon-separated list of directories to search for schemas. "
+            "These paths are searched BEFORE built-in package schemas. "
+            "Example: '/app/schemas;/shared/agents'"
+        ),
+    )
+
+    @property
+    def path_list(self) -> list[str]:
+        """Get paths as a list, filtering empty strings."""
+        if not self.paths:
+            return []
+        return [p.strip() for p in self.paths.split(";") if p.strip()]
+
+
 class GitSettings(BaseSettings):
     """
     Git repository provider settings for versioned schema/experiment syncing.
@@ -1184,6 +1247,11 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    app_name: str = Field(
+        default="REM",
+        description="Application/API name used in docs, titles, and user-facing text",
+    )
+
     team: str = Field(
         default="rem",
         description="Team or project name for observability",
@@ -1225,6 +1293,7 @@ class Settings(BaseSettings):
     sqs: SQSSettings = Field(default_factory=SQSSettings)
     chunking: ChunkingSettings = Field(default_factory=ChunkingSettings)
     content: ContentSettings = Field(default_factory=ContentSettings)
+    schema_search: SchemaSettings = Field(default_factory=SchemaSettings)
     test: TestSettings = Field(default_factory=TestSettings)
 
 

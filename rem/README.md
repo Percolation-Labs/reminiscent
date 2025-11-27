@@ -15,23 +15,22 @@ Cloud-native unified memory infrastructure for agentic AI systems built with Pyd
 - **Database Layer**: PostgreSQL 18 with pgvector for multi-index memory (KV + Vector + Graph)
 - **REM Query Dialect**: Custom query language with O(1) lookups, semantic search, graph traversal
 - **Ingestion & Dreaming**: Background workers for content extraction and progressive index enrichment (0% → 100% answerable)
-- **Observability & Evals**: OpenTelemetry tracing + Arize Phoenix + LLM-as-a-Judge evaluation framework
+- **Observability & Evals**: OpenTelemetry tracing supporting LLM-as-a-Judge evaluation frameworks
 
 ## Features
 
 | Feature | Description | Benefits |
 |---------|-------------|----------|
 | **OpenAI-Compatible Chat API** | Drop-in replacement for OpenAI chat completions API with streaming support | Use with existing OpenAI clients, switch models across providers (OpenAI, Anthropic, etc.) |
-| **Built-in MCP Server** | FastMCP server with 4 tools + 3 resources for memory operations | Export memory to Claude Desktop, Cursor, or any MCP-compatible host |
+| **Built-in MCP Server** | FastMCP server with 4 tools + 5 resources for memory operations | Export memory to Claude Desktop, Cursor, or any MCP-compatible host |
 | **REM Query Engine** | Multi-index query system (LOOKUP, FUZZY, SEARCH, SQL, TRAVERSE) with custom dialect | O(1) lookups, semantic search, graph traversal - all tenant-isolated |
 | **Dreaming Workers** | Background workers for entity extraction, moment generation, and affinity matching | Automatic knowledge graph construction from resources (0% → 100% query answerable) |
 | **PostgreSQL + pgvector** | CloudNativePG with PostgreSQL 18, pgvector extension, streaming replication | Production-ready vector search, no external vector DB needed |
 | **AWS EKS Recipe** | Complete infrastructure-as-code with Pulumi, Karpenter, ArgoCD | Deploy to production EKS in minutes with auto-scaling and GitOps |
 | **JSON Schema Agents** | Dynamic agent creation from YAML schemas via Pydantic AI factory | Define agents declaratively, version control schemas, load dynamically |
-| **Content Providers** | Audio transcription (Whisper), vision (GPT-4V, Claude), PDFs, DOCX, images | Multimodal ingestion out of the box with format detection |
-| **Configurable Embeddings** | Provider-agnostic embedding system (OpenAI, Cohere, Jina) | Switch embedding providers via env vars, no code changes |
+| **Content Providers** | Audio transcription (Whisper), vision (OpenAI, Anthropic, Gemini), PDFs, DOCX, PPTX, XLSX, images | Multimodal ingestion out of the box with format detection |
+| **Configurable Embeddings** | OpenAI embedding system (text-embedding-3-small) | Production-ready embeddings, additional providers planned |
 | **Multi-Tenancy** | Tenant isolation at database level with automatic scoping | SaaS-ready with complete data separation per tenant |
-| **Streaming Everything** | SSE for chat, background workers for embeddings, async throughout | Real-time responses, non-blocking operations, scalable |
 | **Zero Vendor Lock-in** | Raw HTTP clients (no OpenAI SDK), swappable providers, open standards | Not tied to any vendor, easy to migrate, full control |
 
 ## Quick Start
@@ -59,6 +58,10 @@ pip install "remdb[all]"
 git clone https://github.com/Percolation-Labs/remstack-lab.git
 cd remstack-lab
 
+# Optional: Set default LLM provider via environment variable
+# export LLM__DEFAULT_MODEL="openai:gpt-4.1-nano"  # Fast and cheap
+# export LLM__DEFAULT_MODEL="anthropic:claude-sonnet-4-5-20250929"  # High quality (default)
+
 # Start PostgreSQL with docker-compose
 curl -O https://gist.githubusercontent.com/percolating-sirsh/d117b673bc0edfdef1a5068ccd3cf3e5/raw/docker-compose.prebuilt.yml
 docker compose -f docker-compose.prebuilt.yml up -d postgres
@@ -69,10 +72,6 @@ rem configure --install --claude-desktop
 
 # Load quickstart dataset (uses default user)
 rem db load datasets/quickstart/sample_data.yaml
-
-# Optional: Set default LLM provider via environment variable
-# export LLM__DEFAULT_MODEL="openai:gpt-4.1-nano"  # Fast and cheap
-# export LLM__DEFAULT_MODEL="anthropic:claude-sonnet-4-5-20250929"  # High quality (default)
 
 # Ask questions
 rem ask "What documents exist in the system?"
@@ -448,15 +447,15 @@ REM provides a custom query language designed for **LLM-driven iterated retrieva
 Unlike traditional single-shot SQL queries, the REM dialect is optimized for **multi-turn exploration** where LLMs participate in query planning:
 
 - **Iterated Queries**: Queries return partial results that LLMs use to refine subsequent queries
-- **Composable WITH Syntax**: Chain operations together (e.g., `TRAVERSE FROM ... WITH LOOKUP "..."`)
+- **Composable WITH Syntax**: Chain operations together (e.g., `TRAVERSE edge_type WITH LOOKUP "..."`)
 - **Mixed Indexes**: Combines exact lookups (O(1)), semantic search (vector), and graph traversal
 - **Query Planner Participation**: Results include metadata for LLMs to decide next steps
 
 **Example Multi-Turn Flow**:
 ```
 Turn 1: LOOKUP "sarah-chen" → Returns entity + available edge types
-Turn 2: TRAVERSE FROM "sarah-chen" TYPE "authored_by" DEPTH 1 → Returns connected documents
-Turn 3: SEARCH "architecture decisions" WITH TRAVERSE FROM "sarah-chen" → Combines semantic + graph
+Turn 2: TRAVERSE authored_by WITH LOOKUP "sarah-chen" DEPTH 1 → Returns connected documents
+Turn 3: SEARCH "architecture decisions" → Semantic search, then explore graph from results
 ```
 
 This enables LLMs to **progressively build context** rather than requiring perfect queries upfront.
@@ -509,8 +508,8 @@ SEARCH "contract disputes" FROM resources WHERE tags @> ARRAY['legal'] LIMIT 5
 Follow `graph_edges` relationships across the knowledge graph.
 
 ```sql
-TRAVERSE FROM "sarah-chen" TYPE "authored_by" DEPTH 2
-TRAVERSE FROM "api-design-v2" TYPE "references,depends_on" DEPTH 3
+TRAVERSE authored_by WITH LOOKUP "sarah-chen" DEPTH 2
+TRAVERSE references,depends_on WITH LOOKUP "api-design-v2" DEPTH 3
 ```
 
 **Features**:
@@ -603,7 +602,7 @@ SEARCH "API migration planning" FROM resources LIMIT 5
 LOOKUP "tidb-migration-spec" FROM resources
 
 # Query 3: Find related people
-TRAVERSE FROM "tidb-migration-spec" TYPE "authored_by,reviewed_by" DEPTH 1
+TRAVERSE authored_by,reviewed_by WITH LOOKUP "tidb-migration-spec" DEPTH 1
 
 # Query 4: Recent activity
 SELECT * FROM moments WHERE
@@ -620,7 +619,7 @@ All queries automatically scoped by `user_id` for complete data isolation:
 SEARCH "contracts" FROM resources LIMIT 10
 
 -- No cross-user data leakage
-TRAVERSE FROM "project-x" TYPE "references" DEPTH 3
+TRAVERSE references WITH LOOKUP "project-x" DEPTH 3
 ```
 
 ## API Endpoints
@@ -816,19 +815,20 @@ rem db rebuild-cache
 
 #### `rem db schema generate` - Generate SQL Schema
 
-Generate database schema from Pydantic models.
+Generate database schema from Pydantic models. Output goes directly to the migrations folder.
 
 ```bash
-# Generate install_models.sql from entity models
-rem db schema generate \
-  --models src/rem/models/entities \
-  --output rem/src/rem/sql/install_models.sql
+# Generate 002_install_models.sql from entity models (default)
+rem db schema generate --models src/rem/models/entities
 
-# Generate migration file
-rem db schema generate \
-  --models src/rem/models/entities \
-  --output rem/src/rem/sql/migrations/003_add_fields.sql
+# This writes to: src/rem/sql/migrations/002_install_models.sql
+# Then apply with: rem db migrate
 ```
+
+**Workflow for adding new models:**
+1. Add/modify models in `src/rem/models/entities/`
+2. Run `rem db schema generate -m src/rem/models/entities`
+3. Run `rem db migrate` to apply changes
 
 #### `rem db schema indexes` - Generate Background Indexes
 
@@ -1374,6 +1374,61 @@ pip install "remdb[all]"
 Using cached kreuzberg-4.0.0rc1-cp310-abi3-macosx_14_0_arm64.whl (19.8 MB)
 Successfully installed ... kreuzberg-4.0.0rc1 ... remdb-0.3.10
 ```
+
+## Using REM as a Library
+
+REM wraps FastAPI - extend it exactly as you would any FastAPI app.
+
+```python
+import rem
+from rem import create_app
+from rem.models.core import CoreModel
+
+# 1. Register models (for schema generation)
+rem.register_models(MyModel, AnotherModel)
+
+# 2. Register schema paths (for custom agents/evaluators)
+rem.register_schema_path("./schemas")
+
+# 3. Create app
+app = create_app()
+
+# 4. Extend like normal FastAPI
+app.include_router(my_router)
+
+@app.mcp_server.tool()
+async def my_tool(query: str) -> dict:
+    """Custom MCP tool."""
+    return {"result": query}
+```
+
+### Project Structure
+
+```
+my-rem-app/
+├── my_app/
+│   ├── main.py           # Entry point (create_app + extensions)
+│   ├── models.py         # Custom models (inherit CoreModel)
+│   └── routers/          # Custom FastAPI routers
+├── schemas/
+│   ├── agents/           # Custom agent YAML schemas
+│   └── evaluators/       # Custom evaluator schemas
+├── sql/migrations/       # Custom SQL migrations
+└── pyproject.toml
+```
+
+Generate this structure with: `rem scaffold my-app`
+
+### Extension Points
+
+| Extension | How |
+|-----------|-----|
+| **Routes** | `app.include_router(router)` or `@app.get()` |
+| **MCP Tools** | `@app.mcp_server.tool()` decorator or `app.mcp_server.add_tool(fn)` |
+| **MCP Resources** | `@app.mcp_server.resource("uri://...")` or `app.mcp_server.add_resource(fn)` |
+| **MCP Prompts** | `@app.mcp_server.prompt()` or `app.mcp_server.add_prompt(fn)` |
+| **Models** | `rem.register_models(Model)` then `rem db schema generate` |
+| **Agent Schemas** | `rem.register_schema_path("./schemas")` or `SCHEMA__PATHS` env var |
 
 ## License
 

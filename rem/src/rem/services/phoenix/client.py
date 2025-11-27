@@ -792,29 +792,128 @@ class PhoenixClient:
         label: str | None = None,
         score: float | None = None,
         explanation: str | None = None,
-    ) -> None:
+        metadata: dict[str, Any] | None = None,
+    ) -> str | None:
         """Add feedback annotation to a span.
 
         Args:
             span_id: Span ID to annotate
-            annotation_name: Name of the annotation (e.g., "correctness")
+            annotation_name: Name of the annotation (e.g., "correctness", "user_feedback")
             annotator_kind: Type of annotator ("HUMAN", "LLM", "CODE")
-            label: Optional label (e.g., "correct", "incorrect")
+            label: Optional label (e.g., "correct", "incorrect", "helpful")
             score: Optional numeric score (0.0-1.0)
             explanation: Optional explanation text
+            metadata: Optional additional metadata dict
+
+        Returns:
+            Annotation ID if successful, None otherwise
         """
         try:
-            self._client.add_span_annotation(  # type: ignore[attr-defined]
+            result = self._client.add_span_annotation(  # type: ignore[attr-defined]
                 span_id=span_id,
                 name=annotation_name,
                 annotator_kind=annotator_kind,
                 label=label,
                 score=score,
                 explanation=explanation,
+                metadata=metadata,
             )
 
-            logger.info(f"Added {annotator_kind} feedback to span {span_id}")
+            annotation_id = getattr(result, "id", None) if result else None
+            logger.info(f"Added {annotator_kind} feedback to span {span_id} -> {annotation_id}")
+
+            return annotation_id
 
         except Exception as e:
             logger.error(f"Failed to add span feedback: {e}")
             raise
+
+    def sync_user_feedback(
+        self,
+        span_id: str,
+        rating: int | None = None,
+        categories: list[str] | None = None,
+        comment: str | None = None,
+        feedback_id: str | None = None,
+    ) -> str | None:
+        """Sync user feedback to Phoenix as a span annotation.
+
+        Convenience method for syncing Feedback entities to Phoenix.
+        Converts REM feedback format to Phoenix annotation format.
+
+        Args:
+            span_id: OTEL span ID to annotate
+            rating: User rating (-1, 1-5 scale)
+            categories: List of feedback categories
+            comment: Free-text comment
+            feedback_id: Optional REM feedback ID for reference
+
+        Returns:
+            Phoenix annotation ID if successful
+
+        Example:
+            >>> client.sync_user_feedback(
+            ...     span_id="abc123",
+            ...     rating=4,
+            ...     categories=["helpful", "accurate"],
+            ...     comment="Great response!"
+            ... )
+        """
+        # Convert rating to 0-1 score
+        score = None
+        if rating is not None:
+            if rating == -1:
+                score = 0.0
+            elif 1 <= rating <= 5:
+                score = rating / 5.0
+
+        # Use primary category as label
+        label = categories[0] if categories else None
+
+        # Build explanation from comment and additional categories
+        explanation = comment
+        if categories and len(categories) > 1:
+            cats_str = ", ".join(categories[1:])
+            if explanation:
+                explanation = f"{explanation} [Categories: {cats_str}]"
+            else:
+                explanation = f"Categories: {cats_str}"
+
+        # Build metadata
+        metadata = {
+            "rating": rating,
+            "categories": categories or [],
+        }
+        if feedback_id:
+            metadata["rem_feedback_id"] = feedback_id
+
+        return self.add_span_feedback(
+            span_id=span_id,
+            annotation_name="user_feedback",
+            annotator_kind="HUMAN",
+            label=label,
+            score=score,
+            explanation=explanation,
+            metadata=metadata,
+        )
+
+    def get_span_annotations(
+        self,
+        span_id: str,
+        annotation_name: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Get annotations for a span.
+
+        Args:
+            span_id: Span ID to query
+            annotation_name: Optional filter by annotation name
+
+        Returns:
+            List of annotation dicts
+
+        TODO: Implement once Phoenix client exposes this method
+        """
+        # TODO: Phoenix client doesn't expose annotation query yet
+        # This is a stub for future implementation
+        logger.warning("get_span_annotations not yet implemented in Phoenix client")
+        return []

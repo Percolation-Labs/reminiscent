@@ -8,15 +8,22 @@ Design Pattern:
 - Proper OpenAI SSE format with data: prefix and [DONE] terminator
 - Error handling with graceful degradation
 
-Key Insight 
+Key Insight
 - agent.run_stream() stops after first output, missing tool calls
 - agent.iter() provides complete execution with tool call visibility
 - Use PartStartEvent to detect tool calls
 - Use PartDeltaEvent with TextPartDelta for content streaming
 
-SSE Format:
+SSE Format (OpenAI-compatible):
     data: {"id": "chatcmpl-...", "choices": [{"delta": {"content": "..."}}]}\\n\\n
     data: [DONE]\\n\\n
+
+Extended SSE Format (Custom Events):
+    event: reasoning\\ndata: {"type": "reasoning", "content": "..."}\\n\\n
+    event: action_request\\ndata: {"type": "action_request", "card": {...}}\\n\\n
+    event: metadata\\ndata: {"type": "metadata", "confidence": 0.95}\\n\\n
+
+See sse_events.py for the full event type definitions.
 """
 
 import json
@@ -183,3 +190,106 @@ async def stream_openai_response(
         }
         yield f"data: {json.dumps(error_data)}\n\n"
         yield "data: [DONE]\n\n"
+
+
+async def stream_simulator_response(
+    prompt: str,
+    model: str = "simulator-v1.0.0",
+    request_id: str | None = None,
+    delay_ms: int = 50,
+    include_reasoning: bool = True,
+    include_progress: bool = True,
+    include_tool_calls: bool = True,
+    include_actions: bool = True,
+    include_metadata: bool = True,
+    # Message correlation IDs
+    message_id: str | None = None,
+    in_reply_to: str | None = None,
+    session_id: str | None = None,
+) -> AsyncGenerator[str, None]:
+    """
+    Stream SSE simulator events for testing and demonstration.
+
+    This function wraps the SSE simulator to produce formatted SSE strings
+    ready for HTTP streaming. No LLM calls are made.
+
+    The simulator produces a rich sequence of events:
+    1. Reasoning events (model thinking)
+    2. Progress events (step indicators)
+    3. Tool call events (simulated tool usage)
+    4. Text delta events (streamed content)
+    5. Metadata events (confidence, sources, message IDs)
+    6. Action request events (user interaction)
+    7. Done event
+
+    Args:
+        prompt: User prompt (passed to simulator)
+        model: Model name for metadata
+        request_id: Optional request ID
+        delay_ms: Delay between events in milliseconds
+        include_reasoning: Whether to emit reasoning events
+        include_progress: Whether to emit progress events
+        include_tool_calls: Whether to emit tool call events
+        include_actions: Whether to emit action request at end
+        include_metadata: Whether to emit metadata event
+        message_id: Database ID of the assistant message being streamed
+        in_reply_to: Database ID of the user message this responds to
+        session_id: Session ID for conversation correlation
+
+    Yields:
+        SSE-formatted strings ready for HTTP response
+
+    Example:
+        ```python
+        from starlette.responses import StreamingResponse
+
+        async def simulator_endpoint():
+            return StreamingResponse(
+                stream_simulator_response("demo"),
+                media_type="text/event-stream"
+            )
+        ```
+    """
+    from .sse_events import format_sse_event
+    from rem.agentic.agents.sse_simulator import stream_simulator_events
+
+    if request_id is None:
+        request_id = f"sim-{uuid.uuid4().hex[:24]}"
+
+    async for event in stream_simulator_events(
+        prompt=prompt,
+        delay_ms=delay_ms,
+        include_reasoning=include_reasoning,
+        include_progress=include_progress,
+        include_tool_calls=include_tool_calls,
+        include_actions=include_actions,
+        include_metadata=include_metadata,
+        # Pass message correlation IDs
+        message_id=message_id,
+        in_reply_to=in_reply_to,
+        session_id=session_id,
+    ):
+        yield format_sse_event(event)
+
+
+async def stream_minimal_simulator(
+    content: str = "Hello from the simulator!",
+    delay_ms: int = 30,
+) -> AsyncGenerator[str, None]:
+    """
+    Stream minimal simulator output (text + done only).
+
+    Useful for simple testing without the full event sequence.
+
+    Args:
+        content: Text content to stream
+        delay_ms: Delay between chunks
+
+    Yields:
+        SSE-formatted strings
+    """
+    from .sse_events import format_sse_event
+    from rem.agentic.agents.sse_simulator import stream_minimal_demo
+
+    async for event in stream_minimal_demo(content=content, delay_ms=delay_ms):
+        yield format_sse_event(event)
