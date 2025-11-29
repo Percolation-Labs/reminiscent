@@ -4,25 +4,37 @@ Platform components deployed via ArgoCD using OCI Helm charts.
 
 ## Quick Start: Zero-Touch Bootstrap
 
-For a fresh cluster, use the bootstrap script which handles all prerequisites:
+Use the `rem` CLI for a streamlined deployment experience:
 
 ```bash
-# 1. Copy and configure environment variables
-cp .env.example .env
-# Edit .env with your values (API keys, GitHub credentials, repo URL)
-source .env
+# 1. Install rem CLI
+pip install remdb
 
-# 2. Validate prerequisites
-./scripts/validate-prereqs.sh
+# 2. Set environment variables
+export ANTHROPIC_API_KEY=sk-ant-...
+export OPENAI_API_KEY=sk-proj-...
+export GITHUB_REPO_URL=https://github.com/YOUR_ORG/YOUR_REPO.git
+export GITHUB_PAT=ghp_...
+export GITHUB_USERNAME=your-username
 
-# 3. Run bootstrap (creates SSM params, secrets, and deploys ArgoCD apps)
-./scripts/bootstrap-argocd.sh
+# 3. Validate prerequisites
+rem cluster validate --pre-argocd
+
+# 4. Create SSM parameters (reads from env vars)
+rem cluster setup-ssm
+
+# 5. Deploy ArgoCD applications
+rem cluster apply
 ```
 
-**Optional**: Install rem CLI for regenerating ConfigMaps if you modify SQL migrations:
+**Alternative: Use .env file**
 ```bash
-pip install remdb
-rem cluster generate  # Regenerate postgres init configmap
+cp .env.example .env
+# Edit .env with your values
+source .env
+rem cluster validate --pre-argocd
+rem cluster setup-ssm
+rem cluster apply
 ```
 
 **Required environment variables:**
@@ -42,11 +54,9 @@ rem cluster generate  # Regenerate postgres init configmap
 | `AWS_PROFILE` | AWS profile to use (default: `rem`) |
 | `REM_NAMESPACE` | Kubernetes namespace (default: `rem`) |
 
-The bootstrap script will:
-1. Create SSM parameters for all secrets (auto-generates PostgreSQL password, Phoenix keys, etc.)
-2. Create ArgoCD repository secret for private repo access
-3. Create the rem namespace
-4. Deploy platform-apps (app-of-apps) and rem-stack
+The `rem cluster` commands will:
+1. `setup-ssm`: Create SSM parameters (auto-generates PostgreSQL password, Phoenix keys, reads API keys from env)
+2. `apply`: Create ArgoCD repository secret, namespace, and deploy platform-apps + rem-stack
 
 ## Forking This Stack
 

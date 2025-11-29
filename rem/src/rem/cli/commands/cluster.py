@@ -324,19 +324,34 @@ def setup_ssm(config: Path | None, dry_run: bool, force: bool):
     """
     Create required SSM parameters in AWS.
 
-    Creates the following parameters under the configured SSM prefix:
-      - /postgres/username (String)
-      - /postgres/password (SecureString, auto-generated)
-      - /llm/anthropic-api-key (SecureString, placeholder)
-      - /llm/openai-api-key (SecureString, placeholder)
+    Reads API keys from environment variables if set:
+      - ANTHROPIC_API_KEY
+      - OPENAI_API_KEY
+      - GOOGLE_CLIENT_ID (optional)
+      - GOOGLE_CLIENT_SECRET (optional)
 
-    Optional Phoenix parameters:
+    Creates the following parameters under the configured SSM prefix:
+      - /postgres/username (String: remuser)
+      - /postgres/password (SecureString, auto-generated)
+      - /llm/anthropic-api-key (SecureString, from env or placeholder)
+      - /llm/openai-api-key (SecureString, from env or placeholder)
+      - /auth/session-secret (SecureString, auto-generated)
+      - /auth/google-client-id (String, from env or placeholder)
+      - /auth/google-client-secret (SecureString, from env or placeholder)
       - /phoenix/api-key (SecureString, auto-generated)
       - /phoenix/secret (SecureString, auto-generated)
+      - /phoenix/admin-secret (SecureString, auto-generated)
 
     Examples:
+        # With environment variables set
+        export ANTHROPIC_API_KEY=sk-ant-...
+        export OPENAI_API_KEY=sk-proj-...
         rem cluster setup-ssm
+
+        # Using config file
         rem cluster setup-ssm --config my-cluster.yaml
+
+        # Preview without creating
         rem cluster setup-ssm --dry-run
     """
     import secrets
@@ -345,6 +360,12 @@ def setup_ssm(config: Path | None, dry_run: bool, force: bool):
     prefix = cfg.get("aws", {}).get("ssmPrefix", "/rem")
     region = cfg.get("aws", {}).get("region", "us-east-1")
 
+    # Read API keys from environment
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    openai_key = os.environ.get("OPENAI_API_KEY", "")
+    google_client_id = os.environ.get("GOOGLE_CLIENT_ID", "placeholder")
+    google_client_secret = os.environ.get("GOOGLE_CLIENT_SECRET", "placeholder")
+
     click.echo()
     click.echo("SSM Parameter Setup")
     click.echo("=" * 60)
@@ -352,18 +373,35 @@ def setup_ssm(config: Path | None, dry_run: bool, force: bool):
     click.echo(f"Region: {region}")
     click.echo()
 
+    # Show env var status
+    click.echo("Environment variables:")
+    click.echo(f"  ANTHROPIC_API_KEY: {'✓ set' if anthropic_key else '✗ not set (will use placeholder)'}")
+    click.echo(f"  OPENAI_API_KEY: {'✓ set' if openai_key else '✗ not set (will use placeholder)'}")
+    click.echo(f"  GOOGLE_CLIENT_ID: {'✓ set' if google_client_id != 'placeholder' else '⚠ not set (OAuth disabled)'}")
+    click.echo(f"  GOOGLE_CLIENT_SECRET: {'✓ set' if google_client_secret != 'placeholder' else '⚠ not set (OAuth disabled)'}")
+    click.echo()
+
     # Define parameters to create
     parameters = [
-        # Required
-        (f"{prefix}/postgres/username", "remuser", "String", "PostgreSQL username"),
+        # PostgreSQL - username MUST be remuser to match CNPG cluster owner spec
+        (f"{prefix}/postgres/username", "remuser", "String", "PostgreSQL username (must match CNPG owner)"),
         (f"{prefix}/postgres/password", secrets.token_urlsafe(24), "SecureString", "PostgreSQL password"),
-        # LLM keys - placeholders that user must fill in
-        (f"{prefix}/llm/anthropic-api-key", "REPLACE_WITH_YOUR_KEY", "SecureString", "Anthropic API key"),
-        (f"{prefix}/llm/openai-api-key", "REPLACE_WITH_YOUR_KEY", "SecureString", "OpenAI API key"),
+        # LLM keys - from env or placeholder
+        (f"{prefix}/llm/anthropic-api-key", anthropic_key or "REPLACE_WITH_YOUR_KEY", "SecureString", "Anthropic API key"),
+        (f"{prefix}/llm/openai-api-key", openai_key or "REPLACE_WITH_YOUR_KEY", "SecureString", "OpenAI API key"),
+        # Auth secrets
+        (f"{prefix}/auth/session-secret", secrets.token_urlsafe(32), "SecureString", "Session signing secret"),
+        (f"{prefix}/auth/google-client-id", google_client_id, "String", "Google OAuth client ID"),
+        (f"{prefix}/auth/google-client-secret", google_client_secret, "SecureString", "Google OAuth client secret"),
         # Phoenix - auto-generated
-        (f"{prefix}/phoenix/api-key", secrets.token_hex(16), "SecureString", "Phoenix API key"),
-        (f"{prefix}/phoenix/secret", secrets.token_hex(32), "SecureString", "Phoenix session secret"),
+        (f"{prefix}/phoenix/api-key", secrets.token_urlsafe(24), "SecureString", "Phoenix API key"),
+        (f"{prefix}/phoenix/secret", secrets.token_urlsafe(32), "SecureString", "Phoenix session secret"),
+        (f"{prefix}/phoenix/admin-secret", secrets.token_urlsafe(32), "SecureString", "Phoenix admin secret"),
     ]
+
+    created = 0
+    skipped = 0
+    failed = 0
 
     for name, value, param_type, description in parameters:
         # Check if exists
@@ -375,43 +413,62 @@ def setup_ssm(config: Path | None, dry_run: bool, force: bool):
 
             if exists and not force:
                 click.echo(f"  ⏭ {name} (exists, skipping)")
+                skipped += 1
                 continue
 
         # Create/update parameter
         put_cmd = [
             "aws", "ssm", "put-parameter",
             "--name", name,
-            "--value", value if "REPLACE" not in value else value,
+            "--value", value,
             "--type", param_type,
             "--region", region,
-            "--overwrite" if force else "",
             "--description", description,
         ]
-        # Remove empty strings
-        put_cmd = [c for c in put_cmd if c]
+        if force:
+            put_cmd.append("--overwrite")
 
         if dry_run:
             display_value = "***" if param_type == "SecureString" else value
-            click.echo(f"  Would create: {name} = {display_value}")
+            if "REPLACE" in value or value == "placeholder":
+                click.secho(f"  Would create: {name} = {display_value} (PLACEHOLDER)", fg="yellow")
+            else:
+                click.echo(f"  Would create: {name} = {display_value}")
         else:
             try:
                 subprocess.run(put_cmd, check=True, capture_output=True)
-                click.secho(f"  ✓ {name}", fg="green")
+                if "REPLACE" in value or value == "placeholder":
+                    click.secho(f"  ⚠ {name} (placeholder - update later)", fg="yellow")
+                else:
+                    click.secho(f"  ✓ {name}", fg="green")
+                created += 1
             except subprocess.CalledProcessError as e:
                 if "ParameterAlreadyExists" in str(e.stderr):
                     click.echo(f"  ⏭ {name} (exists)")
+                    skipped += 1
                 else:
                     click.secho(f"  ✗ {name}: {e.stderr.decode()}", fg="red")
+                    failed += 1
 
     click.echo()
     if dry_run:
         click.secho("Dry run - no parameters created", fg="yellow")
     else:
-        click.secho("✓ SSM parameters configured", fg="green")
-        click.echo()
-        click.echo("IMPORTANT: Update placeholder API keys:")
-        click.echo(f"  aws ssm put-parameter --name {prefix}/llm/anthropic-api-key --value 'sk-...' --type SecureString --overwrite")
-        click.echo(f"  aws ssm put-parameter --name {prefix}/llm/openai-api-key --value 'sk-...' --type SecureString --overwrite")
+        click.secho(f"✓ SSM setup complete: {created} created, {skipped} skipped, {failed} failed", fg="green")
+
+        # Show update instructions if placeholders were used
+        if not anthropic_key or not openai_key:
+            click.echo()
+            click.secho("IMPORTANT: Update placeholder API keys:", fg="yellow")
+            if not anthropic_key:
+                click.echo(f"  aws ssm put-parameter --name {prefix}/llm/anthropic-api-key --value 'sk-ant-...' --type SecureString --overwrite --region {region}")
+            if not openai_key:
+                click.echo(f"  aws ssm put-parameter --name {prefix}/llm/openai-api-key --value 'sk-proj-...' --type SecureString --overwrite --region {region}")
+            click.echo()
+            click.echo("Or set environment variables and re-run with --force:")
+            click.echo("  export ANTHROPIC_API_KEY=sk-ant-...")
+            click.echo("  export OPENAI_API_KEY=sk-proj-...")
+            click.echo("  rem cluster setup-ssm --force")
 
 
 def _generate_sql_configmap(project_name: str, namespace: str, output_dir: Path) -> None:
@@ -477,20 +534,31 @@ def _generate_sql_configmap(project_name: str, namespace: str, output_dir: Path)
     type=click.Path(exists=True, path_type=Path),
     help="Path to cluster config file",
 )
-def validate(config: Path | None):
+@click.option(
+    "--pre-argocd",
+    is_flag=True,
+    help="Only check prerequisites needed before ArgoCD deployment",
+)
+def validate(config: Path | None, pre_argocd: bool):
     """
     Validate deployment prerequisites.
 
     Checks:
-      1. kubectl connectivity
-      2. Required namespaces exist
-      3. Platform operators installed (ESO, CNPG, KEDA)
-      4. ClusterSecretStores configured
-      5. SSM parameters exist
-      6. Pod Identity associations
+      1. Required tools (kubectl, aws, openssl)
+      2. AWS credentials
+      3. Kubernetes connectivity
+      4. ArgoCD installation
+      5. Environment variables (for setup-ssm)
+      6. SSM parameters
+      7. Platform operators (ESO, CNPG, KEDA) - skipped with --pre-argocd
+      8. ClusterSecretStores - skipped with --pre-argocd
+
+    Use --pre-argocd to validate only prerequisites needed before
+    running 'rem cluster apply' for the first time.
 
     Examples:
-        rem cluster validate
+        rem cluster validate                  # Full validation
+        rem cluster validate --pre-argocd    # Pre-deployment checks only
         rem cluster validate --config my-cluster.yaml
     """
     cfg = load_cluster_config(config)
@@ -505,13 +573,51 @@ def validate(config: Path | None):
     click.echo(f"Project: {project_name}")
     click.echo(f"Namespace: {namespace}")
     click.echo(f"Region: {region}")
+    if pre_argocd:
+        click.echo(f"Mode: Pre-ArgoCD (checking prerequisites only)")
     click.echo()
 
     errors = []
     warnings = []
 
-    # 1. Check kubectl connectivity
-    click.echo("1. Kubernetes connectivity")
+    # 1. Check required tools
+    click.echo("1. Required tools")
+    tools = [
+        ("kubectl", ["kubectl", "version", "--client", "-o", "json"]),
+        ("aws", ["aws", "--version"]),
+        ("openssl", ["openssl", "version"]),
+    ]
+
+    for tool, cmd in tools:
+        if shutil.which(tool):
+            click.secho(f"   ✓ {tool} installed", fg="green")
+        else:
+            errors.append(f"{tool} not installed")
+            click.secho(f"   ✗ {tool} not installed", fg="red")
+
+    # 2. Check AWS credentials
+    click.echo()
+    click.echo("2. AWS credentials")
+    try:
+        result = subprocess.run(
+            ["aws", "sts", "get-caller-identity", "--region", region],
+            capture_output=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            import json
+            identity = json.loads(result.stdout.decode())
+            click.secho(f"   ✓ AWS credentials valid (account: {identity.get('Account', 'unknown')})", fg="green")
+        else:
+            errors.append("AWS credentials not configured")
+            click.secho("   ✗ AWS credentials not configured", fg="red")
+    except Exception as e:
+        errors.append(f"AWS CLI error: {e}")
+        click.secho(f"   ✗ AWS CLI error: {e}", fg="red")
+
+    # 3. Check kubectl connectivity
+    click.echo()
+    click.echo("3. Kubernetes connectivity")
     try:
         result = subprocess.run(
             ["kubectl", "cluster-info"],
@@ -519,7 +625,13 @@ def validate(config: Path | None):
             timeout=10,
         )
         if result.returncode == 0:
-            click.secho("   ✓ kubectl connected", fg="green")
+            # Get context name
+            ctx_result = subprocess.run(
+                ["kubectl", "config", "current-context"],
+                capture_output=True,
+            )
+            context = ctx_result.stdout.decode().strip() if ctx_result.returncode == 0 else "unknown"
+            click.secho(f"   ✓ kubectl connected (context: {context})", fg="green")
         else:
             errors.append("kubectl not connected to cluster")
             click.secho("   ✗ kubectl not connected", fg="red")
@@ -527,53 +639,65 @@ def validate(config: Path | None):
         errors.append(f"kubectl error: {e}")
         click.secho(f"   ✗ kubectl error: {e}", fg="red")
 
-    # 2. Check platform operators
+    # 4. Check ArgoCD installation
     click.echo()
-    click.echo("2. Platform operators")
-    operators = [
-        ("external-secrets-system", "external-secrets", "External Secrets Operator"),
-        ("cnpg-system", "cnpg-controller-manager", "CloudNativePG"),
-        ("keda", "keda-operator", "KEDA"),
+    click.echo("4. ArgoCD installation")
+    try:
+        # Check namespace
+        result = subprocess.run(
+            ["kubectl", "get", "namespace", "argocd"],
+            capture_output=True,
+        )
+        if result.returncode == 0:
+            click.secho("   ✓ ArgoCD namespace exists", fg="green")
+
+            # Check server deployment
+            result = subprocess.run(
+                ["kubectl", "get", "deployment", "argocd-server", "-n", "argocd", "-o", "jsonpath={.status.readyReplicas}"],
+                capture_output=True,
+            )
+            if result.returncode == 0 and result.stdout.decode().strip():
+                replicas = result.stdout.decode().strip()
+                click.secho(f"   ✓ ArgoCD server running ({replicas} replica(s))", fg="green")
+            else:
+                warnings.append("ArgoCD server not ready")
+                click.secho("   ⚠ ArgoCD server not ready", fg="yellow")
+        else:
+            errors.append("ArgoCD not installed")
+            click.secho("   ✗ ArgoCD namespace not found", fg="red")
+            click.echo("     Install with:")
+            click.echo("       kubectl create namespace argocd")
+            click.echo("       kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml")
+    except Exception as e:
+        errors.append(f"Could not check ArgoCD: {e}")
+        click.secho(f"   ✗ Could not check ArgoCD: {e}", fg="red")
+
+    # 5. Check environment variables
+    click.echo()
+    click.echo("5. Environment variables (for setup-ssm)")
+    env_vars = [
+        ("ANTHROPIC_API_KEY", True),
+        ("OPENAI_API_KEY", True),
+        ("GITHUB_PAT", True),
+        ("GITHUB_USERNAME", True),
+        ("GITHUB_REPO_URL", True),
+        ("GOOGLE_CLIENT_ID", False),
+        ("GOOGLE_CLIENT_SECRET", False),
     ]
 
-    for ns, deployment, name in operators:
-        try:
-            result = subprocess.run(
-                ["kubectl", "get", "deployment", deployment, "-n", ns],
-                capture_output=True,
-            )
-            if result.returncode == 0:
-                click.secho(f"   ✓ {name}", fg="green")
-            else:
-                warnings.append(f"{name} not found in {ns}")
-                click.secho(f"   ⚠ {name} not found", fg="yellow")
-        except Exception:
-            warnings.append(f"Could not check {name}")
-            click.secho(f"   ⚠ Could not check {name}", fg="yellow")
+    for var, required in env_vars:
+        value = os.environ.get(var, "")
+        if value:
+            click.secho(f"   ✓ {var} is set", fg="green")
+        elif required:
+            warnings.append(f"Environment variable not set: {var}")
+            click.secho(f"   ⚠ {var} not set (required for setup-ssm)", fg="yellow")
+        else:
+            click.echo(f"   - {var} not set (optional)")
 
-    # 3. Check ClusterSecretStores
+    # 6. Check SSM parameters
     click.echo()
-    click.echo("3. ClusterSecretStores")
-    stores = ["aws-parameter-store", "kubernetes-secrets"]
-
-    for store in stores:
-        try:
-            result = subprocess.run(
-                ["kubectl", "get", "clustersecretstore", store],
-                capture_output=True,
-            )
-            if result.returncode == 0:
-                click.secho(f"   ✓ {store}", fg="green")
-            else:
-                warnings.append(f"ClusterSecretStore {store} not found")
-                click.secho(f"   ⚠ {store} not found", fg="yellow")
-        except Exception:
-            warnings.append(f"Could not check ClusterSecretStore {store}")
-            click.secho(f"   ⚠ Could not check {store}", fg="yellow")
-
-    # 4. Check SSM parameters
-    click.echo()
-    click.echo("4. SSM parameters")
+    click.echo("6. SSM parameters")
     required_params = [
         f"{ssm_prefix}/postgres/username",
         f"{ssm_prefix}/postgres/password",
@@ -583,6 +707,7 @@ def validate(config: Path | None):
         f"{ssm_prefix}/llm/openai-api-key",
     ]
 
+    ssm_ok = True
     for param in required_params:
         try:
             result = subprocess.run(
@@ -592,11 +717,16 @@ def validate(config: Path | None):
             if result.returncode == 0:
                 click.secho(f"   ✓ {param}", fg="green")
             else:
-                errors.append(f"Required SSM parameter missing: {param}")
-                click.secho(f"   ✗ {param} (required)", fg="red")
+                if pre_argocd:
+                    click.echo(f"   - {param} (will be created by setup-ssm)")
+                else:
+                    errors.append(f"Required SSM parameter missing: {param}")
+                    click.secho(f"   ✗ {param} (required)", fg="red")
+                ssm_ok = False
         except Exception as e:
             errors.append(f"Could not check SSM: {e}")
             click.secho(f"   ✗ AWS CLI error: {e}", fg="red")
+            ssm_ok = False
             break
 
     for param in optional_params:
@@ -614,10 +744,63 @@ def validate(config: Path | None):
                 else:
                     click.secho(f"   ✓ {param}", fg="green")
             else:
-                warnings.append(f"Optional SSM parameter missing: {param}")
-                click.secho(f"   ⚠ {param} (optional)", fg="yellow")
+                if pre_argocd:
+                    click.echo(f"   - {param} (will be created by setup-ssm)")
+                else:
+                    warnings.append(f"Optional SSM parameter missing: {param}")
+                    click.secho(f"   ⚠ {param} (optional)", fg="yellow")
         except Exception:
             pass  # Already reported AWS CLI issues
+
+    if not ssm_ok and pre_argocd:
+        click.echo("   Run 'rem cluster setup-ssm' to create parameters")
+
+    # Skip platform operator checks if --pre-argocd
+    if not pre_argocd:
+        # 7. Check platform operators
+        click.echo()
+        click.echo("7. Platform operators")
+        operators = [
+            ("external-secrets-system", "external-secrets", "External Secrets Operator"),
+            ("cnpg-system", "cnpg-controller-manager", "CloudNativePG"),
+            ("keda", "keda-operator", "KEDA"),
+            ("cert-manager", "cert-manager", "cert-manager"),
+        ]
+
+        for ns, deployment, name in operators:
+            try:
+                result = subprocess.run(
+                    ["kubectl", "get", "deployment", deployment, "-n", ns],
+                    capture_output=True,
+                )
+                if result.returncode == 0:
+                    click.secho(f"   ✓ {name}", fg="green")
+                else:
+                    warnings.append(f"{name} not found in {ns}")
+                    click.secho(f"   ⚠ {name} not found", fg="yellow")
+            except Exception:
+                warnings.append(f"Could not check {name}")
+                click.secho(f"   ⚠ Could not check {name}", fg="yellow")
+
+        # 8. Check ClusterSecretStores
+        click.echo()
+        click.echo("8. ClusterSecretStores")
+        stores = ["aws-parameter-store", "kubernetes-secrets"]
+
+        for store in stores:
+            try:
+                result = subprocess.run(
+                    ["kubectl", "get", "clustersecretstore", store],
+                    capture_output=True,
+                )
+                if result.returncode == 0:
+                    click.secho(f"   ✓ {store}", fg="green")
+                else:
+                    warnings.append(f"ClusterSecretStore {store} not found")
+                    click.secho(f"   ⚠ {store} not found", fg="yellow")
+            except Exception:
+                warnings.append(f"Could not check ClusterSecretStore {store}")
+                click.secho(f"   ⚠ Could not check {store}", fg="yellow")
 
     # Summary
     click.echo()
@@ -630,14 +813,21 @@ def validate(config: Path | None):
         raise click.Abort()
     elif warnings:
         click.secho(f"⚠ Validation passed with {len(warnings)} warning(s)", fg="yellow")
-        for warning in warnings:
+        for warning in warnings[:5]:
             click.echo(f"  - {warning}")
+        if len(warnings) > 5:
+            click.echo(f"  ... and {len(warnings) - 5} more")
     else:
         click.secho("✓ All checks passed", fg="green")
 
     click.echo()
-    click.echo("Ready to deploy:")
-    click.echo(f"  kubectl apply -f manifests/application/rem-stack/argocd-staging.yaml")
+    if pre_argocd:
+        click.echo("Next steps:")
+        click.echo("  1. rem cluster setup-ssm     # Create SSM parameters")
+        click.echo("  2. rem cluster apply         # Deploy ArgoCD apps")
+    else:
+        click.echo("Ready to deploy:")
+        click.echo("  rem cluster apply")
 
 
 @click.command()
@@ -738,7 +928,237 @@ def generate(config: Path | None, output_dir: Path | None):
     click.echo("Next steps:")
     click.echo("  1. Review generated manifests")
     click.echo("  2. Commit changes to git")
-    click.echo("  3. Deploy: kubectl apply -f manifests/application/rem-stack/argocd-staging.yaml")
+    click.echo("  3. Deploy: rem cluster apply")
+
+
+@click.command()
+@click.option(
+    "--config",
+    "-c",
+    type=click.Path(exists=True, path_type=Path),
+    help="Path to cluster config file",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Show what would be deployed without executing",
+)
+@click.option(
+    "--skip-platform",
+    is_flag=True,
+    help="Skip deploying platform-apps (only deploy rem-stack)",
+)
+def apply(config: Path | None, dry_run: bool, skip_platform: bool):
+    """
+    Deploy ArgoCD applications to the cluster.
+
+    This command:
+      1. Creates ArgoCD repository secret (for private repo access)
+      2. Creates the application namespace
+      3. Deploys platform-apps (app-of-apps for operators)
+      4. Deploys rem-stack application
+
+    Required environment variables:
+      - GITHUB_REPO_URL: Git repository URL
+      - GITHUB_PAT: GitHub Personal Access Token
+      - GITHUB_USERNAME: GitHub username
+
+    Examples:
+        # Full deployment
+        rem cluster apply
+
+        # Preview what would be deployed
+        rem cluster apply --dry-run
+
+        # Only deploy rem-stack (platform already exists)
+        rem cluster apply --skip-platform
+    """
+    cfg = load_cluster_config(config)
+    project_name = cfg.get("project", {}).get("name", "rem")
+    namespace = cfg.get("project", {}).get("namespace", project_name)
+    git_repo = cfg.get("git", {}).get("repoURL", "")
+
+    # Get credentials from environment
+    github_repo_url = os.environ.get("GITHUB_REPO_URL", git_repo)
+    github_pat = os.environ.get("GITHUB_PAT", "")
+    github_username = os.environ.get("GITHUB_USERNAME", "")
+
+    click.echo()
+    click.echo("ArgoCD Application Deployment")
+    click.echo("=" * 60)
+    click.echo(f"Project: {project_name}")
+    click.echo(f"Namespace: {namespace}")
+    click.echo(f"Repository: {github_repo_url}")
+    if dry_run:
+        click.secho("Mode: DRY RUN (no changes will be made)", fg="yellow")
+    click.echo()
+
+    # Validate required values
+    if not github_repo_url:
+        click.secho("✗ GITHUB_REPO_URL not set", fg="red")
+        click.echo("  Set via environment variable or cluster-config.yaml")
+        raise click.Abort()
+
+    if not github_pat or not github_username:
+        click.secho("⚠ GITHUB_PAT or GITHUB_USERNAME not set", fg="yellow")
+        click.echo("  Private repos will not be accessible without credentials")
+        if not click.confirm("Continue without repo credentials?"):
+            raise click.Abort()
+
+    manifests_dir = get_manifests_dir()
+
+    # Step 1: Create ArgoCD repository secret
+    click.echo("1. ArgoCD repository secret")
+    if github_pat and github_username:
+        # Check if secret exists
+        result = subprocess.run(
+            ["kubectl", "get", "secret", "repo-reminiscent", "-n", "argocd"],
+            capture_output=True,
+        )
+        secret_exists = result.returncode == 0
+
+        if secret_exists:
+            click.echo("   ⏭ Secret 'repo-reminiscent' exists (skipping)")
+        else:
+            if dry_run:
+                click.echo("   Would create: secret/repo-reminiscent in argocd namespace")
+            else:
+                # Create the secret
+                create_cmd = [
+                    "kubectl", "create", "secret", "generic", "repo-reminiscent",
+                    "--namespace", "argocd",
+                    f"--from-literal=url={github_repo_url}",
+                    f"--from-literal=username={github_username}",
+                    f"--from-literal=password={github_pat}",
+                    "--from-literal=type=git",
+                    "--dry-run=client", "-o", "yaml",
+                ]
+                # Pipe to kubectl apply
+                create_result = subprocess.run(create_cmd, capture_output=True)
+                if create_result.returncode == 0:
+                    apply_result = subprocess.run(
+                        ["kubectl", "apply", "-f", "-"],
+                        input=create_result.stdout,
+                        capture_output=True,
+                    )
+                    if apply_result.returncode == 0:
+                        # Label it as ArgoCD repo secret
+                        subprocess.run([
+                            "kubectl", "label", "secret", "repo-reminiscent",
+                            "-n", "argocd",
+                            "argocd.argoproj.io/secret-type=repository",
+                            "--overwrite",
+                        ], capture_output=True)
+                        click.secho("   ✓ Created secret 'repo-reminiscent'", fg="green")
+                    else:
+                        click.secho(f"   ✗ Failed to create secret: {apply_result.stderr.decode()}", fg="red")
+                        raise click.Abort()
+    else:
+        click.echo("   ⏭ Skipping (no credentials provided)")
+
+    # Step 2: Create namespace
+    click.echo()
+    click.echo("2. Application namespace")
+    result = subprocess.run(
+        ["kubectl", "get", "namespace", namespace],
+        capture_output=True,
+    )
+    if result.returncode == 0:
+        click.echo(f"   ⏭ Namespace '{namespace}' exists")
+    else:
+        if dry_run:
+            click.echo(f"   Would create: namespace/{namespace}")
+        else:
+            result = subprocess.run(
+                ["kubectl", "create", "namespace", namespace],
+                capture_output=True,
+            )
+            if result.returncode == 0:
+                click.secho(f"   ✓ Created namespace '{namespace}'", fg="green")
+            else:
+                click.secho(f"   ✗ Failed to create namespace: {result.stderr.decode()}", fg="red")
+                raise click.Abort()
+
+    # Step 3: Deploy platform-apps (app-of-apps)
+    if not skip_platform:
+        click.echo()
+        click.echo("3. Platform apps (app-of-apps)")
+        platform_app = manifests_dir / "platform" / "argocd" / "app-of-apps.yaml"
+
+        if not platform_app.exists():
+            click.secho(f"   ✗ Not found: {platform_app}", fg="red")
+            raise click.Abort()
+
+        if dry_run:
+            click.echo(f"   Would apply: {platform_app}")
+        else:
+            result = subprocess.run(
+                ["kubectl", "apply", "-f", str(platform_app)],
+                capture_output=True,
+            )
+            if result.returncode == 0:
+                click.secho("   ✓ Applied platform-apps", fg="green")
+            else:
+                click.secho(f"   ✗ Failed: {result.stderr.decode()}", fg="red")
+                raise click.Abort()
+
+        # Wait for critical platform apps
+        if not dry_run:
+            click.echo()
+            click.echo("   Waiting for cert-manager...")
+            for _ in range(30):  # 5 minutes max
+                result = subprocess.run(
+                    ["kubectl", "get", "application", "cert-manager", "-n", "argocd",
+                     "-o", "jsonpath={.status.health.status}"],
+                    capture_output=True,
+                )
+                status = result.stdout.decode().strip()
+                if status == "Healthy":
+                    click.secho("   ✓ cert-manager is healthy", fg="green")
+                    break
+                click.echo(f"   ... cert-manager status: {status or 'Unknown'}")
+                import time
+                time.sleep(10)
+            else:
+                click.secho("   ⚠ cert-manager not healthy yet (continuing anyway)", fg="yellow")
+
+    # Step 4: Deploy rem-stack
+    click.echo()
+    click.echo("4. REM stack application" if not skip_platform else "3. REM stack application")
+    rem_stack_app = manifests_dir / "application" / "rem-stack" / "argocd-staging.yaml"
+
+    if not rem_stack_app.exists():
+        click.secho(f"   ✗ Not found: {rem_stack_app}", fg="red")
+        raise click.Abort()
+
+    if dry_run:
+        click.echo(f"   Would apply: {rem_stack_app}")
+    else:
+        result = subprocess.run(
+            ["kubectl", "apply", "-f", str(rem_stack_app)],
+            capture_output=True,
+        )
+        if result.returncode == 0:
+            click.secho("   ✓ Applied rem-stack-staging", fg="green")
+        else:
+            click.secho(f"   ✗ Failed: {result.stderr.decode()}", fg="red")
+            raise click.Abort()
+
+    # Summary
+    click.echo()
+    click.echo("=" * 60)
+    if dry_run:
+        click.secho("Dry run complete - no changes made", fg="yellow")
+    else:
+        click.secho("✓ Deployment initiated", fg="green")
+        click.echo()
+        click.echo("Monitor progress:")
+        click.echo("  kubectl get applications -n argocd")
+        click.echo("  watch kubectl get pods -n " + namespace)
+        click.echo()
+        click.echo("ArgoCD UI:")
+        click.echo("  kubectl port-forward svc/argocd-server -n argocd 8080:443")
+        click.echo("  # Get password: kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d")
 
 
 # =============================================================================
@@ -1297,4 +1717,5 @@ def register_commands(cluster_group):
     cluster_group.add_command(setup_ssm)
     cluster_group.add_command(validate)
     cluster_group.add_command(generate)
+    cluster_group.add_command(apply)
     cluster_group.add_command(env)
