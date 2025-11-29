@@ -1,6 +1,11 @@
 # REM API Component
 #
 # FastAPI server with REST and streaming endpoints
+#
+# Configuration:
+#   - rem-config ConfigMap: Generated in base/kustomization.yaml, contains all shared settings
+#   - rem-llm-api-keys Secret: From ExternalSecrets, contains API keys and auth secrets
+#   - rem-database-credentials Secret: From ExternalSecrets, contains DB credentials
 
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
@@ -9,7 +14,7 @@ resources:
   - serviceaccount.yaml
   # secretstore.yaml removed - using ClusterSecretStore from platform layer
   - external-secret.yaml
-  - configmap.yaml
+  # configmap.yaml removed - using rem-config from base/kustomization.yaml
   - deployment.yaml
   - service.yaml
   - ingress.yaml

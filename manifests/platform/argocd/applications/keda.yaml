@@ -1,3 +1,11 @@
+# KEDA (Kubernetes Event-Driven Autoscaling) - ArgoCD Application
+#
+# Installs KEDA for scaling workloads based on external events (SQS, etc.).
+#
+# Pod Identity:
+#   CDK creates Pod Identity association for 'keda-operator' service account
+#   in 'keda' namespace with SQS permissions.
+
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -7,17 +15,46 @@ metadata:
     - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
+
   source:
     repoURL: https://kedacore.github.io/charts
     chart: keda
-    targetRevision: 2.18.1
+    targetRevision: "2.16.1"
+
     helm:
       valuesObject:
+        # Install CRDs
         crds:
           install: true
+
+        # Service account - must match CDK Pod Identity configuration
+        serviceAccount:
+          create: true
+          name: keda-operator
+          # No annotations needed - Pod Identity handles auth automatically
+
+        # Disable prometheus metrics unless Prometheus Operator is installed
+        prometheus:
+          metricServer:
+            enabled: false
+          operator:
+            enabled: false
+
+        # Resources for KEDA operator
+        resources:
+          operator:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
   destination:
     server: https://kubernetes.default.svc
+    # CRITICAL: Must match CDK Pod Identity namespace
     namespace: keda
+
   syncPolicy:
     automated:
       prune: true

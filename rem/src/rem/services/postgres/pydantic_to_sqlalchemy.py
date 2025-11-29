@@ -3,211 +3,510 @@ Convert Pydantic models to SQLAlchemy metadata for Alembic autogenerate.
 
 This module bridges REM's Pydantic-first approach with Alembic's SQLAlchemy requirement
 by dynamically building SQLAlchemy Table objects from Pydantic model definitions.
+
+IMPORTANT: Type mappings here MUST stay in sync with utils/sql_types.py
+to ensure the diff command produces accurate results.
 """
 
+import types
+from datetime import date, datetime, time
 from pathlib import Path
-from typing import Any
+from typing import Any, Union, get_args, get_origin
+from uuid import UUID as UUIDType
 
 from loguru import logger
 from pydantic import BaseModel
+from pydantic.fields import FieldInfo
 from sqlalchemy import (
-    JSON,
     Boolean,
     Column,
+    Date,
     DateTime,
     Float,
+    ForeignKey,
+    Index,
     Integer,
+    LargeBinary,
     MetaData,
     String,
     Table,
     Text,
+    Time,
+    UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
+
+# Import pgvector type for embeddings
+try:
+    from pgvector.sqlalchemy import Vector
+    HAS_PGVECTOR = True
+except ImportError:
+    HAS_PGVECTOR = False
+    Vector = None
 
 from .schema_generator import SchemaGenerator
 
 
+# Field names that should use TEXT instead of VARCHAR (sync with sql_types.py)
+LONG_TEXT_FIELD_NAMES = {
+    "content",
+    "description",
+    "summary",
+    "instructions",
+    "prompt",
+    "message",
+    "body",
+    "text",
+    "note",
+    "comment",
+}
+
+# System fields handled separately by schema generation
+SYSTEM_FIELDS = {
+    "id", "created_at", "updated_at", "deleted_at",
+    "tenant_id", "user_id", "graph_edges", "metadata", "tags",
+}
+
+# Fields that get embeddings by default (sync with register_type.py)
+DEFAULT_EMBED_FIELD_NAMES = {
+    "content",
+    "description",
+    "summary",
+    "text",
+    "body",
+    "message",
+    "notes",
+}
+
+# Embedding configuration (sync with register_type.py)
+DEFAULT_EMBEDDING_DIMENSIONS = 1536
+
+
 def pydantic_type_to_sqlalchemy(
-    field_type: Any, field_info: Any
+    field_info: FieldInfo,
+    field_name: str,
 ) -> Any:
     """
-    Map Pydantic field type to SQLAlchemy column type.
+    Map Pydantic field to SQLAlchemy column type.
+
+    This function mirrors the logic in utils/sql_types.py to ensure
+    consistent type mapping between schema generation and diff detection.
 
     Args:
-        field_type: Pydantic field type annotation
         field_info: Pydantic FieldInfo object
+        field_name: Name of the field (used for heuristics)
 
     Returns:
         SQLAlchemy column type
     """
-    # Get the origin type (handles Optional, List, etc.)
-    import typing
+    # Check for explicit sql_type in json_schema_extra
+    if field_info.json_schema_extra:
+        if isinstance(field_info.json_schema_extra, dict):
+            sql_type = field_info.json_schema_extra.get("sql_type")
+            if sql_type:
+                return _sql_string_to_sqlalchemy(sql_type)
 
-    origin = typing.get_origin(field_type)
-    args = typing.get_args(field_type)
+            # Fields with embedding_provider should be TEXT
+            if "embedding_provider" in field_info.json_schema_extra:
+                return Text
 
-    # Handle Optional types
-    if origin is typing.Union:
-        # Optional[X] is Union[X, None]
-        non_none_types = [t for t in args if t is not type(None)]
-        if non_none_types:
-            field_type = non_none_types[0]
-            origin = typing.get_origin(field_type)
-            args = typing.get_args(field_type)
+    annotation = field_info.annotation
 
-    # Handle list types -> PostgreSQL ARRAY
+    # Handle None annotation
+    if annotation is None:
+        return Text
+
+    # Handle Union types (including Optional[T] and Python 3.10+ X | None)
+    origin = get_origin(annotation)
+    if origin is Union or isinstance(annotation, types.UnionType):
+        args = get_args(annotation)
+        # Filter out NoneType
+        non_none_args = [arg for arg in args if arg is not type(None)]
+
+        if not non_none_args:
+            return Text
+
+        # Prefer UUID over other types in unions
+        if UUIDType in non_none_args:
+            return UUID(as_uuid=True)
+
+        # Prefer dict/JSONB over other types in unions
+        if dict in non_none_args:
+            return JSONB
+
+        # Use the first non-None type
+        return _map_simple_type(non_none_args[0], field_name)
+
+    return _map_simple_type(annotation, field_name)
+
+
+def _map_simple_type(python_type: type, field_name: str) -> Any:
+    """
+    Map a simple Python type to SQLAlchemy column type.
+
+    Args:
+        python_type: Python type annotation
+        field_name: Field name for heuristics
+
+    Returns:
+        SQLAlchemy column type
+    """
+    origin = get_origin(python_type)
+    args = get_args(python_type)
+
+    # Handle list types
     if origin is list:
         if args:
             inner_type = args[0]
+
+            # List of strings -> PostgreSQL TEXT[]
             if inner_type is str:
                 return ARRAY(Text)
-            elif inner_type is int:
-                return ARRAY(Integer)
-            elif inner_type is float:
-                return ARRAY(Float)
-        return ARRAY(Text)  # Default to text array
 
-    # Handle dict types -> JSONB
-    if origin is dict or field_type is dict:
+            # List of dicts or complex types -> JSONB
+            if inner_type is dict or get_origin(inner_type) is not None:
+                return JSONB
+
+            # List of primitives -> JSONB
+            return JSONB
+
+        # Untyped list -> JSONB
         return JSONB
 
-    # Handle basic types
-    if field_type is str:
-        # Check if there's a max_length constraint
-        max_length = getattr(field_info, "max_length", None)
-        if max_length:
-            return String(max_length)
-        return Text
+    # Handle dict types -> JSONB
+    if origin is dict or python_type is dict:
+        return JSONB
 
-    if field_type is int:
+    # Handle primitive types
+    if python_type is str:
+        return _get_string_type(field_name)
+
+    if python_type is int:
         return Integer
 
-    if field_type is float:
+    if python_type is float:
         return Float
 
-    if field_type is bool:
+    if python_type is bool:
         return Boolean
 
-    # Handle datetime
-    from datetime import datetime
-
-    if field_type is datetime:
-        return DateTime
-
-    # Handle UUID
-    from uuid import UUID as UUIDType
-
-    if field_type is UUIDType:
+    if python_type is UUIDType:
         return UUID(as_uuid=True)
 
-    # Handle enums
-    import enum
+    if python_type is datetime:
+        return DateTime
 
-    if isinstance(field_type, type) and issubclass(field_type, enum.Enum):
-        return String(50)
+    if python_type is date:
+        return Date
+
+    if python_type is time:
+        return Time
+
+    if python_type is bytes:
+        return LargeBinary
+
+    # Check if it's a Pydantic model -> JSONB
+    if isinstance(python_type, type) and issubclass(python_type, BaseModel):
+        return JSONB
 
     # Default to Text for unknown types
-    logger.warning(f"Unknown field type {field_type}, defaulting to Text")
     return Text
 
 
-def build_sqlalchemy_metadata_from_pydantic(models_dir: Path) -> MetaData:
+def _get_string_type(field_name: str) -> Any:
+    """
+    Determine string type based on field name.
+
+    Args:
+        field_name: Name of the field
+
+    Returns:
+        Text for long-form content, String(256) for others
+    """
+    field_lower = field_name.lower()
+
+    if field_lower in LONG_TEXT_FIELD_NAMES:
+        return Text
+
+    # Check for common suffixes
+    if field_lower.endswith(("_content", "_description", "_summary", "_text", "_message")):
+        return Text
+
+    return String(256)
+
+
+def _sql_string_to_sqlalchemy(sql_type: str) -> Any:
+    """
+    Convert SQL type string to SQLAlchemy type.
+
+    Args:
+        sql_type: PostgreSQL type string (e.g., "VARCHAR(256)", "JSONB")
+
+    Returns:
+        SQLAlchemy column type
+    """
+    sql_upper = sql_type.upper()
+
+    if sql_upper == "TEXT":
+        return Text
+    if sql_upper == "JSONB" or sql_upper == "JSON":
+        return JSONB
+    if sql_upper == "UUID":
+        return UUID(as_uuid=True)
+    if sql_upper == "INTEGER" or sql_upper == "INT":
+        return Integer
+    if sql_upper == "BOOLEAN" or sql_upper == "BOOL":
+        return Boolean
+    if sql_upper == "TIMESTAMP":
+        return DateTime
+    if sql_upper == "DATE":
+        return Date
+    if sql_upper == "TIME":
+        return Time
+    if sql_upper == "DOUBLE PRECISION" or sql_upper == "FLOAT":
+        return Float
+    if sql_upper == "BYTEA":
+        return LargeBinary
+    if sql_upper.startswith("VARCHAR"):
+        # Extract length from VARCHAR(n)
+        import re
+        match = re.match(r"VARCHAR\((\d+)\)", sql_upper)
+        if match:
+            return String(int(match.group(1)))
+        return String(256)
+    if sql_upper == "TEXT[]":
+        return ARRAY(Text)
+
+    return Text
+
+
+def _should_embed_field(field_name: str, field_info: FieldInfo) -> bool:
+    """
+    Determine if a field should have embeddings generated.
+
+    Mirrors logic in register_type.should_embed_field().
+
+    Rules:
+    1. If json_schema_extra.embed = True, always embed
+    2. If json_schema_extra.embed = False, never embed
+    3. If field name in DEFAULT_EMBED_FIELD_NAMES, embed by default
+    4. Otherwise, don't embed
+    """
+    # Check json_schema_extra for explicit embed configuration
+    json_extra = getattr(field_info, "json_schema_extra", None)
+    if json_extra and isinstance(json_extra, dict):
+        embed = json_extra.get("embed")
+        if embed is not None:
+            return bool(embed)
+
+    # Default: embed if field name matches common content fields
+    return field_name.lower() in DEFAULT_EMBED_FIELD_NAMES
+
+
+def _get_embeddable_fields(model: type[BaseModel]) -> list[str]:
+    """Get list of field names that should have embeddings."""
+    embeddable = []
+    for field_name, field_info in model.model_fields.items():
+        if field_name in SYSTEM_FIELDS:
+            continue
+        if _should_embed_field(field_name, field_info):
+            embeddable.append(field_name)
+    return embeddable
+
+
+def build_sqlalchemy_metadata_from_pydantic(models_dir: Path | None = None) -> MetaData:
     """
     Build SQLAlchemy MetaData from Pydantic models.
 
-    This function:
-    1. Discovers Pydantic models in the given directory
-    2. Infers table names and column definitions
-    3. Creates SQLAlchemy Table objects
-    4. Returns a MetaData object for Alembic
+    This function uses the model registry as the source of truth:
+    1. Core models (Resource, Message, User, etc.) - always included
+    2. User-registered models via rem.register_model() - included if registered
+    3. Embeddings tables for models with embeddable fields
+
+    The registry ensures only actual entity models are included (not DTOs).
 
     Args:
-        models_dir: Directory containing Pydantic models
+        models_dir: Optional, not used (kept for backwards compatibility).
+                   Models are discovered via the registry, not directory scanning.
 
     Returns:
         SQLAlchemy MetaData object
     """
+    from ...registry import get_model_registry
+
     metadata = MetaData()
     generator = SchemaGenerator()
+    registry = get_model_registry()
 
-    # Discover models
-    models = generator.discover_models(models_dir)
-    logger.info(f"Discovered {len(models)} models for metadata generation")
+    # Get all registered models (core + user-registered)
+    registered_models = registry.get_models(include_core=True)
+    logger.info(f"Registry contains {len(registered_models)} models")
 
-    for model_name, model_class in models.items():
-        # Infer table name
-        table_name = generator.infer_table_name(model_class)
-        logger.debug(f"Building table {table_name} from model {model_name}")
+    for model_name, ext in registered_models.items():
+        # Use table_name from extension if provided, otherwise infer
+        table_name = ext.table_name or generator.infer_table_name(ext.model)
 
-        # Build columns
-        columns = []
+        # Build primary table
+        _build_table(ext.model, table_name, metadata)
 
-        for field_name, field_info in model_class.model_fields.items():
-            # Get field type
-            field_type = field_info.annotation
-
-            # Map to SQLAlchemy type
-            sa_type = pydantic_type_to_sqlalchemy(field_type, field_info)
-
-            # Determine nullable
-            nullable = not field_info.is_required()
-
-            # Get default value
-            from pydantic_core import PydanticUndefined
-
-            default = None
-            if field_info.default is not PydanticUndefined and field_info.default is not None:
-                default = field_info.default
-            elif field_info.default_factory is not None:
-                # For default_factory, we'll use the server default if possible
-                factory = field_info.default_factory
-                # Handle common default factories
-                if factory.__name__ == "list":
-                    default = "ARRAY[]::TEXT[]"  # PostgreSQL empty array
-                elif factory.__name__ == "dict":
-                    default = "'{}'::jsonb"  # PostgreSQL empty JSON
-                else:
-                    default = None
-
-            # Handle special fields
-            server_default = None
-            primary_key = False
-
-            if field_name == "id":
-                primary_key = True
-                if sa_type == UUID(as_uuid=True):
-                    server_default = "uuid_generate_v4()"
-            elif field_name in ("created_at", "updated_at"):
-                server_default = "CURRENT_TIMESTAMP"
-            elif isinstance(default, str) and default.startswith("ARRAY["):
-                server_default = default
-                default = None
-            elif isinstance(default, str) and "::jsonb" in default:
-                server_default = default
-                default = None
-
-            # Create column - only pass server_default if it's a string SQL expression
-            column_kwargs = {
-                "type_": sa_type,
-                "primary_key": primary_key,
-                "nullable": nullable,
-            }
-
-            if server_default is not None:
-                from sqlalchemy import text
-                column_kwargs["server_default"] = text(server_default)
-
-            column = Column(field_name, **column_kwargs)
-
-            columns.append(column)
-
-        # Create table
-        if columns:
-            Table(table_name, metadata, *columns)
-            logger.debug(f"Created table {table_name} with {len(columns)} columns")
+        # Build embeddings table if model has embeddable fields
+        embeddable_fields = _get_embeddable_fields(ext.model)
+        if embeddable_fields:
+            _build_embeddings_table(table_name, metadata)
 
     logger.info(f"Built metadata with {len(metadata.tables)} tables")
     return metadata
+
+
+def _build_table(model: type[BaseModel], table_name: str, metadata: MetaData) -> Table:
+    """
+    Build SQLAlchemy Table from Pydantic model.
+
+    Mirrors the schema generated by register_type.generate_table_schema().
+
+    Args:
+        model: Pydantic model class
+        table_name: Table name
+        metadata: SQLAlchemy MetaData to add table to
+
+    Returns:
+        SQLAlchemy Table object
+    """
+    columns = []
+    indexes = []
+
+    # Primary key: id UUID
+    columns.append(
+        Column(
+            "id",
+            UUID(as_uuid=True),
+            primary_key=True,
+            server_default=text("uuid_generate_v4()"),
+        )
+    )
+
+    # Tenant and user scoping
+    columns.append(Column("tenant_id", String(100), nullable=False))
+    columns.append(Column("user_id", String(256), nullable=True))
+
+    # Process Pydantic fields (skip system fields)
+    for field_name, field_info in model.model_fields.items():
+        if field_name in SYSTEM_FIELDS:
+            continue
+
+        sa_type = pydantic_type_to_sqlalchemy(field_info, field_name)
+        nullable = not field_info.is_required()
+
+        # Handle default values for JSONB and arrays
+        server_default = None
+        if field_info.default_factory is not None:
+            if isinstance(sa_type, type) and sa_type is JSONB:
+                server_default = text("'{}'::jsonb")
+            elif isinstance(sa_type, JSONB):
+                server_default = text("'{}'::jsonb")
+            elif isinstance(sa_type, ARRAY):
+                server_default = text("ARRAY[]::TEXT[]")
+
+        columns.append(
+            Column(field_name, sa_type, nullable=nullable, server_default=server_default)
+        )
+
+    # System timestamp fields
+    columns.append(Column("created_at", DateTime, server_default=text("CURRENT_TIMESTAMP")))
+    columns.append(Column("updated_at", DateTime, server_default=text("CURRENT_TIMESTAMP")))
+    columns.append(Column("deleted_at", DateTime, nullable=True))
+
+    # graph_edges JSONB field
+    columns.append(
+        Column("graph_edges", JSONB, nullable=True, server_default=text("'[]'::jsonb"))
+    )
+
+    # metadata JSONB field
+    columns.append(
+        Column("metadata", JSONB, nullable=True, server_default=text("'{}'::jsonb"))
+    )
+
+    # tags TEXT[] field
+    columns.append(
+        Column("tags", ARRAY(Text), nullable=True, server_default=text("ARRAY[]::TEXT[]"))
+    )
+
+    # Create table
+    table = Table(table_name, metadata, *columns)
+
+    # Add indexes (matching register_type output)
+    Index(f"idx_{table_name}_tenant", table.c.tenant_id)
+    Index(f"idx_{table_name}_user", table.c.user_id)
+    Index(f"idx_{table_name}_graph_edges", table.c.graph_edges, postgresql_using="gin")
+    Index(f"idx_{table_name}_metadata", table.c.metadata, postgresql_using="gin")
+    Index(f"idx_{table_name}_tags", table.c.tags, postgresql_using="gin")
+
+    return table
+
+
+def _build_embeddings_table(base_table_name: str, metadata: MetaData) -> Table:
+    """
+    Build SQLAlchemy Table for embeddings.
+
+    Mirrors the schema generated by register_type.generate_embeddings_schema().
+
+    Args:
+        base_table_name: Name of the primary entity table (e.g., "resources")
+        metadata: SQLAlchemy MetaData to add table to
+
+    Returns:
+        SQLAlchemy Table object for embeddings_<base_table_name>
+    """
+    embeddings_table_name = f"embeddings_{base_table_name}"
+
+    # Use pgvector Vector type if available, otherwise use a placeholder
+    if HAS_PGVECTOR and Vector is not None:
+        vector_type = Vector(DEFAULT_EMBEDDING_DIMENSIONS)
+    else:
+        # Fallback: use raw SQL type via TypeDecorator or just skip
+        # For now, we'll log a warning and use a simple column
+        logger.warning(
+            f"pgvector not installed, embeddings table {embeddings_table_name} "
+            "will use ARRAY type instead of vector"
+        )
+        vector_type = ARRAY(Float)
+
+    columns = [
+        Column(
+            "id",
+            UUID(as_uuid=True),
+            primary_key=True,
+            server_default=text("uuid_generate_v4()"),
+        ),
+        Column(
+            "entity_id",
+            UUID(as_uuid=True),
+            ForeignKey(f"{base_table_name}.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        Column("field_name", String(100), nullable=False),
+        Column("provider", String(50), nullable=False, server_default=text("'openai'")),
+        Column("model", String(100), nullable=False, server_default=text("'text-embedding-3-small'")),
+        Column("embedding", vector_type, nullable=False),
+        Column("created_at", DateTime, server_default=text("CURRENT_TIMESTAMP")),
+        Column("updated_at", DateTime, server_default=text("CURRENT_TIMESTAMP")),
+    ]
+
+    # Create table with unique constraint
+    # Note: constraint name matches PostgreSQL's auto-generated naming convention
+    table = Table(
+        embeddings_table_name,
+        metadata,
+        *columns,
+        UniqueConstraint("entity_id", "field_name", "provider", name=f"{embeddings_table_name}_entity_id_field_name_provider_key"),
+    )
+
+    # Add indexes (matching register_type output)
+    Index(f"idx_{embeddings_table_name}_entity", table.c.entity_id)
+    Index(f"idx_{embeddings_table_name}_field_provider", table.c.field_name, table.c.provider)
+
+    return table
 
 
 def get_target_metadata() -> MetaData:
@@ -219,7 +518,6 @@ def get_target_metadata() -> MetaData:
     Returns:
         SQLAlchemy MetaData object representing current Pydantic models
     """
-    # Find models directory
     import rem
 
     package_root = Path(rem.__file__).parent.parent.parent

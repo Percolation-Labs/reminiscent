@@ -78,6 +78,12 @@ def dreaming():
     pass
 
 
+@cli.group()
+def cluster():
+    """Kubernetes cluster deployment and management."""
+    pass
+
+
 # Register commands
 from .commands.schema import register_commands as register_schema_commands
 from .commands.db import register_commands as register_db_commands
@@ -89,11 +95,13 @@ from .commands.configure import register_command as register_configure_command
 from .commands.serve import register_command as register_serve_command
 from .commands.mcp import register_command as register_mcp_command
 from .commands.scaffold import scaffold as scaffold_command
+from .commands.cluster import register_commands as register_cluster_commands
 
 register_schema_commands(schema)
 register_db_commands(db)
 register_process_commands(process)
 register_dreaming_commands(dreaming)
+register_cluster_commands(cluster)
 register_ask_command(cli)
 register_configure_command(cli)
 register_serve_command(cli)

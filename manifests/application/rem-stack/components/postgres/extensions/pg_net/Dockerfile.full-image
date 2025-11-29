@@ -1,0 +1,87 @@
+# =============================================================================
+# PostgreSQL 18 with pgvector + pg_net Extensions
+# =============================================================================
+#
+# Traditional approach: Full PostgreSQL image with extension pre-installed.
+# Use this when ImageVolume feature gate is not available (e.g., EKS).
+#
+# Build:
+#   docker build -f Dockerfile.full-image -t percolationlabs/rem-pg:18 .
+#
+# Push:
+#   docker push percolationlabs/rem-pg:18
+#
+# For multi-arch builds:
+#   docker buildx build --platform linux/amd64,linux/arm64 \
+#     -f Dockerfile.full-image -t percolationlabs/rem-pg:18 --push .
+#
+# =============================================================================
+# IMPORTANT NOTES:
+#
+# 1. libcurl version: pg_net requires libcurl >= 7.83 for curl_easy_nextheader()
+#    API. The CNPG base image (Debian Bookworm) ships with libcurl 7.88+.
+#    We use the system libcurl to avoid epoll/file descriptor issues.
+#
+# 2. pg_net.database_name: The background worker needs this setting to know
+#    which database to poll for requests. Set it in your Cluster spec:
+#      postgresql:
+#        parameters:
+#          pg_net.database_name: "your_database"
+#
+# 3. Extension must be created: After cluster startup, run:
+#    CREATE EXTENSION pg_net;
+#
+# =============================================================================
+
+# Use Bookworm base - required for libcurl 7.88+ (pg_net needs curl_easy_nextheader from 7.83+)
+# Bullseye (11) ships 7.74 which is too old
+FROM ghcr.io/cloudnative-pg/postgresql:18-bookworm
+
+USER root
+
+# Install build dependencies
+# Note: Use libcurl4-openssl-dev from apt (7.88+ on Bookworm) - it has all
+# required APIs and avoids runtime conflicts with custom-built curl
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    git \
+    ca-certificates \
+    libcurl4-openssl-dev \
+    postgresql-server-dev-18 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install pgvector extension (required by REM)
+# Using latest main branch - PostgreSQL 18 requires pgvector > 0.8.0 due to vacuum_delay_point API change
+WORKDIR /tmp
+RUN git clone --depth 1 https://github.com/pgvector/pgvector.git \
+    && cd pgvector \
+    && make \
+    && make install \
+    && cd / \
+    && rm -rf /tmp/pgvector
+
+# Clone and build pg_net with system libcurl
+RUN git clone --depth 1 https://github.com/supabase/pg_net.git \
+    && cd pg_net \
+    && make \
+    && make install \
+    && cd / \
+    && rm -rf /tmp/pg_net
+
+# Clean up build dependencies to reduce image size
+# IMPORTANT: Keep libcurl4 runtime - pg_net needs libcurl.so.4 at runtime
+# Mark it as manually installed to prevent autoremove from deleting it
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libcurl4 \
+    && apt-mark manual libcurl4 \
+    && apt-get purge -y build-essential git postgresql-server-dev-18 libcurl4-openssl-dev \
+    && apt-get autoremove -y \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Switch back to postgres user
+USER 26
+
+# Verify extensions are installed
+RUN ls -la /usr/share/postgresql/18/extension/vector* \
+    && ls -la /usr/share/postgresql/18/extension/pg_net*

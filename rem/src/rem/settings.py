@@ -1004,6 +1004,59 @@ class APISettings(BaseSettings):
     )
 
 
+class ModelsSettings(BaseSettings):
+    """
+    Custom model registration settings for downstream applications.
+
+    Allows downstream apps to specify Python modules containing custom models
+    that should be imported (and thus registered) before schema generation.
+
+    This enables `rem db schema generate` to discover models registered with
+    `@rem.register_model` in downstream applications.
+
+    Environment variables:
+        MODELS__IMPORT_MODULES - Semicolon-separated list of Python modules to import
+                                 Example: "models;myapp.entities;myapp.custom_models"
+
+    Example:
+        # In downstream app's .env
+        MODELS__IMPORT_MODULES=models
+
+        # In downstream app's models/__init__.py
+        import rem
+        from rem.models.core import CoreModel
+
+        @rem.register_model
+        class MyCustomEntity(CoreModel):
+            name: str
+
+        # Then run schema generation
+        rem db schema generate  # Includes MyCustomEntity
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="MODELS__",
+        extra="ignore",
+    )
+
+    import_modules: str = Field(
+        default="",
+        description=(
+            "Semicolon-separated list of Python modules to import for model registration. "
+            "These modules are imported before schema generation to ensure custom models "
+            "decorated with @rem.register_model are discovered. "
+            "Example: 'models;myapp.entities'"
+        ),
+    )
+
+    @property
+    def module_list(self) -> list[str]:
+        """Get modules as a list, filtering empty strings."""
+        if not self.import_modules:
+            return []
+        return [m.strip() for m in self.import_modules.split(";") if m.strip()]
+
+
 class SchemaSettings(BaseSettings):
     """
     Schema search path settings for agent and evaluator schemas.
@@ -1291,6 +1344,7 @@ class Settings(BaseSettings):
     chat: ChatSettings = Field(default_factory=ChatSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
     mcp: MCPSettings = Field(default_factory=MCPSettings)
+    models: ModelsSettings = Field(default_factory=ModelsSettings)
     otel: OTELSettings = Field(default_factory=OTELSettings)
     phoenix: PhoenixSettings = Field(default_factory=PhoenixSettings)
     auth: AuthSettings = Field(default_factory=AuthSettings)

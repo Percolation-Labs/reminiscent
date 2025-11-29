@@ -370,11 +370,32 @@ class ContentService:
         file_size = len(file_content)
         logger.info(f"Read {file_size} bytes from {file_uri} (source: {source_type})")
 
-        # Step 2: Write to internal storage (user-scoped)
+        # Step 1.5: Early schema detection for YAML/JSON files
+        # Skip File entity creation for schemas (agents/evaluators)
+        file_suffix = Path(file_name).suffix.lower()
+        if file_suffix in ['.yaml', '.yml', '.json']:
+            import yaml
+            import json
+            try:
+                content_text = file_content.decode('utf-8') if isinstance(file_content, bytes) else file_content
+                data = yaml.safe_load(content_text) if file_suffix in ['.yaml', '.yml'] else json.loads(content_text)
+                if isinstance(data, dict):
+                    json_schema_extra = data.get('json_schema_extra', {})
+                    kind = json_schema_extra.get('kind', '')
+                    if kind in ['agent', 'evaluator']:
+                        # Route directly to schema processing, skip File entity
+                        logger.info(f"Detected {kind} schema: {file_name}, routing to _process_schema")
+                        result = self.process_uri(file_uri)
+                        return await self._process_schema(result, file_uri, user_id)
+            except Exception as e:
+                logger.debug(f"Early schema detection failed for {file_name}: {e}")
+                # Fall through to standard file processing
+
+        # Step 2: Write to internal storage (public or user-scoped)
         file_id = str(uuid4())
         storage_uri, internal_key, content_type, _ = await fs_service.write_to_internal_storage(
             content=file_content,
-            tenant_id=user_id,  # Using user_id for storage scoping
+            tenant_id=user_id or "public",  # Storage path: public/ or user_id/
             file_name=file_name,
             file_id=file_id,
         )
@@ -383,7 +404,7 @@ class ContentService:
         # Step 3: Create File entity
         file_entity = File(
             id=file_id,
-            tenant_id=user_id,  # Set tenant_id to user_id (application scoped to user)
+            tenant_id=user_id,  # None = public/shared
             user_id=user_id,
             name=file_name,
             uri=storage_uri,
@@ -538,7 +559,7 @@ class ContentService:
             size_bytes=result["metadata"].get("size"),
             mime_type=result["metadata"].get("content_type"),
             processing_status="completed",
-            tenant_id=user_id or "default",  # Required field
+            tenant_id=user_id,  # None = public/shared
             user_id=user_id,
         )
 
@@ -571,7 +592,7 @@ class ContentService:
                 ordinal=i,
                 content=chunk,
                 category="document",
-                tenant_id=user_id or "default",  # Required field
+                tenant_id=user_id,  # None = public/shared
                 user_id=user_id,
             )
             for i, chunk in enumerate(chunks)
@@ -645,9 +666,10 @@ class ContentService:
         # IMPORTANT: category field distinguishes agents from evaluators
         # - kind=agent → category="agent" (AI agents with tools/resources)
         # - kind=evaluator → category="evaluator" (LLM-as-a-Judge evaluators)
+        # Schemas (agents/evaluators) default to system tenant for shared access
         schema_entity = Schema(
-            tenant_id=user_id or "default",
-            user_id=user_id,
+            tenant_id="system",
+            user_id=None,
             name=name,
             spec=schema_data,
             category=kind,  # Maps kind → category for database filtering
@@ -717,7 +739,7 @@ class ContentService:
             processor = EngramProcessor(postgres)
             result = await processor.process_engram(
                 data=data,
-                tenant_id=user_id or "default",
+                tenant_id=user_id,  # None = public/shared
                 user_id=user_id,
             )
             logger.info(f"✅ Engram processed: {result.get('resource_id')} with {len(result.get('moment_ids', []))} moments")

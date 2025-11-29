@@ -99,167 +99,96 @@ def calculate_checksum(file_path: Path) -> str:
 
 @click.command()
 @click.option(
-    "--install",
-    "install_only",
-    is_flag=True,
-    help="Apply only install.sql (extensions and infrastructure)",
-)
-@click.option(
-    "--models", "models_only", is_flag=True, help="Apply only install_models.sql (entity tables)"
-)
-@click.option(
     "--background-indexes",
     is_flag=True,
-    help="Apply background indexes (HNSW for vectors)",
+    help="Also apply background HNSW indexes (run after data load)",
 )
-@click.option(
-    "--connection",
-    "-c",
-    help="PostgreSQL connection string (overrides environment)",
-)
-@click.option(
-    "--sql-dir",
-    type=click.Path(exists=True, path_type=Path),
-    default=None,
-    help="Directory containing SQL files (defaults to package SQL dir)",
-)
-def migrate(
-    install_only: bool,
-    models_only: bool,
-    background_indexes: bool,
-    connection: str | None,
-    sql_dir: Path | None,
-):
+def migrate(background_indexes: bool):
     """
-    Apply database migrations.
+    Apply standard database migrations (001_install + 002_install_models).
 
-    By default, applies both install.sql and install_models.sql.
-    Use flags to apply specific migrations.
+    This is a convenience command for initial setup. It applies:
+    1. 001_install.sql - Core infrastructure (extensions, kv_store)
+    2. 002_install_models.sql - Entity tables from registered models
+
+    For incremental changes, use the diff-based workflow instead:
+        rem db schema generate  # Regenerate from models
+        rem db diff             # Check what changed
+        rem db apply <file>     # Apply changes
 
     Examples:
-        rem db migrate                     # Apply all
-        rem db migrate --install           # Core infrastructure only
-        rem db migrate --models            # Entity tables only
-        rem db migrate --background-indexes  # Background HNSW indexes
+        rem db migrate                    # Initial setup
+        rem db migrate --background-indexes  # Include HNSW indexes
     """
-    asyncio.run(_migrate_async(install_only, models_only, background_indexes, connection, sql_dir))
+    asyncio.run(_migrate_async(background_indexes))
 
 
-async def _migrate_async(
-    install_only: bool,
-    models_only: bool,
-    background_indexes: bool,
-    connection: str | None,
-    sql_dir: Path | None,
-):
+async def _migrate_async(background_indexes: bool):
     """Async implementation of migrate command."""
-    from ...services.postgres import get_postgres_service
-    # Find SQL directory - use package SQL if not specified
-    if sql_dir is None:
-        import importlib.resources
-        try:
-            # Python 3.9+
-            sql_ref = importlib.resources.files("rem") / "sql"
-            sql_dir = Path(str(sql_ref))
-        except AttributeError:
-            # Fallback: try to find sql dir relative to package
-            import rem
-            package_dir = Path(rem.__file__).parent.parent
-            sql_dir = package_dir / "sql"
-            if not sql_dir.exists():
-                # Last resort: current directory
-                sql_dir = Path("sql")
+    from ...settings import settings
 
+    click.echo()
     click.echo("REM Database Migration")
     click.echo("=" * 60)
+
+    # Find SQL directory
+    sql_dir = Path(settings.sql_dir)
+    migrations_dir = sql_dir / "migrations"
+
     click.echo(f"SQL Directory: {sql_dir}")
     click.echo()
 
-    # Discover migrations from migrations/ directory
-    migrations_dir = sql_dir / "migrations"
+    # Standard migration files
+    migrations = [
+        (migrations_dir / "001_install.sql", "Core Infrastructure"),
+        (migrations_dir / "002_install_models.sql", "Entity Tables"),
+    ]
 
     if background_indexes:
-        # Special case: background indexes
-        migrations = [("background_indexes.sql", "Background Indexes")]
-    elif install_only or models_only:
-        # Find specific migration
-        target_prefix = "001" if install_only else "002"
-        migration_files = sorted(migrations_dir.glob(f"{target_prefix}_*.sql"))
-        if migration_files:
-            migrations = [(f"migrations/{f.name}", f.stem.replace("_", " ").title()) for f in migration_files]
-        else:
-            migrations = []
-    else:
-        # Default: discover and apply all migrations in sorted order
-        migration_files = sorted(migrations_dir.glob("*.sql"))
-        migrations = [(f"migrations/{f.name}", f.stem.replace("_", " ").title()) for f in migration_files]
+        migrations.append((sql_dir / "background_indexes.sql", "Background Indexes"))
 
     # Check files exist
-    for filename, description in migrations:
-        file_path = sql_dir / filename
+    for file_path, description in migrations:
         if not file_path.exists():
-            if filename == "install_models.sql":
-                click.secho(f"✗ {filename} not found", fg="red")
+            click.secho(f"✗ {file_path.name} not found", fg="red")
+            if "002" in file_path.name:
                 click.echo()
                 click.secho("Generate it first with:", fg="yellow")
-                click.secho("  rem db schema generate --models src/rem/models/entities", fg="yellow")
-                raise click.Abort()
-            else:
-                click.secho(f"✗ {filename} not found", fg="red")
-                raise click.Abort()
-
-    # Connect to database
-    db = get_postgres_service()
-    if not db:
-        click.secho("Error: PostgreSQL is disabled in settings.", fg="red")
-        raise click.Abort()
-        
-    await db.connect()
-
-    try:
-        # Apply migrations
-        total_time = 0.0
-        all_success = True
-
-        for filename, description in migrations:
-            file_path = sql_dir / filename
-            checksum = calculate_checksum(file_path)
-
-            click.echo(f"Applying: {description} ({filename})")
-            click.echo(f"  Checksum: {checksum[:16]}...")
-
-            success, output, exec_time = await run_sql_file_async(file_path, db)
-            total_time += exec_time
-
-            if success:
-                click.secho(f"  ✓ Applied in {exec_time:.0f}ms", fg="green")
-                # Show any NOTICE messages from the output
-                for line in output.split("\n"):
-                    if "NOTICE:" in line or "✓" in line:
-                        notice = line.split("NOTICE:")[-1].strip()
-                        if notice:
-                            click.echo(f"    {notice}")
-            else:
-                click.secho(f"  ✗ Failed", fg="red")
-                click.echo()
-                click.secho("Error output:", fg="red")
-                click.secho(output, fg="red")
-                all_success = False
-                break
-
-            click.echo()
-
-        # Summary
-        click.echo("=" * 60)
-        if all_success:
-            click.secho(f"✓ All migrations applied successfully", fg="green")
-            click.echo(f"  Total time: {total_time:.0f}ms")
-        else:
-            click.secho(f"✗ Migration failed", fg="red")
+                click.secho("  rem db schema generate", fg="yellow")
             raise click.Abort()
 
-    finally:
-        await db.disconnect()
+    # Apply each migration
+    import psycopg
+    conn_str = settings.postgres.connection_string
+    total_time = 0.0
+
+    for file_path, description in migrations:
+        click.echo(f"Applying: {description} ({file_path.name})")
+
+        sql_content = file_path.read_text(encoding="utf-8")
+        start_time = time.time()
+
+        try:
+            with psycopg.connect(conn_str) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(sql_content)
+                conn.commit()
+
+            exec_time = (time.time() - start_time) * 1000
+            total_time += exec_time
+            click.secho(f"  ✓ Applied in {exec_time:.0f}ms", fg="green")
+
+        except Exception as e:
+            click.secho(f"  ✗ Failed: {e}", fg="red")
+            raise click.Abort()
+
+        click.echo()
+
+    click.echo("=" * 60)
+    click.secho("✓ All migrations applied", fg="green")
+    click.echo(f"  Total time: {total_time:.0f}ms")
+    click.echo()
+    click.echo("Next: verify with 'rem db diff'")
 
 
 @click.command()
@@ -382,7 +311,7 @@ def rebuild_cache(connection: str | None):
 
 @click.command()
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
-@click.option("--user-id", default=None, help="User ID for loaded data (default: from settings)")
+@click.option("--user-id", default=None, help="User ID to scope data privately (default: public/shared)")
 @click.option("--dry-run", is_flag=True, help="Show what would be loaded without loading")
 def load(file_path: Path, user_id: str | None, dry_run: bool):
     """
@@ -397,17 +326,13 @@ def load(file_path: Path, user_id: str | None, dry_run: bool):
 
     Examples:
         rem db load rem/tests/data/graph_seed.yaml
-        rem db load data.yaml --user-id my-user
+        rem db load data.yaml --user-id my-user  # Private to user
         rem db load data.yaml --dry-run
     """
-    from ...settings import settings
-
-    # Resolve user_id from settings if not provided
-    effective_user_id = user_id or settings.test.effective_user_id
-    asyncio.run(_load_async(file_path, effective_user_id, dry_run))
+    asyncio.run(_load_async(file_path, user_id, dry_run))
 
 
-async def _load_async(file_path: Path, user_id: str, dry_run: bool):
+async def _load_async(file_path: Path, user_id: str | None, dry_run: bool):
     """Async implementation of load command."""
     import yaml
     from ...models.core.inline_edge import InlineEdge
@@ -415,7 +340,8 @@ async def _load_async(file_path: Path, user_id: str, dry_run: bool):
     from ...services.postgres import get_postgres_service
 
     logger.info(f"Loading data from: {file_path}")
-    logger.info(f"User ID: {user_id}")
+    scope_msg = f"user: {user_id}" if user_id else "public"
+    logger.info(f"Scope: {scope_msg}")
 
     # Load YAML file
     with open(file_path) as f:
@@ -489,11 +415,12 @@ async def _load_async(file_path: Path, user_id: str, dry_run: bool):
             model_class = MODEL_MAP[table_name]  # Type is inferred from MODEL_MAP
 
             for row_data in rows:
-                # Add user_id and tenant_id if not already present
-                # This allows seed files to specify explicit owners
-                if "user_id" not in row_data:
+                # Add user_id and tenant_id only if explicitly provided
+                # Default is public (None) - data is shared/visible to all
+                # Pass --user-id to scope data privately to a specific user
+                if "user_id" not in row_data and user_id is not None:
                     row_data["user_id"] = user_id
-                if "tenant_id" not in row_data:
+                if "tenant_id" not in row_data and user_id is not None:
                     row_data["tenant_id"] = row_data.get("user_id", user_id)
 
                 # Convert graph_edges to InlineEdge format if present
@@ -531,9 +458,249 @@ async def _load_async(file_path: Path, user_id: str, dry_run: bool):
         await pg.disconnect()
 
 
+@click.command()
+@click.option(
+    "--check",
+    is_flag=True,
+    help="Exit with non-zero status if drift detected (for CI)",
+)
+@click.option(
+    "--generate",
+    is_flag=True,
+    help="Generate incremental migration file from diff",
+)
+@click.option(
+    "--models",
+    "-m",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Directory containing Pydantic models (default: auto-detect)",
+)
+@click.option(
+    "--output-dir",
+    "-o",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Output directory for generated migration (default: sql/migrations)",
+)
+@click.option(
+    "--message",
+    default="schema_update",
+    help="Migration message/description (used in filename)",
+)
+def diff(
+    check: bool,
+    generate: bool,
+    models: Path | None,
+    output_dir: Path | None,
+    message: str,
+):
+    """
+    Compare database schema against Pydantic models.
+
+    Uses Alembic autogenerate to detect differences between:
+    - Your Pydantic models (the target schema)
+    - The current database (what's actually deployed)
+
+    Examples:
+        rem db diff                    # Show what would change
+        rem db diff --check            # CI mode: exit 1 if drift detected
+        rem db diff --generate         # Create migration file from diff
+
+    Workflow:
+        1. Develop locally, modify Pydantic models
+        2. Run 'rem db diff' to see changes
+        3. Run 'rem db diff --generate' to create migration
+        4. Review generated SQL, then 'rem db migrate'
+    """
+    asyncio.run(_diff_async(check, generate, models, output_dir, message))
+
+
+async def _diff_async(
+    check: bool,
+    generate: bool,
+    models: Path | None,
+    output_dir: Path | None,
+    message: str,
+):
+    """Async implementation of diff command."""
+    from ...services.postgres.diff_service import DiffService
+
+    click.echo()
+    click.echo("REM Schema Diff")
+    click.echo("=" * 60)
+
+    # Initialize diff service
+    diff_service = DiffService(models_dir=models)
+
+    try:
+        # Compute diff
+        click.echo("Comparing Pydantic models against database...")
+        click.echo()
+
+        result = diff_service.compute_diff()
+
+        if not result.has_changes:
+            click.secho("✓ No schema drift detected", fg="green")
+            click.echo("  Database matches Pydantic models")
+            return
+
+        # Show changes
+        click.secho(f"⚠ Schema drift detected: {result.change_count} change(s)", fg="yellow")
+        click.echo()
+        click.echo("Changes:")
+        for line in result.summary:
+            if line.startswith("+"):
+                click.secho(f"  {line}", fg="green")
+            elif line.startswith("-"):
+                click.secho(f"  {line}", fg="red")
+            elif line.startswith("~"):
+                click.secho(f"  {line}", fg="yellow")
+            else:
+                click.echo(f"  {line}")
+        click.echo()
+
+        # Generate migration if requested
+        if generate:
+            # Determine output directory
+            if output_dir is None:
+                import importlib.resources
+                try:
+                    sql_ref = importlib.resources.files("rem") / "sql" / "migrations"
+                    output_dir = Path(str(sql_ref))
+                except AttributeError:
+                    import rem
+                    package_dir = Path(rem.__file__).parent.parent
+                    output_dir = package_dir / "sql" / "migrations"
+
+            click.echo(f"Generating migration to: {output_dir}")
+            migration_path = diff_service.generate_migration_file(output_dir, message)
+
+            if migration_path:
+                click.secho(f"✓ Migration generated: {migration_path.name}", fg="green")
+                click.echo()
+                click.echo("Next steps:")
+                click.echo("  1. Review the generated SQL file")
+                click.echo("  2. Run: rem db migrate")
+            else:
+                click.echo("No migration file generated (no changes)")
+
+        # CI check mode
+        if check:
+            click.echo()
+            click.secho("✗ Schema drift detected (--check mode)", fg="red")
+            raise SystemExit(1)
+
+    except SystemExit:
+        raise
+    except Exception as e:
+        click.secho(f"✗ Error: {e}", fg="red")
+        logger.exception("Diff failed")
+        raise click.Abort()
+
+
+@click.command()
+@click.argument("sql_file", type=click.Path(exists=True, path_type=Path))
+@click.option(
+    "--log/--no-log",
+    default=True,
+    help="Log migration to rem_migrations table (default: yes)",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Show SQL that would be executed without running it",
+)
+def apply(sql_file: Path, log: bool, dry_run: bool):
+    """
+    Apply a SQL file directly to the database.
+
+    This is the simple, code-as-source-of-truth approach:
+    - Pydantic models define the schema
+    - `rem db diff` detects drift
+    - `rem db diff --generate` creates migration SQL
+    - `rem db apply <file>` runs it
+
+    Examples:
+        rem db apply migrations/004_add_field.sql
+        rem db apply --dry-run migrations/004_add_field.sql
+        rem db apply --no-log migrations/004_add_field.sql
+    """
+    asyncio.run(_apply_async(sql_file, log, dry_run))
+
+
+async def _apply_async(sql_file: Path, log: bool, dry_run: bool):
+    """Async implementation of apply command."""
+    from ...services.postgres import get_postgres_service
+
+    click.echo()
+    click.echo(f"Applying: {sql_file.name}")
+    click.echo("=" * 60)
+
+    # Read SQL content
+    sql_content = sql_file.read_text(encoding="utf-8")
+
+    if dry_run:
+        click.echo()
+        click.echo("SQL to execute (dry run):")
+        click.echo("-" * 40)
+        click.echo(sql_content)
+        click.echo("-" * 40)
+        click.echo()
+        click.secho("Dry run - no changes made", fg="yellow")
+        return
+
+    # Execute SQL
+    db = get_postgres_service()
+    if not db:
+        click.secho("✗ Could not connect to database", fg="red")
+        raise click.Abort()
+
+    start_time = time.time()
+
+    try:
+        import psycopg
+        from ...settings import settings
+
+        conn_str = settings.postgres.connection_string
+
+        with psycopg.connect(conn_str) as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql_content)
+            conn.commit()
+
+            # Log to rem_migrations if requested
+            if log:
+                checksum = calculate_checksum(sql_file)
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO rem_migrations (name, type, checksum, applied_by)
+                        VALUES (%s, 'diff', %s, CURRENT_USER)
+                        ON CONFLICT (name) DO UPDATE SET
+                            applied_at = CURRENT_TIMESTAMP,
+                            checksum = EXCLUDED.checksum
+                        """,
+                        (sql_file.name, checksum[:16]),
+                    )
+                conn.commit()
+
+        execution_time = (time.time() - start_time) * 1000
+        click.secho(f"✓ Applied successfully in {execution_time:.0f}ms", fg="green")
+
+        if log:
+            click.echo(f"  Logged to rem_migrations as '{sql_file.name}'")
+
+    except Exception as e:
+        click.secho(f"✗ Failed: {e}", fg="red")
+        raise click.Abort()
+
+
 def register_commands(db_group):
     """Register all db commands."""
     db_group.add_command(migrate)
     db_group.add_command(status)
     db_group.add_command(rebuild_cache, name="rebuild-cache")
     db_group.add_command(load)
+    db_group.add_command(diff)
+    db_group.add_command(apply)

@@ -4,7 +4,9 @@
 
 services:
   postgres:
-    image: pgvector/pgvector:pg18
+    # Custom image with pg_net extension for async HTTP requests
+    # See: manifests/application/rem-stack/components/postgres/extensions/README.md
+    image: percolationlabs/rem-pg:18
     container_name: rem-postgres-test
     environment:
       POSTGRES_DB: rem
@@ -18,6 +20,13 @@ services:
       - ./src/rem/sql/migrations:/docker-entrypoint-initdb.d:ro
       # Persistent data volume (PostgreSQL 18 format)
       - postgres_data_test:/var/lib/postgresql
+    # pg_net requires shared_preload_libraries and database_name config
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_net
+      - -c
+      - pg_net.database_name=rem
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U rem -d rem"]
       interval: 5s
@@ -27,7 +36,7 @@ services:
       - rem-network-test
 
   api:
-    image: percolationlabs/rem:0.1.11
+    image: percolationlabs/rem:latest
     container_name: rem-api-test
     environment:
       # Database
@@ -55,7 +64,11 @@ services:
       postgres:
         condition: service_healthy
     networks:
-      - rem-network-test
+      rem-network-test:
+        # Alias 'rem-api' allows pg_net rem_query() to use default host
+        # SELECT rem_query('LOOKUP sarah-chen', 'user123');
+        aliases:
+          - rem-api
     command: >
       uvicorn rem.api.main:app
       --host 0.0.0.0

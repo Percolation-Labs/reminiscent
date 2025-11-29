@@ -1,0 +1,76 @@
+# Release workflow - creates manifest tarball and attaches to GitHub release
+#
+# Triggered ONLY on tagged releases (v*.*.*)
+# Creates manifests.tar.gz and uploads it as a release asset.
+#
+# Users can then download via:
+#   - rem cluster init -y  (auto-downloads matching version)
+#   - Direct URL: https://github.com/{org}/remstack/releases/download/{tag}/manifests.tar.gz
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'      # v1.2.3
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'    # v1.2.3-rc.1, v1.2.3-beta.2
+
+permissions:
+  contents: write
+
+jobs:
+  create-manifest-tarball:
+    name: Create Manifest Tarball
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get release info
+        id: release
+        run: |
+          echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          echo "Creating manifest tarball for tag: ${GITHUB_REF#refs/tags/}"
+
+      - name: Create manifest tarball
+        run: |
+          # Create tarball of manifests directory
+          tar -czvf manifests.tar.gz manifests/
+
+          # Show contents
+          echo "Tarball contents:"
+          tar -tzvf manifests.tar.gz | head -20
+          echo "..."
+
+          # Show size
+          ls -lh manifests.tar.gz
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release.outputs.tag }}
+          files: manifests.tar.gz
+          # Create release if it doesn't exist (for tag-only pushes)
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          ## Release ${{ steps.release.outputs.tag }}
+
+          Manifest tarball uploaded successfully.
+
+          **Download URL:**
+          ```
+          https://github.com/${{ github.repository }}/releases/download/${{ steps.release.outputs.tag }}/manifests.tar.gz
+          ```
+
+          **Install via CLI:**
+          ```bash
+          pip install remdb
+          rem cluster init -y --version ${{ steps.release.outputs.tag }}
+          ```
+          EOF

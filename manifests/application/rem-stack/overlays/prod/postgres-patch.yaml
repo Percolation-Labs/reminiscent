@@ -7,7 +7,7 @@ apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
   name: rem-postgres
-  namespace: siggy
+  namespace: rem
 spec:
   # 2 replicas: 1 primary + 1 replica for HA (matches staging)
   instances: 2

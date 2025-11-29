@@ -1,19 +1,17 @@
 # ArgoCD Application for REM Stack (Staging)
 #
-# Deploys the REM stack using Kustomize overlays with semantic versioning.
+# Deploys the REM stack using Kustomize overlays.
+#
+# Configuration:
+#   Before applying, update the following:
+#   1. spec.source.repoURL - Your Git repository
+#   2. spec.destination.namespace - Target namespace (default: rem)
 #
 # Deployment:
 #   kubectl apply -f manifests/application/rem-stack/argocd-staging.yaml
 #
-# To point to your fork:
-#   1. Fork this repository
-#   2. Update spec.source.repoURL to your fork
-#   3. Update spec.source.targetRevision to your branch (e.g., staging)
-#   4. Apply this manifest
-#
-# Image versioning:
-#   ArgoCD will use the image tags specified in the Kustomize overlay.
-#   Update kustomization.yaml with semantic versions (e.g., v1.2.3-rc.1)
+# Or use the CLI:
+#   rem cluster apply --config cluster-config.yaml
 
 apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -28,30 +26,48 @@ spec:
 
   # Source: Git repository with Kustomize
   source:
-    repoURL: https://github.com/YOUR-ORG/remstack.git  # Change to your fork
-    targetRevision: staging  # Git branch for staging
+    # UPDATE THIS: Your Git repository URL
+    repoURL: https://github.com/anthropics/remstack.git
+    targetRevision: main
     path: manifests/application/rem-stack/overlays/staging
-
-    # Kustomize build options
-    kustomize:
-      # Set image tags dynamically (optional)
-      # images:
-      #   - rem-api=<registry>/rem-api:v1.2.3-rc.1
-      #   - rem-mcp=<registry>/rem-mcp:v1.2.3-rc.1
-      #   - rem-worker=<registry>/rem-worker:v1.2.3-rc.1
-
-      # Common labels
-      commonLabels:
-        argocd.argoproj.io/instance: rem-stack-staging
-
-      # Common annotations
-      commonAnnotations:
-        argocd.argoproj.io/tracking-id: rem-stack-staging
 
   # Destination: Kubernetes cluster and namespace
   destination:
     server: https://kubernetes.default.svc
-    namespace: rem-staging
+    # UPDATE THIS: Target namespace (should match cluster-config.yaml project.namespace)
+    namespace: rem
+
+  # Ignore differences for operator-managed fields
+  # These are fields that operators add as defaults or manage themselves
+  ignoreDifferences:
+    # External Secrets Operator adds default values to ExternalSecret specs
+    - group: external-secrets.io
+      kind: ExternalSecret
+      jqPathExpressions:
+        - .spec.data[].remoteRef.conversionStrategy
+        - .spec.data[].remoteRef.metadataPolicy
+        - .spec.data[].remoteRef.decodingStrategy
+        - .spec.target.deletionPolicy
+        - .spec.target.template.mergePolicy
+        - .spec.target.template.metadata
+
+    # CloudNativePG adds many default fields to Cluster spec
+    - group: postgresql.cnpg.io
+      kind: Cluster
+      jsonPointers:
+        - /spec
+
+    # HPA/KEDA manages deployment replicas
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+
+    # KEDA manages trigger configuration
+    - group: keda.sh
+      kind: ScaledObject
+      jsonPointers:
+        - /spec/triggers
 
   # Sync policy
   syncPolicy:
@@ -63,6 +79,7 @@ spec:
     syncOptions:
       - CreateNamespace=true
       - ServerSideApply=true
+      # CRITICAL: Must be enabled for ignoreDifferences to work
       - RespectIgnoreDifferences=true
 
     retry:
@@ -72,16 +89,4 @@ spec:
         factor: 2
         maxDuration: 3m
 
-  # Ignore differences for certain fields
-  ignoreDifferences:
-    - group: apps
-      kind: Deployment
-      jsonPointers:
-        - /spec/replicas  # Ignore replica count (managed by HPA/KEDA)
-    - group: keda.sh
-      kind: ScaledObject
-      jsonPointers:
-        - /spec/triggers  # KEDA manages triggers
-
-  # Health checks
   revisionHistoryLimit: 10

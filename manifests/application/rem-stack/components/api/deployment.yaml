@@ -31,7 +31,7 @@ spec:
             - sh
             - -c
             - |
-              until nc -z rem-postgres-rw.siggy.svc.cluster.local 5432; do
+              until nc -z rem-postgres-rw.rem.svc.cluster.local 5432; do
                 echo "Waiting for PostgreSQL..."
                 sleep 2
               done
@@ -47,37 +47,33 @@ spec:
               containerPort: 8000
               protocol: TCP
 
-          # Environment variables from ConfigMaps (generated from CDK outputs)
+          # =======================================================================
+          # Environment Configuration
+          # =======================================================================
+          # All shared config comes from rem-config ConfigMap (see base/kustomization.yaml)
+          # Secrets come from ExternalSecrets (rem-llm-api-keys, rem-database-credentials)
+          # Only deployment-specific values (like connection string construction) are inline
+          # =======================================================================
           envFrom:
           - configMapRef:
-              name: rem-config  # S3__BUCKET_NAME, ENVIRONMENT, OTEL__, PHOENIX__, POSTGRES__CONNECTION_STRING
+              name: rem-config
 
           env:
-            # Database configuration (nested Pydantic settings pattern)
-            - name: POSTGRES__HOST
-              value: rem-postgres-rw.siggy.svc.cluster.local
-            - name: POSTGRES__PORT
-              value: "5432"
-            - name: POSTGRES__DATABASE
-              value: remdb  # Database name from postgres-cluster.yaml bootstrap.initdb.database
-            - name: POSTGRES__USER
+            # Database connection string (must be inline to use secret refs)
+            - name: POSTGRES_USER
               valueFrom:
                 secretKeyRef:
                   name: rem-database-credentials
                   key: username
-            - name: POSTGRES__PASSWORD
+            - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: rem-database-credentials
                   key: password
-            - name: POSTGRES__POOL_SIZE
-              value: "20"
-            - name: POSTGRES__MAX_OVERFLOW
-              value: "10"
+            - name: POSTGRES__CONNECTION_STRING
+              value: "postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@rem-postgres-rw.rem.svc.cluster.local:5432/remdb"
 
-            # LLM configuration
-            - name: LLM__DEFAULT_MODEL
-              value: "claude-3-5-sonnet-20241022"
+            # LLM API keys (from ExternalSecrets)
             - name: LLM__ANTHROPIC_API_KEY
               valueFrom:
                 secretKeyRef:
@@ -91,9 +87,7 @@ spec:
                   key: openai-api-key
                   optional: true
 
-            # Authentication configuration
-            - name: AUTH__ENABLED
-              value: "true"
+            # Auth secrets (from ExternalSecrets)
             - name: AUTH__SESSION_SECRET
               valueFrom:
                 secretKeyRef:
@@ -109,39 +103,6 @@ spec:
                 secretKeyRef:
                   name: rem-llm-api-keys
                   key: auth-google-client-secret
-            - name: AUTH__JWT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: rem-api-secrets
-                  key: jwt-secret
-                  optional: true
-
-            # OpenTelemetry configuration
-            - name: OTEL__ENABLED
-              value: "true"
-            - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              valueFrom:
-                configMapKeyRef:
-                  name: rem-api-config
-                  key: OTEL_COLLECTOR_ENDPOINT
-            - name: OTEL_SERVICE_NAME
-              value: rem-api
-            - name: OTEL_RESOURCE_ATTRIBUTES
-              value: deployment.environment=production,service.namespace=rem-api
-
-            # S3 configuration
-            # S3__BUCKET_NAME comes from rem-config ConfigMap via envFrom
-            - name: S3__REGION
-              valueFrom:
-                configMapKeyRef:
-                  name: rem-api-config
-                  key: AWS_REGION
-
-            # MCP configuration
-            - name: MCP__REGISTRY_URL
-              value: https://mcp-registry.example.com
-            - name: MCP__CACHE_DIR
-              value: /tmp/mcp-cache
 
           resources:
             requests:

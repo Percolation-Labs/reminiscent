@@ -67,3 +67,4 @@ Pulumi.*.yaml
 .claude
 .aplanned
 .venv-test
+.research

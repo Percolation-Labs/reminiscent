@@ -111,28 +111,20 @@ To permanently delete, an admin can run:
 
 from datetime import datetime
 from typing import Optional
-from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from ...utils.date_utils import utc_now
+from ..core import CoreModel
 
 
-class SharedSession(BaseModel):
+class SharedSession(CoreModel):
     """
     Session sharing record between users.
 
     Links a session (identified by session_id from Message records) to a
     recipient user, enabling collaborative access to conversation history.
-
-    This is NOT a CoreModel - it's a lightweight linking table without
-    graph edges, metadata, or embeddings.
     """
 
-    id: Optional[UUID] = Field(
-        default=None,
-        description="Unique identifier (auto-generated)",
-    )
     session_id: str = Field(
         ...,
         description="The session being shared (matches Message.session_id)",
@@ -145,24 +137,6 @@ class SharedSession(BaseModel):
         ...,
         description="User ID of the recipient (who can now view the session)",
     )
-    tenant_id: str = Field(
-        default="default",
-        description="Tenant identifier for multi-tenancy isolation",
-    )
-    created_at: datetime = Field(
-        default_factory=utc_now,
-        description="When the share was created",
-    )
-    updated_at: datetime = Field(
-        default_factory=utc_now,
-        description="Last modification timestamp",
-    )
-    deleted_at: Optional[datetime] = Field(
-        default=None,
-        description="Soft delete timestamp (null = active share)",
-    )
-
-    model_config = {"from_attributes": True}
 
 
 class SharedSessionCreate(BaseModel):

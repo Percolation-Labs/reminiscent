@@ -1,7 +1,7 @@
 -- REM Model Schema (install_models.sql)
 -- Generated from Pydantic models
--- Source: directory: src/rem/models/entities
--- Generated at: 2025-11-28T08:13:28.661915
+-- Source: model registry
+-- Generated at: 2025-11-29T11:08:16.713884
 --
 -- DO NOT EDIT MANUALLY - Regenerate with: rem db schema generate
 --
@@ -30,24 +30,23 @@ BEGIN
 END $$;
 
 -- ======================================================================
--- USERS (Model: User)
+-- FEEDBACKS (Model: Feedback)
 -- ======================================================================
 
-CREATE TABLE IF NOT EXISTS users (
+CREATE TABLE IF NOT EXISTS feedbacks (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id VARCHAR(100) NOT NULL,
     user_id VARCHAR(256),
-    name VARCHAR(256) NOT NULL,
-    email VARCHAR(256),
-    role VARCHAR(256),
-    tier TEXT,
-    anonymous_ids TEXT[] DEFAULT ARRAY[]::TEXT[],
-    sec_policy JSONB DEFAULT '{}'::jsonb,
-    summary TEXT,
-    interests TEXT[] DEFAULT ARRAY[]::TEXT[],
-    preferred_topics TEXT[] DEFAULT ARRAY[]::TEXT[],
-    activity_level VARCHAR(256),
-    last_active_at TIMESTAMP,
+    session_id VARCHAR(256) NOT NULL,
+    message_id VARCHAR(256),
+    rating INTEGER,
+    categories TEXT[] DEFAULT ARRAY[]::TEXT[],
+    comment TEXT,
+    trace_id VARCHAR(256),
+    span_id VARCHAR(256),
+    phoenix_synced BOOLEAN,
+    phoenix_annotation_id VARCHAR(256),
+    annotator_kind VARCHAR(256),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     deleted_at TIMESTAMP,
@@ -56,41 +55,15 @@ CREATE TABLE IF NOT EXISTS users (
     tags TEXT[] DEFAULT ARRAY[]::TEXT[]
 );
 
-CREATE INDEX idx_users_tenant ON users (tenant_id);
-CREATE INDEX idx_users_user ON users (user_id);
-CREATE INDEX idx_users_graph_edges ON users USING GIN (graph_edges);
-CREATE INDEX idx_users_metadata ON users USING GIN (metadata);
-CREATE INDEX idx_users_tags ON users USING GIN (tags);
+CREATE INDEX idx_feedbacks_tenant ON feedbacks (tenant_id);
+CREATE INDEX idx_feedbacks_user ON feedbacks (user_id);
+CREATE INDEX idx_feedbacks_graph_edges ON feedbacks USING GIN (graph_edges);
+CREATE INDEX idx_feedbacks_metadata ON feedbacks USING GIN (metadata);
+CREATE INDEX idx_feedbacks_tags ON feedbacks USING GIN (tags);
 
--- Embeddings for users
-CREATE TABLE IF NOT EXISTS embeddings_users (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    entity_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    field_name VARCHAR(100) NOT NULL,
-    provider VARCHAR(50) NOT NULL DEFAULT 'openai',
-    model VARCHAR(100) NOT NULL DEFAULT 'text-embedding-3-small',
-    embedding vector(1536) NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-    -- Unique: one embedding per entity per field per provider
-    UNIQUE (entity_id, field_name, provider)
-);
-
--- Index for entity lookup (get all embeddings for entity)
-CREATE INDEX idx_embeddings_users_entity ON embeddings_users (entity_id);
-
--- Index for field + provider lookup
-CREATE INDEX idx_embeddings_users_field_provider ON embeddings_users (field_name, provider);
-
--- HNSW index for vector similarity search (created in background)
--- Note: This will be created by background thread after data load
--- CREATE INDEX idx_embeddings_users_vector_hnsw ON embeddings_users
--- USING hnsw (embedding vector_cosine_ops);
-
--- KV_STORE trigger for users
--- Trigger function to maintain KV_STORE for users
-CREATE OR REPLACE FUNCTION fn_users_kv_store_upsert()
+-- KV_STORE trigger for feedbacks
+-- Trigger function to maintain KV_STORE for feedbacks
+CREATE OR REPLACE FUNCTION fn_feedbacks_kv_store_upsert()
 RETURNS TRIGGER AS $$
 BEGIN
     IF (TG_OP = 'DELETE') THEN
@@ -110,8 +83,8 @@ BEGIN
             graph_edges,
             updated_at
         ) VALUES (
-            NEW.name::VARCHAR,
-            'users',
+            NEW.id::VARCHAR,
+            'feedbacks',
             NEW.id,
             NEW.tenant_id,
             NEW.user_id,
@@ -133,10 +106,115 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Create trigger
-DROP TRIGGER IF EXISTS trg_users_kv_store ON users;
-CREATE TRIGGER trg_users_kv_store
-AFTER INSERT OR UPDATE OR DELETE ON users
-FOR EACH ROW EXECUTE FUNCTION fn_users_kv_store_upsert();
+DROP TRIGGER IF EXISTS trg_feedbacks_kv_store ON feedbacks;
+CREATE TRIGGER trg_feedbacks_kv_store
+AFTER INSERT OR UPDATE OR DELETE ON feedbacks
+FOR EACH ROW EXECUTE FUNCTION fn_feedbacks_kv_store_upsert();
+
+-- ======================================================================
+-- FILES (Model: File)
+-- ======================================================================
+
+CREATE TABLE IF NOT EXISTS files (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id VARCHAR(100) NOT NULL,
+    user_id VARCHAR(256),
+    name VARCHAR(256) NOT NULL,
+    uri VARCHAR(256) NOT NULL,
+    content TEXT,
+    timestamp VARCHAR(256),
+    size_bytes INTEGER,
+    mime_type VARCHAR(256),
+    processing_status VARCHAR(256),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP,
+    graph_edges JSONB DEFAULT '[]'::jsonb,
+    metadata JSONB DEFAULT '{}'::jsonb,
+    tags TEXT[] DEFAULT ARRAY[]::TEXT[]
+);
+
+CREATE INDEX idx_files_tenant ON files (tenant_id);
+CREATE INDEX idx_files_user ON files (user_id);
+CREATE INDEX idx_files_graph_edges ON files USING GIN (graph_edges);
+CREATE INDEX idx_files_metadata ON files USING GIN (metadata);
+CREATE INDEX idx_files_tags ON files USING GIN (tags);
+
+-- Embeddings for files
+CREATE TABLE IF NOT EXISTS embeddings_files (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    entity_id UUID NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    field_name VARCHAR(100) NOT NULL,
+    provider VARCHAR(50) NOT NULL DEFAULT 'openai',
+    model VARCHAR(100) NOT NULL DEFAULT 'text-embedding-3-small',
+    embedding vector(1536) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    -- Unique: one embedding per entity per field per provider
+    UNIQUE (entity_id, field_name, provider)
+);
+
+-- Index for entity lookup (get all embeddings for entity)
+CREATE INDEX idx_embeddings_files_entity ON embeddings_files (entity_id);
+
+-- Index for field + provider lookup
+CREATE INDEX idx_embeddings_files_field_provider ON embeddings_files (field_name, provider);
+
+-- HNSW index for vector similarity search (created in background)
+-- Note: This will be created by background thread after data load
+-- CREATE INDEX idx_embeddings_files_vector_hnsw ON embeddings_files
+-- USING hnsw (embedding vector_cosine_ops);
+
+-- KV_STORE trigger for files
+-- Trigger function to maintain KV_STORE for files
+CREATE OR REPLACE FUNCTION fn_files_kv_store_upsert()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF (TG_OP = 'DELETE') THEN
+        -- Remove from KV_STORE on delete
+        DELETE FROM kv_store
+        WHERE entity_id = OLD.id;
+        RETURN OLD;
+    ELSIF (TG_OP = 'INSERT' OR TG_OP = 'UPDATE') THEN
+        -- Upsert to KV_STORE (O(1) lookup by entity_key)
+        INSERT INTO kv_store (
+            entity_key,
+            entity_type,
+            entity_id,
+            tenant_id,
+            user_id,
+            metadata,
+            graph_edges,
+            updated_at
+        ) VALUES (
+            NEW.id::VARCHAR,
+            'files',
+            NEW.id,
+            NEW.tenant_id,
+            NEW.user_id,
+            NEW.metadata,
+            COALESCE(NEW.graph_edges, '[]'::jsonb),
+            CURRENT_TIMESTAMP
+        )
+        ON CONFLICT (tenant_id, entity_key)
+        DO UPDATE SET
+            entity_id = EXCLUDED.entity_id,
+            user_id = EXCLUDED.user_id,
+            metadata = EXCLUDED.metadata,
+            graph_edges = EXCLUDED.graph_edges,
+            updated_at = CURRENT_TIMESTAMP;
+
+        RETURN NEW;
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create trigger
+DROP TRIGGER IF EXISTS trg_files_kv_store ON files;
+CREATE TRIGGER trg_files_kv_store
+AFTER INSERT OR UPDATE OR DELETE ON files
+FOR EACH ROW EXECUTE FUNCTION fn_files_kv_store_upsert();
 
 -- ======================================================================
 -- IMAGE_RESOURCES (Model: ImageResource)
@@ -252,23 +330,21 @@ AFTER INSERT OR UPDATE OR DELETE ON image_resources
 FOR EACH ROW EXECUTE FUNCTION fn_image_resources_kv_store_upsert();
 
 -- ======================================================================
--- FEEDBACKS (Model: Feedback)
+-- MESSAGES (Model: Message)
 -- ======================================================================
 
-CREATE TABLE IF NOT EXISTS feedbacks (
+CREATE TABLE IF NOT EXISTS messages (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id VARCHAR(100) NOT NULL,
     user_id VARCHAR(256),
-    session_id VARCHAR(256) NOT NULL,
-    message_id VARCHAR(256),
-    rating INTEGER,
-    categories TEXT[] DEFAULT ARRAY[]::TEXT[],
-    comment TEXT,
+    content TEXT NOT NULL,
+    message_type VARCHAR(256),
+    session_id VARCHAR(256),
+    prompt TEXT,
+    model VARCHAR(256),
+    token_count INTEGER,
     trace_id VARCHAR(256),
     span_id VARCHAR(256),
-    phoenix_synced BOOLEAN,
-    phoenix_annotation_id VARCHAR(256),
-    annotator_kind VARCHAR(256),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     deleted_at TIMESTAMP,
@@ -277,15 +353,41 @@ CREATE TABLE IF NOT EXISTS feedbacks (
     tags TEXT[] DEFAULT ARRAY[]::TEXT[]
 );
 
-CREATE INDEX idx_feedbacks_tenant ON feedbacks (tenant_id);
-CREATE INDEX idx_feedbacks_user ON feedbacks (user_id);
-CREATE INDEX idx_feedbacks_graph_edges ON feedbacks USING GIN (graph_edges);
-CREATE INDEX idx_feedbacks_metadata ON feedbacks USING GIN (metadata);
-CREATE INDEX idx_feedbacks_tags ON feedbacks USING GIN (tags);
+CREATE INDEX idx_messages_tenant ON messages (tenant_id);
+CREATE INDEX idx_messages_user ON messages (user_id);
+CREATE INDEX idx_messages_graph_edges ON messages USING GIN (graph_edges);
+CREATE INDEX idx_messages_metadata ON messages USING GIN (metadata);
+CREATE INDEX idx_messages_tags ON messages USING GIN (tags);
 
--- KV_STORE trigger for feedbacks
--- Trigger function to maintain KV_STORE for feedbacks
-CREATE OR REPLACE FUNCTION fn_feedbacks_kv_store_upsert()
+-- Embeddings for messages
+CREATE TABLE IF NOT EXISTS embeddings_messages (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    entity_id UUID NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    field_name VARCHAR(100) NOT NULL,
+    provider VARCHAR(50) NOT NULL DEFAULT 'openai',
+    model VARCHAR(100) NOT NULL DEFAULT 'text-embedding-3-small',
+    embedding vector(1536) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    -- Unique: one embedding per entity per field per provider
+    UNIQUE (entity_id, field_name, provider)
+);
+
+-- Index for entity lookup (get all embeddings for entity)
+CREATE INDEX idx_embeddings_messages_entity ON embeddings_messages (entity_id);
+
+-- Index for field + provider lookup
+CREATE INDEX idx_embeddings_messages_field_provider ON embeddings_messages (field_name, provider);
+
+-- HNSW index for vector similarity search (created in background)
+-- Note: This will be created by background thread after data load
+-- CREATE INDEX idx_embeddings_messages_vector_hnsw ON embeddings_messages
+-- USING hnsw (embedding vector_cosine_ops);
+
+-- KV_STORE trigger for messages
+-- Trigger function to maintain KV_STORE for messages
+CREATE OR REPLACE FUNCTION fn_messages_kv_store_upsert()
 RETURNS TRIGGER AS $$
 BEGIN
     IF (TG_OP = 'DELETE') THEN
@@ -306,7 +408,7 @@ BEGIN
             updated_at
         ) VALUES (
             NEW.id::VARCHAR,
-            'feedbacks',
+            'messages',
             NEW.id,
             NEW.tenant_id,
             NEW.user_id,
@@ -328,10 +430,10 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Create trigger
-DROP TRIGGER IF EXISTS trg_feedbacks_kv_store ON feedbacks;
-CREATE TRIGGER trg_feedbacks_kv_store
-AFTER INSERT OR UPDATE OR DELETE ON feedbacks
-FOR EACH ROW EXECUTE FUNCTION fn_feedbacks_kv_store_upsert();
+DROP TRIGGER IF EXISTS trg_messages_kv_store ON messages;
+CREATE TRIGGER trg_messages_kv_store
+AFTER INSERT OR UPDATE OR DELETE ON messages
+FOR EACH ROW EXECUTE FUNCTION fn_messages_kv_store_upsert();
 
 -- ======================================================================
 -- MOMENTS (Model: Moment)
@@ -440,503 +542,6 @@ DROP TRIGGER IF EXISTS trg_moments_kv_store ON moments;
 CREATE TRIGGER trg_moments_kv_store
 AFTER INSERT OR UPDATE OR DELETE ON moments
 FOR EACH ROW EXECUTE FUNCTION fn_moments_kv_store_upsert();
-
--- ======================================================================
--- PERSONS (Model: Person)
--- ======================================================================
-
-CREATE TABLE IF NOT EXISTS persons (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tenant_id VARCHAR(100) NOT NULL,
-    user_id VARCHAR(256),
-    name VARCHAR(256) NOT NULL,
-    role VARCHAR(256),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    deleted_at TIMESTAMP,
-    graph_edges JSONB DEFAULT '[]'::jsonb,
-    metadata JSONB DEFAULT '{}'::jsonb,
-    tags TEXT[] DEFAULT ARRAY[]::TEXT[]
-);
-
-CREATE INDEX idx_persons_tenant ON persons (tenant_id);
-CREATE INDEX idx_persons_user ON persons (user_id);
-CREATE INDEX idx_persons_graph_edges ON persons USING GIN (graph_edges);
-CREATE INDEX idx_persons_metadata ON persons USING GIN (metadata);
-CREATE INDEX idx_persons_tags ON persons USING GIN (tags);
-
--- KV_STORE trigger for persons
--- Trigger function to maintain KV_STORE for persons
-CREATE OR REPLACE FUNCTION fn_persons_kv_store_upsert()
-RETURNS TRIGGER AS $$
-BEGIN
-    IF (TG_OP = 'DELETE') THEN
-        -- Remove from KV_STORE on delete
-        DELETE FROM kv_store
-        WHERE entity_id = OLD.id;
-        RETURN OLD;
-    ELSIF (TG_OP = 'INSERT' OR TG_OP = 'UPDATE') THEN
-        -- Upsert to KV_STORE (O(1) lookup by entity_key)
-        INSERT INTO kv_store (
-            entity_key,
-            entity_type,
-            entity_id,
-            tenant_id,
-            user_id,
-            metadata,
-            graph_edges,
-            updated_at
-        ) VALUES (
-            NEW.id::VARCHAR,
-            'persons',
-            NEW.id,
-            NEW.tenant_id,
-            NEW.user_id,
-            NEW.metadata,
-            COALESCE(NEW.graph_edges, '[]'::jsonb),
-            CURRENT_TIMESTAMP
-        )
-        ON CONFLICT (tenant_id, entity_key)
-        DO UPDATE SET
-            entity_id = EXCLUDED.entity_id,
-            user_id = EXCLUDED.user_id,
-            metadata = EXCLUDED.metadata,
-            graph_edges = EXCLUDED.graph_edges,
-            updated_at = CURRENT_TIMESTAMP;
-
-        RETURN NEW;
-    END IF;
-END;
-$$ LANGUAGE plpgsql;
-
--- Create trigger
-DROP TRIGGER IF EXISTS trg_persons_kv_store ON persons;
-CREATE TRIGGER trg_persons_kv_store
-AFTER INSERT OR UPDATE OR DELETE ON persons
-FOR EACH ROW EXECUTE FUNCTION fn_persons_kv_store_upsert();
-
--- ======================================================================
--- SESSIONS (Model: Session)
--- ======================================================================
-
-CREATE TABLE IF NOT EXISTS sessions (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tenant_id VARCHAR(100) NOT NULL,
-    user_id VARCHAR(256),
-    name VARCHAR(256) NOT NULL,
-    mode TEXT,
-    description TEXT,
-    original_trace_id VARCHAR(256),
-    settings_overrides JSONB,
-    prompt TEXT,
-    agent_schema_uri VARCHAR(256),
-    message_count INTEGER,
-    total_tokens INTEGER,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    deleted_at TIMESTAMP,
-    graph_edges JSONB DEFAULT '[]'::jsonb,
-    metadata JSONB DEFAULT '{}'::jsonb,
-    tags TEXT[] DEFAULT ARRAY[]::TEXT[]
-);
-
-CREATE INDEX idx_sessions_tenant ON sessions (tenant_id);
-CREATE INDEX idx_sessions_user ON sessions (user_id);
-CREATE INDEX idx_sessions_graph_edges ON sessions USING GIN (graph_edges);
-CREATE INDEX idx_sessions_metadata ON sessions USING GIN (metadata);
-CREATE INDEX idx_sessions_tags ON sessions USING GIN (tags);
-
--- Embeddings for sessions
-CREATE TABLE IF NOT EXISTS embeddings_sessions (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    entity_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    field_name VARCHAR(100) NOT NULL,
-    provider VARCHAR(50) NOT NULL DEFAULT 'openai',
-    model VARCHAR(100) NOT NULL DEFAULT 'text-embedding-3-small',
-    embedding vector(1536) NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-    -- Unique: one embedding per entity per field per provider
-    UNIQUE (entity_id, field_name, provider)
-);
-
--- Index for entity lookup (get all embeddings for entity)
-CREATE INDEX idx_embeddings_sessions_entity ON embeddings_sessions (entity_id);
-
--- Index for field + provider lookup
-CREATE INDEX idx_embeddings_sessions_field_provider ON embeddings_sessions (field_name, provider);
-
--- HNSW index for vector similarity search (created in background)
--- Note: This will be created by background thread after data load
--- CREATE INDEX idx_embeddings_sessions_vector_hnsw ON embeddings_sessions
--- USING hnsw (embedding vector_cosine_ops);
-
--- KV_STORE trigger for sessions
--- Trigger function to maintain KV_STORE for sessions
-CREATE OR REPLACE FUNCTION fn_sessions_kv_store_upsert()
-RETURNS TRIGGER AS $$
-BEGIN
-    IF (TG_OP = 'DELETE') THEN
-        -- Remove from KV_STORE on delete
-        DELETE FROM kv_store
-        WHERE entity_id = OLD.id;
-        RETURN OLD;
-    ELSIF (TG_OP = 'INSERT' OR TG_OP = 'UPDATE') THEN
-        -- Upsert to KV_STORE (O(1) lookup by entity_key)
-        INSERT INTO kv_store (
-            entity_key,
-            entity_type,
-            entity_id,
-            tenant_id,
-            user_id,
-            metadata,
-            graph_edges,
-            updated_at
-        ) VALUES (
-            NEW.name::VARCHAR,
-            'sessions',
-            NEW.id,
-            NEW.tenant_id,
-            NEW.user_id,
-            NEW.metadata,
-            COALESCE(NEW.graph_edges, '[]'::jsonb),
-            CURRENT_TIMESTAMP
-        )
-        ON CONFLICT (tenant_id, entity_key)
-        DO UPDATE SET
-            entity_id = EXCLUDED.entity_id,
-            user_id = EXCLUDED.user_id,
-            metadata = EXCLUDED.metadata,
-            graph_edges = EXCLUDED.graph_edges,
-            updated_at = CURRENT_TIMESTAMP;
-
-        RETURN NEW;
-    END IF;
-END;
-$$ LANGUAGE plpgsql;
-
--- Create trigger
-DROP TRIGGER IF EXISTS trg_sessions_kv_store ON sessions;
-CREATE TRIGGER trg_sessions_kv_store
-AFTER INSERT OR UPDATE OR DELETE ON sessions
-FOR EACH ROW EXECUTE FUNCTION fn_sessions_kv_store_upsert();
-
--- ======================================================================
--- RESOURCES (Model: Resource)
--- ======================================================================
-
-CREATE TABLE IF NOT EXISTS resources (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tenant_id VARCHAR(100) NOT NULL,
-    user_id VARCHAR(256),
-    name VARCHAR(256),
-    uri VARCHAR(256),
-    ordinal INTEGER,
-    content TEXT,
-    timestamp TIMESTAMP,
-    category VARCHAR(256),
-    related_entities JSONB DEFAULT '{}'::jsonb,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    deleted_at TIMESTAMP,
-    graph_edges JSONB DEFAULT '[]'::jsonb,
-    metadata JSONB DEFAULT '{}'::jsonb,
-    tags TEXT[] DEFAULT ARRAY[]::TEXT[]
-);
-
-CREATE INDEX idx_resources_tenant ON resources (tenant_id);
-CREATE INDEX idx_resources_user ON resources (user_id);
-CREATE INDEX idx_resources_graph_edges ON resources USING GIN (graph_edges);
-CREATE INDEX idx_resources_metadata ON resources USING GIN (metadata);
-CREATE INDEX idx_resources_tags ON resources USING GIN (tags);
-
--- Embeddings for resources
-CREATE TABLE IF NOT EXISTS embeddings_resources (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    entity_id UUID NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
-    field_name VARCHAR(100) NOT NULL,
-    provider VARCHAR(50) NOT NULL DEFAULT 'openai',
-    model VARCHAR(100) NOT NULL DEFAULT 'text-embedding-3-small',
-    embedding vector(1536) NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-    -- Unique: one embedding per entity per field per provider
-    UNIQUE (entity_id, field_name, provider)
-);
-
--- Index for entity lookup (get all embeddings for entity)
-CREATE INDEX idx_embeddings_resources_entity ON embeddings_resources (entity_id);
-
--- Index for field + provider lookup
-CREATE INDEX idx_embeddings_resources_field_provider ON embeddings_resources (field_name, provider);
-
--- HNSW index for vector similarity search (created in background)
--- Note: This will be created by background thread after data load
--- CREATE INDEX idx_embeddings_resources_vector_hnsw ON embeddings_resources
--- USING hnsw (embedding vector_cosine_ops);
-
--- KV_STORE trigger for resources
--- Trigger function to maintain KV_STORE for resources
-CREATE OR REPLACE FUNCTION fn_resources_kv_store_upsert()
-RETURNS TRIGGER AS $$
-BEGIN
-    IF (TG_OP = 'DELETE') THEN
-        -- Remove from KV_STORE on delete
-        DELETE FROM kv_store
-        WHERE entity_id = OLD.id;
-        RETURN OLD;
-    ELSIF (TG_OP = 'INSERT' OR TG_OP = 'UPDATE') THEN
-        -- Upsert to KV_STORE (O(1) lookup by entity_key)
-        INSERT INTO kv_store (
-            entity_key,
-            entity_type,
-            entity_id,
-            tenant_id,
-            user_id,
-            metadata,
-            graph_edges,
-            updated_at
-        ) VALUES (
-            NEW.name::VARCHAR,
-            'resources',
-            NEW.id,
-            NEW.tenant_id,
-            NEW.user_id,
-            NEW.metadata,
-            COALESCE(NEW.graph_edges, '[]'::jsonb),
-            CURRENT_TIMESTAMP
-        )
-        ON CONFLICT (tenant_id, entity_key)
-        DO UPDATE SET
-            entity_id = EXCLUDED.entity_id,
-            user_id = EXCLUDED.user_id,
-            metadata = EXCLUDED.metadata,
-            graph_edges = EXCLUDED.graph_edges,
-            updated_at = CURRENT_TIMESTAMP;
-
-        RETURN NEW;
-    END IF;
-END;
-$$ LANGUAGE plpgsql;
-
--- Create trigger
-DROP TRIGGER IF EXISTS trg_resources_kv_store ON resources;
-CREATE TRIGGER trg_resources_kv_store
-AFTER INSERT OR UPDATE OR DELETE ON resources
-FOR EACH ROW EXECUTE FUNCTION fn_resources_kv_store_upsert();
-
--- ======================================================================
--- MESSAGES (Model: Message)
--- ======================================================================
-
-CREATE TABLE IF NOT EXISTS messages (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tenant_id VARCHAR(100) NOT NULL,
-    user_id VARCHAR(256),
-    content TEXT NOT NULL,
-    message_type VARCHAR(256),
-    session_id VARCHAR(256),
-    prompt TEXT,
-    model VARCHAR(256),
-    token_count INTEGER,
-    trace_id VARCHAR(256),
-    span_id VARCHAR(256),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    deleted_at TIMESTAMP,
-    graph_edges JSONB DEFAULT '[]'::jsonb,
-    metadata JSONB DEFAULT '{}'::jsonb,
-    tags TEXT[] DEFAULT ARRAY[]::TEXT[]
-);
-
-CREATE INDEX idx_messages_tenant ON messages (tenant_id);
-CREATE INDEX idx_messages_user ON messages (user_id);
-CREATE INDEX idx_messages_graph_edges ON messages USING GIN (graph_edges);
-CREATE INDEX idx_messages_metadata ON messages USING GIN (metadata);
-CREATE INDEX idx_messages_tags ON messages USING GIN (tags);
-
--- Embeddings for messages
-CREATE TABLE IF NOT EXISTS embeddings_messages (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    entity_id UUID NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-    field_name VARCHAR(100) NOT NULL,
-    provider VARCHAR(50) NOT NULL DEFAULT 'openai',
-    model VARCHAR(100) NOT NULL DEFAULT 'text-embedding-3-small',
-    embedding vector(1536) NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-    -- Unique: one embedding per entity per field per provider
-    UNIQUE (entity_id, field_name, provider)
-);
-
--- Index for entity lookup (get all embeddings for entity)
-CREATE INDEX idx_embeddings_messages_entity ON embeddings_messages (entity_id);
-
--- Index for field + provider lookup
-CREATE INDEX idx_embeddings_messages_field_provider ON embeddings_messages (field_name, provider);
-
--- HNSW index for vector similarity search (created in background)
--- Note: This will be created by background thread after data load
--- CREATE INDEX idx_embeddings_messages_vector_hnsw ON embeddings_messages
--- USING hnsw (embedding vector_cosine_ops);
-
--- KV_STORE trigger for messages
--- Trigger function to maintain KV_STORE for messages
-CREATE OR REPLACE FUNCTION fn_messages_kv_store_upsert()
-RETURNS TRIGGER AS $$
-BEGIN
-    IF (TG_OP = 'DELETE') THEN
-        -- Remove from KV_STORE on delete
-        DELETE FROM kv_store
-        WHERE entity_id = OLD.id;
-        RETURN OLD;
-    ELSIF (TG_OP = 'INSERT' OR TG_OP = 'UPDATE') THEN
-        -- Upsert to KV_STORE (O(1) lookup by entity_key)
-        INSERT INTO kv_store (
-            entity_key,
-            entity_type,
-            entity_id,
-            tenant_id,
-            user_id,
-            metadata,
-            graph_edges,
-            updated_at
-        ) VALUES (
-            NEW.id::VARCHAR,
-            'messages',
-            NEW.id,
-            NEW.tenant_id,
-            NEW.user_id,
-            NEW.metadata,
-            COALESCE(NEW.graph_edges, '[]'::jsonb),
-            CURRENT_TIMESTAMP
-        )
-        ON CONFLICT (tenant_id, entity_key)
-        DO UPDATE SET
-            entity_id = EXCLUDED.entity_id,
-            user_id = EXCLUDED.user_id,
-            metadata = EXCLUDED.metadata,
-            graph_edges = EXCLUDED.graph_edges,
-            updated_at = CURRENT_TIMESTAMP;
-
-        RETURN NEW;
-    END IF;
-END;
-$$ LANGUAGE plpgsql;
-
--- Create trigger
-DROP TRIGGER IF EXISTS trg_messages_kv_store ON messages;
-CREATE TRIGGER trg_messages_kv_store
-AFTER INSERT OR UPDATE OR DELETE ON messages
-FOR EACH ROW EXECUTE FUNCTION fn_messages_kv_store_upsert();
-
--- ======================================================================
--- FILES (Model: File)
--- ======================================================================
-
-CREATE TABLE IF NOT EXISTS files (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tenant_id VARCHAR(100) NOT NULL,
-    user_id VARCHAR(256),
-    name VARCHAR(256) NOT NULL,
-    uri VARCHAR(256) NOT NULL,
-    content TEXT,
-    timestamp VARCHAR(256),
-    size_bytes INTEGER,
-    mime_type VARCHAR(256),
-    processing_status VARCHAR(256),
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    deleted_at TIMESTAMP,
-    graph_edges JSONB DEFAULT '[]'::jsonb,
-    metadata JSONB DEFAULT '{}'::jsonb,
-    tags TEXT[] DEFAULT ARRAY[]::TEXT[]
-);
-
-CREATE INDEX idx_files_tenant ON files (tenant_id);
-CREATE INDEX idx_files_user ON files (user_id);
-CREATE INDEX idx_files_graph_edges ON files USING GIN (graph_edges);
-CREATE INDEX idx_files_metadata ON files USING GIN (metadata);
-CREATE INDEX idx_files_tags ON files USING GIN (tags);
-
--- Embeddings for files
-CREATE TABLE IF NOT EXISTS embeddings_files (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    entity_id UUID NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-    field_name VARCHAR(100) NOT NULL,
-    provider VARCHAR(50) NOT NULL DEFAULT 'openai',
-    model VARCHAR(100) NOT NULL DEFAULT 'text-embedding-3-small',
-    embedding vector(1536) NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-    -- Unique: one embedding per entity per field per provider
-    UNIQUE (entity_id, field_name, provider)
-);
-
--- Index for entity lookup (get all embeddings for entity)
-CREATE INDEX idx_embeddings_files_entity ON embeddings_files (entity_id);
-
--- Index for field + provider lookup
-CREATE INDEX idx_embeddings_files_field_provider ON embeddings_files (field_name, provider);
-
--- HNSW index for vector similarity search (created in background)
--- Note: This will be created by background thread after data load
--- CREATE INDEX idx_embeddings_files_vector_hnsw ON embeddings_files
--- USING hnsw (embedding vector_cosine_ops);
-
--- KV_STORE trigger for files
--- Trigger function to maintain KV_STORE for files
-CREATE OR REPLACE FUNCTION fn_files_kv_store_upsert()
-RETURNS TRIGGER AS $$
-BEGIN
-    IF (TG_OP = 'DELETE') THEN
-        -- Remove from KV_STORE on delete
-        DELETE FROM kv_store
-        WHERE entity_id = OLD.id;
-        RETURN OLD;
-    ELSIF (TG_OP = 'INSERT' OR TG_OP = 'UPDATE') THEN
-        -- Upsert to KV_STORE (O(1) lookup by entity_key)
-        INSERT INTO kv_store (
-            entity_key,
-            entity_type,
-            entity_id,
-            tenant_id,
-            user_id,
-            metadata,
-            graph_edges,
-            updated_at
-        ) VALUES (
-            NEW.id::VARCHAR,
-            'files',
-            NEW.id,
-            NEW.tenant_id,
-            NEW.user_id,
-            NEW.metadata,
-            COALESCE(NEW.graph_edges, '[]'::jsonb),
-            CURRENT_TIMESTAMP
-        )
-        ON CONFLICT (tenant_id, entity_key)
-        DO UPDATE SET
-            entity_id = EXCLUDED.entity_id,
-            user_id = EXCLUDED.user_id,
-            metadata = EXCLUDED.metadata,
-            graph_edges = EXCLUDED.graph_edges,
-            updated_at = CURRENT_TIMESTAMP;
-
-        RETURN NEW;
-    END IF;
-END;
-$$ LANGUAGE plpgsql;
-
--- Create trigger
-DROP TRIGGER IF EXISTS trg_files_kv_store ON files;
-CREATE TRIGGER trg_files_kv_store
-AFTER INSERT OR UPDATE OR DELETE ON files
-FOR EACH ROW EXECUTE FUNCTION fn_files_kv_store_upsert();
 
 -- ======================================================================
 -- ONTOLOGIES (Model: Ontology)
@@ -1128,10 +733,10 @@ AFTER INSERT OR UPDATE OR DELETE ON ontology_configs
 FOR EACH ROW EXECUTE FUNCTION fn_ontology_configs_kv_store_upsert();
 
 -- ======================================================================
--- DOMAIN_RESOURCES (Model: DomainResource)
+-- RESOURCES (Model: Resource)
 -- ======================================================================
 
-CREATE TABLE IF NOT EXISTS domain_resources (
+CREATE TABLE IF NOT EXISTS resources (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id VARCHAR(100) NOT NULL,
     user_id VARCHAR(256),
@@ -1150,16 +755,16 @@ CREATE TABLE IF NOT EXISTS domain_resources (
     tags TEXT[] DEFAULT ARRAY[]::TEXT[]
 );
 
-CREATE INDEX idx_domain_resources_tenant ON domain_resources (tenant_id);
-CREATE INDEX idx_domain_resources_user ON domain_resources (user_id);
-CREATE INDEX idx_domain_resources_graph_edges ON domain_resources USING GIN (graph_edges);
-CREATE INDEX idx_domain_resources_metadata ON domain_resources USING GIN (metadata);
-CREATE INDEX idx_domain_resources_tags ON domain_resources USING GIN (tags);
+CREATE INDEX idx_resources_tenant ON resources (tenant_id);
+CREATE INDEX idx_resources_user ON resources (user_id);
+CREATE INDEX idx_resources_graph_edges ON resources USING GIN (graph_edges);
+CREATE INDEX idx_resources_metadata ON resources USING GIN (metadata);
+CREATE INDEX idx_resources_tags ON resources USING GIN (tags);
 
--- Embeddings for domain_resources
-CREATE TABLE IF NOT EXISTS embeddings_domain_resources (
+-- Embeddings for resources
+CREATE TABLE IF NOT EXISTS embeddings_resources (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    entity_id UUID NOT NULL REFERENCES domain_resources(id) ON DELETE CASCADE,
+    entity_id UUID NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
     field_name VARCHAR(100) NOT NULL,
     provider VARCHAR(50) NOT NULL DEFAULT 'openai',
     model VARCHAR(100) NOT NULL DEFAULT 'text-embedding-3-small',
@@ -1172,19 +777,19 @@ CREATE TABLE IF NOT EXISTS embeddings_domain_resources (
 );
 
 -- Index for entity lookup (get all embeddings for entity)
-CREATE INDEX idx_embeddings_domain_resources_entity ON embeddings_domain_resources (entity_id);
+CREATE INDEX idx_embeddings_resources_entity ON embeddings_resources (entity_id);
 
 -- Index for field + provider lookup
-CREATE INDEX idx_embeddings_domain_resources_field_provider ON embeddings_domain_resources (field_name, provider);
+CREATE INDEX idx_embeddings_resources_field_provider ON embeddings_resources (field_name, provider);
 
 -- HNSW index for vector similarity search (created in background)
 -- Note: This will be created by background thread after data load
--- CREATE INDEX idx_embeddings_domain_resources_vector_hnsw ON embeddings_domain_resources
+-- CREATE INDEX idx_embeddings_resources_vector_hnsw ON embeddings_resources
 -- USING hnsw (embedding vector_cosine_ops);
 
--- KV_STORE trigger for domain_resources
--- Trigger function to maintain KV_STORE for domain_resources
-CREATE OR REPLACE FUNCTION fn_domain_resources_kv_store_upsert()
+-- KV_STORE trigger for resources
+-- Trigger function to maintain KV_STORE for resources
+CREATE OR REPLACE FUNCTION fn_resources_kv_store_upsert()
 RETURNS TRIGGER AS $$
 BEGIN
     IF (TG_OP = 'DELETE') THEN
@@ -1205,7 +810,7 @@ BEGIN
             updated_at
         ) VALUES (
             NEW.name::VARCHAR,
-            'domain_resources',
+            'resources',
             NEW.id,
             NEW.tenant_id,
             NEW.user_id,
@@ -1227,10 +832,10 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Create trigger
-DROP TRIGGER IF EXISTS trg_domain_resources_kv_store ON domain_resources;
-CREATE TRIGGER trg_domain_resources_kv_store
-AFTER INSERT OR UPDATE OR DELETE ON domain_resources
-FOR EACH ROW EXECUTE FUNCTION fn_domain_resources_kv_store_upsert();
+DROP TRIGGER IF EXISTS trg_resources_kv_store ON resources;
+CREATE TRIGGER trg_resources_kv_store
+AFTER INSERT OR UPDATE OR DELETE ON resources
+FOR EACH ROW EXECUTE FUNCTION fn_resources_kv_store_upsert();
 
 -- ======================================================================
 -- SCHEMAS (Model: Schema)
@@ -1337,183 +942,295 @@ AFTER INSERT OR UPDATE OR DELETE ON schemas
 FOR EACH ROW EXECUTE FUNCTION fn_schemas_kv_store_upsert();
 
 -- ======================================================================
--- SHARED_SESSIONS (Session sharing between users)
+-- SESSIONS (Model: Session)
 -- ======================================================================
--- Lightweight linking table for session sharing. NOT a CoreModel - no
--- graph edges, metadata, or embeddings. Just tracks who shared what with whom.
---
--- See: src/rem/models/entities/shared_session.py for full documentation
 
-CREATE TABLE IF NOT EXISTS shared_sessions (
+CREATE TABLE IF NOT EXISTS sessions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    session_id VARCHAR(256) NOT NULL,
-    owner_user_id VARCHAR(256) NOT NULL,
-    shared_with_user_id VARCHAR(256) NOT NULL,
-    tenant_id VARCHAR(100) NOT NULL DEFAULT 'default',
+    tenant_id VARCHAR(100) NOT NULL,
+    user_id VARCHAR(256),
+    name VARCHAR(256) NOT NULL,
+    mode TEXT,
+    description TEXT,
+    original_trace_id VARCHAR(256),
+    settings_overrides JSONB,
+    prompt TEXT,
+    agent_schema_uri VARCHAR(256),
+    message_count INTEGER,
+    total_tokens INTEGER,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     deleted_at TIMESTAMP,
-
-    -- Prevent duplicate shares (same session, same recipient, active only)
-    CONSTRAINT uq_active_share UNIQUE NULLS NOT DISTINCT (
-        tenant_id, session_id, owner_user_id, shared_with_user_id, deleted_at
-    )
+    graph_edges JSONB DEFAULT '[]'::jsonb,
+    metadata JSONB DEFAULT '{}'::jsonb,
+    tags TEXT[] DEFAULT ARRAY[]::TEXT[]
 );
 
--- Index for finding shares by recipient (who is sharing WITH me)
-CREATE INDEX IF NOT EXISTS idx_shared_sessions_recipient
-ON shared_sessions (tenant_id, shared_with_user_id)
-WHERE deleted_at IS NULL;
+CREATE INDEX idx_sessions_tenant ON sessions (tenant_id);
+CREATE INDEX idx_sessions_user ON sessions (user_id);
+CREATE INDEX idx_sessions_graph_edges ON sessions USING GIN (graph_edges);
+CREATE INDEX idx_sessions_metadata ON sessions USING GIN (metadata);
+CREATE INDEX idx_sessions_tags ON sessions USING GIN (tags);
 
--- Index for finding shares by owner (what have I shared)
-CREATE INDEX IF NOT EXISTS idx_shared_sessions_owner
-ON shared_sessions (tenant_id, owner_user_id)
-WHERE deleted_at IS NULL;
+-- Embeddings for sessions
+CREATE TABLE IF NOT EXISTS embeddings_sessions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    entity_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    field_name VARCHAR(100) NOT NULL,
+    provider VARCHAR(50) NOT NULL DEFAULT 'openai',
+    model VARCHAR(100) NOT NULL DEFAULT 'text-embedding-3-small',
+    embedding vector(1536) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
--- Index for finding shares by session
-CREATE INDEX IF NOT EXISTS idx_shared_sessions_session
-ON shared_sessions (tenant_id, session_id)
-WHERE deleted_at IS NULL;
+    -- Unique: one embedding per entity per field per provider
+    UNIQUE (entity_id, field_name, provider)
+);
 
--- Aggregation function: Get users sharing with me
-CREATE OR REPLACE FUNCTION fn_get_shared_with_me(
-    p_tenant_id VARCHAR(100),
-    p_user_id VARCHAR(256),
-    p_limit INTEGER DEFAULT 50,
-    p_offset INTEGER DEFAULT 0
-)
-RETURNS TABLE (
+-- Index for entity lookup (get all embeddings for entity)
+CREATE INDEX idx_embeddings_sessions_entity ON embeddings_sessions (entity_id);
+
+-- Index for field + provider lookup
+CREATE INDEX idx_embeddings_sessions_field_provider ON embeddings_sessions (field_name, provider);
+
+-- HNSW index for vector similarity search (created in background)
+-- Note: This will be created by background thread after data load
+-- CREATE INDEX idx_embeddings_sessions_vector_hnsw ON embeddings_sessions
+-- USING hnsw (embedding vector_cosine_ops);
+
+-- KV_STORE trigger for sessions
+-- Trigger function to maintain KV_STORE for sessions
+CREATE OR REPLACE FUNCTION fn_sessions_kv_store_upsert()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF (TG_OP = 'DELETE') THEN
+        -- Remove from KV_STORE on delete
+        DELETE FROM kv_store
+        WHERE entity_id = OLD.id;
+        RETURN OLD;
+    ELSIF (TG_OP = 'INSERT' OR TG_OP = 'UPDATE') THEN
+        -- Upsert to KV_STORE (O(1) lookup by entity_key)
+        INSERT INTO kv_store (
+            entity_key,
+            entity_type,
+            entity_id,
+            tenant_id,
+            user_id,
+            metadata,
+            graph_edges,
+            updated_at
+        ) VALUES (
+            NEW.name::VARCHAR,
+            'sessions',
+            NEW.id,
+            NEW.tenant_id,
+            NEW.user_id,
+            NEW.metadata,
+            COALESCE(NEW.graph_edges, '[]'::jsonb),
+            CURRENT_TIMESTAMP
+        )
+        ON CONFLICT (tenant_id, entity_key)
+        DO UPDATE SET
+            entity_id = EXCLUDED.entity_id,
+            user_id = EXCLUDED.user_id,
+            metadata = EXCLUDED.metadata,
+            graph_edges = EXCLUDED.graph_edges,
+            updated_at = CURRENT_TIMESTAMP;
+
+        RETURN NEW;
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create trigger
+DROP TRIGGER IF EXISTS trg_sessions_kv_store ON sessions;
+CREATE TRIGGER trg_sessions_kv_store
+AFTER INSERT OR UPDATE OR DELETE ON sessions
+FOR EACH ROW EXECUTE FUNCTION fn_sessions_kv_store_upsert();
+
+-- ======================================================================
+-- SHARED_SESSIONS (Model: SharedSession)
+-- ======================================================================
+
+CREATE TABLE IF NOT EXISTS shared_sessions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id VARCHAR(100) NOT NULL,
     user_id VARCHAR(256),
-    name VARCHAR(256),
+    session_id VARCHAR(256) NOT NULL,
+    owner_user_id VARCHAR(256) NOT NULL,
+    shared_with_user_id VARCHAR(256) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP,
+    graph_edges JSONB DEFAULT '[]'::jsonb,
+    metadata JSONB DEFAULT '{}'::jsonb,
+    tags TEXT[] DEFAULT ARRAY[]::TEXT[]
+);
+
+CREATE INDEX idx_shared_sessions_tenant ON shared_sessions (tenant_id);
+CREATE INDEX idx_shared_sessions_user ON shared_sessions (user_id);
+CREATE INDEX idx_shared_sessions_graph_edges ON shared_sessions USING GIN (graph_edges);
+CREATE INDEX idx_shared_sessions_metadata ON shared_sessions USING GIN (metadata);
+CREATE INDEX idx_shared_sessions_tags ON shared_sessions USING GIN (tags);
+
+-- KV_STORE trigger for shared_sessions
+-- Trigger function to maintain KV_STORE for shared_sessions
+CREATE OR REPLACE FUNCTION fn_shared_sessions_kv_store_upsert()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF (TG_OP = 'DELETE') THEN
+        -- Remove from KV_STORE on delete
+        DELETE FROM kv_store
+        WHERE entity_id = OLD.id;
+        RETURN OLD;
+    ELSIF (TG_OP = 'INSERT' OR TG_OP = 'UPDATE') THEN
+        -- Upsert to KV_STORE (O(1) lookup by entity_key)
+        INSERT INTO kv_store (
+            entity_key,
+            entity_type,
+            entity_id,
+            tenant_id,
+            user_id,
+            metadata,
+            graph_edges,
+            updated_at
+        ) VALUES (
+            NEW.id::VARCHAR,
+            'shared_sessions',
+            NEW.id,
+            NEW.tenant_id,
+            NEW.user_id,
+            NEW.metadata,
+            COALESCE(NEW.graph_edges, '[]'::jsonb),
+            CURRENT_TIMESTAMP
+        )
+        ON CONFLICT (tenant_id, entity_key)
+        DO UPDATE SET
+            entity_id = EXCLUDED.entity_id,
+            user_id = EXCLUDED.user_id,
+            metadata = EXCLUDED.metadata,
+            graph_edges = EXCLUDED.graph_edges,
+            updated_at = CURRENT_TIMESTAMP;
+
+        RETURN NEW;
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create trigger
+DROP TRIGGER IF EXISTS trg_shared_sessions_kv_store ON shared_sessions;
+CREATE TRIGGER trg_shared_sessions_kv_store
+AFTER INSERT OR UPDATE OR DELETE ON shared_sessions
+FOR EACH ROW EXECUTE FUNCTION fn_shared_sessions_kv_store_upsert();
+
+-- ======================================================================
+-- USERS (Model: User)
+-- ======================================================================
+
+CREATE TABLE IF NOT EXISTS users (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id VARCHAR(100) NOT NULL,
+    user_id VARCHAR(256),
+    name VARCHAR(256) NOT NULL,
     email VARCHAR(256),
-    message_count BIGINT,
-    session_count BIGINT,
-    first_message_at TIMESTAMP,
-    last_message_at TIMESTAMP
-) AS $$
+    role VARCHAR(256),
+    tier TEXT,
+    anonymous_ids TEXT[] DEFAULT ARRAY[]::TEXT[],
+    sec_policy JSONB DEFAULT '{}'::jsonb,
+    summary TEXT,
+    interests TEXT[] DEFAULT ARRAY[]::TEXT[],
+    preferred_topics TEXT[] DEFAULT ARRAY[]::TEXT[],
+    activity_level VARCHAR(256),
+    last_active_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP,
+    graph_edges JSONB DEFAULT '[]'::jsonb,
+    metadata JSONB DEFAULT '{}'::jsonb,
+    tags TEXT[] DEFAULT ARRAY[]::TEXT[]
+);
+
+CREATE INDEX idx_users_tenant ON users (tenant_id);
+CREATE INDEX idx_users_user ON users (user_id);
+CREATE INDEX idx_users_graph_edges ON users USING GIN (graph_edges);
+CREATE INDEX idx_users_metadata ON users USING GIN (metadata);
+CREATE INDEX idx_users_tags ON users USING GIN (tags);
+
+-- Embeddings for users
+CREATE TABLE IF NOT EXISTS embeddings_users (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    entity_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    field_name VARCHAR(100) NOT NULL,
+    provider VARCHAR(50) NOT NULL DEFAULT 'openai',
+    model VARCHAR(100) NOT NULL DEFAULT 'text-embedding-3-small',
+    embedding vector(1536) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    -- Unique: one embedding per entity per field per provider
+    UNIQUE (entity_id, field_name, provider)
+);
+
+-- Index for entity lookup (get all embeddings for entity)
+CREATE INDEX idx_embeddings_users_entity ON embeddings_users (entity_id);
+
+-- Index for field + provider lookup
+CREATE INDEX idx_embeddings_users_field_provider ON embeddings_users (field_name, provider);
+
+-- HNSW index for vector similarity search (created in background)
+-- Note: This will be created by background thread after data load
+-- CREATE INDEX idx_embeddings_users_vector_hnsw ON embeddings_users
+-- USING hnsw (embedding vector_cosine_ops);
+
+-- KV_STORE trigger for users
+-- Trigger function to maintain KV_STORE for users
+CREATE OR REPLACE FUNCTION fn_users_kv_store_upsert()
+RETURNS TRIGGER AS $$
 BEGIN
-    RETURN QUERY
-    WITH shared_with_me AS (
-        SELECT DISTINCT
-            ss.session_id,
-            ss.owner_user_id
-        FROM shared_sessions ss
-        WHERE ss.tenant_id = p_tenant_id
-          AND ss.shared_with_user_id = p_user_id
-          AND ss.deleted_at IS NULL
-    ),
-    message_stats AS (
-        SELECT
-            swm.owner_user_id,
-            COUNT(DISTINCT m.id) AS msg_count,
-            COUNT(DISTINCT m.session_id) AS sess_count,
-            MIN(m.created_at) AS first_msg,
-            MAX(m.created_at) AS last_msg
-        FROM shared_with_me swm
-        LEFT JOIN messages m ON m.session_id = swm.session_id
-            AND m.tenant_id = p_tenant_id
-            AND m.deleted_at IS NULL
-        GROUP BY swm.owner_user_id
-    )
-    SELECT
-        ms.owner_user_id AS user_id,
-        u.name,
-        u.email,
-        COALESCE(ms.msg_count, 0) AS message_count,
-        COALESCE(ms.sess_count, 0) AS session_count,
-        ms.first_msg AS first_message_at,
-        ms.last_msg AS last_message_at
-    FROM message_stats ms
-    LEFT JOIN users u ON u.user_id = ms.owner_user_id
-        AND u.tenant_id = p_tenant_id
-        AND u.deleted_at IS NULL
-    ORDER BY ms.last_msg DESC NULLS LAST, ms.msg_count DESC
-    LIMIT p_limit
-    OFFSET p_offset;
+    IF (TG_OP = 'DELETE') THEN
+        -- Remove from KV_STORE on delete
+        DELETE FROM kv_store
+        WHERE entity_id = OLD.id;
+        RETURN OLD;
+    ELSIF (TG_OP = 'INSERT' OR TG_OP = 'UPDATE') THEN
+        -- Upsert to KV_STORE (O(1) lookup by entity_key)
+        INSERT INTO kv_store (
+            entity_key,
+            entity_type,
+            entity_id,
+            tenant_id,
+            user_id,
+            metadata,
+            graph_edges,
+            updated_at
+        ) VALUES (
+            NEW.name::VARCHAR,
+            'users',
+            NEW.id,
+            NEW.tenant_id,
+            NEW.user_id,
+            NEW.metadata,
+            COALESCE(NEW.graph_edges, '[]'::jsonb),
+            CURRENT_TIMESTAMP
+        )
+        ON CONFLICT (tenant_id, entity_key)
+        DO UPDATE SET
+            entity_id = EXCLUDED.entity_id,
+            user_id = EXCLUDED.user_id,
+            metadata = EXCLUDED.metadata,
+            graph_edges = EXCLUDED.graph_edges,
+            updated_at = CURRENT_TIMESTAMP;
+
+        RETURN NEW;
+    END IF;
 END;
 $$ LANGUAGE plpgsql;
 
--- Count function for pagination
-CREATE OR REPLACE FUNCTION fn_count_shared_with_me(
-    p_tenant_id VARCHAR(100),
-    p_user_id VARCHAR(256)
-)
-RETURNS BIGINT AS $$
-BEGIN
-    RETURN (
-        SELECT COUNT(DISTINCT owner_user_id)
-        FROM shared_sessions
-        WHERE tenant_id = p_tenant_id
-          AND shared_with_user_id = p_user_id
-          AND deleted_at IS NULL
-    );
-END;
-$$ LANGUAGE plpgsql;
-
--- Get messages from sessions shared by a specific owner
-CREATE OR REPLACE FUNCTION fn_get_shared_messages(
-    p_tenant_id VARCHAR(100),
-    p_recipient_user_id VARCHAR(256),
-    p_owner_user_id VARCHAR(256),
-    p_limit INTEGER DEFAULT 50,
-    p_offset INTEGER DEFAULT 0
-)
-RETURNS TABLE (
-    id UUID,
-    content TEXT,
-    message_type VARCHAR(256),
-    session_id VARCHAR(256),
-    model VARCHAR(256),
-    token_count INTEGER,
-    created_at TIMESTAMP,
-    metadata JSONB
-) AS $$
-BEGIN
-    RETURN QUERY
-    SELECT
-        m.id,
-        m.content,
-        m.message_type,
-        m.session_id,
-        m.model,
-        m.token_count,
-        m.created_at,
-        m.metadata
-    FROM messages m
-    INNER JOIN shared_sessions ss ON ss.session_id = m.session_id
-        AND ss.tenant_id = m.tenant_id
-        AND ss.deleted_at IS NULL
-    WHERE m.tenant_id = p_tenant_id
-      AND ss.shared_with_user_id = p_recipient_user_id
-      AND ss.owner_user_id = p_owner_user_id
-      AND m.deleted_at IS NULL
-    ORDER BY m.created_at DESC
-    LIMIT p_limit
-    OFFSET p_offset;
-END;
-$$ LANGUAGE plpgsql;
-
--- Count shared messages for pagination
-CREATE OR REPLACE FUNCTION fn_count_shared_messages(
-    p_tenant_id VARCHAR(100),
-    p_recipient_user_id VARCHAR(256),
-    p_owner_user_id VARCHAR(256)
-)
-RETURNS BIGINT AS $$
-BEGIN
-    RETURN (
-        SELECT COUNT(m.id)
-        FROM messages m
-        INNER JOIN shared_sessions ss ON ss.session_id = m.session_id
-            AND ss.tenant_id = m.tenant_id
-            AND ss.deleted_at IS NULL
-        WHERE m.tenant_id = p_tenant_id
-          AND ss.shared_with_user_id = p_recipient_user_id
-          AND ss.owner_user_id = p_owner_user_id
-          AND m.deleted_at IS NULL
-    );
-END;
-$$ LANGUAGE plpgsql;
+-- Create trigger
+DROP TRIGGER IF EXISTS trg_users_kv_store ON users;
+CREATE TRIGGER trg_users_kv_store
+AFTER INSERT OR UPDATE OR DELETE ON users
+FOR EACH ROW EXECUTE FUNCTION fn_users_kv_store_upsert();
 
 -- ============================================================================
 -- RECORD MIGRATION
@@ -1528,9 +1245,8 @@ SET applied_at = CURRENT_TIMESTAMP,
 DO $$
 BEGIN
     RAISE NOTICE '============================================================';
-    RAISE NOTICE 'REM Model Schema Applied: 14 tables';
+    RAISE NOTICE 'REM Model Schema Applied: 12 tables';
     RAISE NOTICE '============================================================';
-    RAISE NOTICE '  ✓ domain_resources (1 embeddable fields)';
     RAISE NOTICE '  ✓ feedbacks';
     RAISE NOTICE '  ✓ files (1 embeddable fields)';
     RAISE NOTICE '  ✓ image_resources (1 embeddable fields)';
@@ -1538,11 +1254,10 @@ BEGIN
     RAISE NOTICE '  ✓ moments (1 embeddable fields)';
     RAISE NOTICE '  ✓ ontologies';
     RAISE NOTICE '  ✓ ontology_configs (1 embeddable fields)';
-    RAISE NOTICE '  ✓ persons';
     RAISE NOTICE '  ✓ resources (1 embeddable fields)';
     RAISE NOTICE '  ✓ schemas (1 embeddable fields)';
     RAISE NOTICE '  ✓ sessions (1 embeddable fields)';
-    RAISE NOTICE '  ✓ shared_sessions (session sharing)';
+    RAISE NOTICE '  ✓ shared_sessions';
     RAISE NOTICE '  ✓ users (1 embeddable fields)';
     RAISE NOTICE '';
     RAISE NOTICE 'Next: Run background indexes if needed';

@@ -24,7 +24,7 @@ const env = {
   region: config.region,
 };
 
-// Stack name prefix based on cluster name prefix (e.g., "siggy" -> "Siggy", "rem" -> "REM")
+// Stack name prefix based on cluster name prefix (e.g., "rem" -> "REM")
 const stackPrefix = config.clusterNamePrefix.toUpperCase();
 
 // Shared resources (ECR, IAM roles, etc.)
@@ -59,8 +59,8 @@ const appClusterA = new WorkerClusterStack(app, `${stackPrefix}ApplicationCluste
 // SPLIT STACK ARCHITECTURE (Resilient - use for new deployments)
 // ============================================================
 // These stacks are separate so if addons fail, cluster survives:
-// - Deploy cluster first: cdk deploy SIGGYEksClusterB
-// - Deploy addons after:  cdk deploy SIGGYEksAddonsB
+// - Deploy cluster first: cdk deploy REMEksClusterB
+// - Deploy addons after:  cdk deploy REMEksAddonsB
 //
 // Benefits:
 // - If addons fail (e.g., rate limiting), cluster stays intact

@@ -771,36 +771,115 @@ rem serve --log-level debug
 
 ### Database Management
 
-#### `rem db migrate` - Run Migrations
+REM uses a **code-as-source-of-truth** approach for database schema management. Pydantic models define the schema, and the database is kept in sync via diff-based migrations.
 
-Apply database migrations (install.sql and install_models.sql).
+#### Schema Management Philosophy
+
+**Two migration files only:**
+- `001_install.sql` - Core infrastructure (extensions, functions, KV store)
+- `002_install_models.sql` - Entity tables (auto-generated from Pydantic models)
+
+**No incremental migrations** (003, 004, etc.) - the models file is always regenerated to match code.
+
+#### `rem db schema generate` - Regenerate Schema SQL
+
+Generate `002_install_models.sql` from registered Pydantic models.
 
 ```bash
-# Apply all migrations
-rem db migrate
+# Regenerate from model registry
+rem db schema generate
 
-# Core infrastructure only (extensions, functions)
-rem db migrate --install
-
-# Entity tables only (Resource, Message, etc.)
-rem db migrate --models
-
-# Background indexes (HNSW for vectors)
-rem db migrate --background-indexes
-
-# Custom connection string
-rem db migrate --connection "postgresql://user:pass@host:5432/db"
-
-# Custom SQL directory
-rem db migrate --sql-dir /path/to/sql
+# Output: src/rem/sql/migrations/002_install_models.sql
 ```
 
-#### `rem db status` - Migration Status
+This generates:
+- CREATE TABLE statements for each registered entity
+- Embeddings tables (`embeddings_<table>`)
+- KV_STORE triggers for cache maintenance
+- Foreground indexes (GIN for JSONB, B-tree for lookups)
 
-Show applied migrations and execution times.
+#### `rem db diff` - Detect Schema Drift
+
+Compare Pydantic models against the live database using Alembic autogenerate.
 
 ```bash
-rem db status
+# Show differences
+rem db diff
+
+# CI mode: exit 1 if drift detected
+rem db diff --check
+
+# Generate migration SQL for changes
+rem db diff --generate
+```
+
+**Output shows:**
+- `+ ADD COLUMN` - Column in model but not in DB
+- `- DROP COLUMN` - Column in DB but not in model
+- `~ ALTER COLUMN` - Column type or constraints differ
+- `+ CREATE TABLE` / `- DROP TABLE` - Table additions/removals
+
+#### `rem db apply` - Apply SQL Directly
+
+Apply a SQL file directly to the database (bypasses migration tracking).
+
+```bash
+# Apply with audit logging (default)
+rem db apply src/rem/sql/migrations/002_install_models.sql
+
+# Preview without executing
+rem db apply --dry-run src/rem/sql/migrations/002_install_models.sql
+
+# Apply without audit logging
+rem db apply --no-log src/rem/sql/migrations/002_install_models.sql
+```
+
+#### `rem db migrate` - Initial Setup
+
+Apply standard migrations (001 + 002). Use for initial setup only.
+
+```bash
+# Apply infrastructure + entity tables
+rem db migrate
+
+# Include background indexes (HNSW for vectors)
+rem db migrate --background-indexes
+```
+
+#### Database Workflows
+
+**Initial Setup (Local):**
+```bash
+rem db schema generate   # Generate from models
+rem db migrate           # Apply 001 + 002
+rem db diff              # Verify no drift
+```
+
+**Adding/Modifying Models:**
+```bash
+# 1. Edit models in src/rem/models/entities/
+# 2. Register new models in src/rem/registry.py
+rem db schema generate   # Regenerate schema
+rem db diff              # See what changed
+rem db apply src/rem/sql/migrations/002_install_models.sql
+```
+
+**CI/CD Pipeline:**
+```bash
+rem db diff --check      # Fail build if drift detected
+```
+
+**Remote Database (Production/Staging):**
+```bash
+# Port-forward to cluster database
+kubectl port-forward -n <namespace> svc/rem-postgres-rw 5433:5432 &
+
+# Override connection for diff check
+POSTGRES__CONNECTION_STRING="postgresql://rem:rem@localhost:5433/rem" rem db diff
+
+# Apply changes if needed
+POSTGRES__CONNECTION_STRING="postgresql://rem:rem@localhost:5433/rem" \
+  rem db apply src/rem/sql/migrations/002_install_models.sql
 ```
 
 #### `rem db rebuild-cache` - Rebuild KV Cache
@@ -811,42 +890,12 @@ Rebuild KV_STORE cache from entity tables (after database restart or bulk import
 rem db rebuild-cache
 ```
 
-### Schema Management
-
-#### `rem db schema generate` - Generate SQL Schema
-
-Generate database schema from Pydantic models. Output goes directly to the migrations folder.
-
-```bash
-# Generate 002_install_models.sql from entity models (default)
-rem db schema generate --models src/rem/models/entities
-
-# This writes to: src/rem/sql/migrations/002_install_models.sql
-# Then apply with: rem db migrate
-```
-
-**Workflow for adding new models:**
-1. Add/modify models in `src/rem/models/entities/`
-2. Run `rem db schema generate -m src/rem/models/entities`
-3. Run `rem db migrate` to apply changes
-
-#### `rem db schema indexes` - Generate Background Indexes
-
-Generate SQL for background index creation (HNSW for vectors).
-
-```bash
-# Generate background_indexes.sql
-rem db schema indexes \
-  --models src/rem/models/entities \
-  --output rem/src/rem/sql/background_indexes.sql
-```
-
 #### `rem db schema validate` - Validate Models
 
-Validate Pydantic models for schema generation.
+Validate registered Pydantic models for schema generation.
 
 ```bash
-rem db schema validate --models src/rem/models/entities
+rem db schema validate
 ```
 
 ### File Processing

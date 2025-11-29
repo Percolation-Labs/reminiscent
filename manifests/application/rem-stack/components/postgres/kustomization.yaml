@@ -1,7 +1,7 @@
 # PostgreSQL Component (CloudNativePG)
 #
 # Separate from main app - can be deployed independently
-# SQL init scripts generated via: ./manifests/generate-sql-configmap.sh
+# SQL init scripts generated via: rem cluster generate
 
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization

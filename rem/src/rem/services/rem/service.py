@@ -13,6 +13,31 @@ Design:
 - All queries pushed down to Postgres for performance
 - Model schema inspection for validation only
 - Exceptions for missing fields/embeddings
+
+TODO: Staged Plan Execution
+- Implement execute_staged_plan() method for multi-stage query execution
+- Each stage can be:
+  1. Static query (query field): Execute REM dialect directly
+  2. Dynamic query (intent field): LLM interprets intent + previous results to build query
+- Flow for dynamic stages:
+  1. Gather results from depends_on stages (from previous_results or current execution)
+  2. Pass intent + previous results to LLM (like ask_rem but with context)
+  3. LLM generates REM query based on what it learned from previous stages
+  4. Execute generated query
+  5. Store results in stage_results for client to use in continuation
+- Multi-turn continuation:
+  - Client passes previous_results back from response's stage_results
+  - Client sets resume_from_stage to skip already-executed stages
+  - Server uses previous_results as context for depends_on lookups
+- Use cases:
+  - LOOKUP "Sarah" → intent: "find her team members" (LLM sees Sarah's graph_edges, builds TRAVERSE)
+  - SEARCH "API docs" → intent: "get authors" (LLM extracts author refs, builds LOOKUP)
+  - Complex graph exploration with LLM-driven navigation
+- API: POST /api/v1/query with:
+  - mode="staged-plan"
+  - plan=[{stage, query|intent, name, depends_on}]
+  - previous_results=[{stage, name, query_executed, results, count}] (for continuation)
+  - resume_from_stage=N (to skip completed stages)
 """
 
 from typing import Any

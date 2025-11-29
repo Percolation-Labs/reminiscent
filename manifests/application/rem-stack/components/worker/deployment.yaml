@@ -70,26 +70,16 @@ spec:
             name: rem-queues  # FILE_PROCESSING_QUEUE_URL
 
         env:
-        # Map FILE_PROCESSING_QUEUE_URL from ConfigMap to SQS__QUEUE_URL
+        # Map queue URL from ConfigMap to REM's expected env var
         - name: SQS__QUEUE_URL
           valueFrom:
             configMapKeyRef:
               name: rem-queues
               key: FILE_PROCESSING_QUEUE_URL
 
-        # AWS Region
-        - name: AWS_REGION
-          value: us-east-1
-        - name: SQS__REGION
-          value: us-east-1
-
         # Use regional STS endpoints (faster)
         - name: AWS_STS_REGIONAL_ENDPOINTS
           value: regional
-
-        # S3 Region (bucket name comes from rem-config ConfigMap)
-        - name: S3__REGION
-          value: us-east-1
 
         # Resource limits
         resources:

@@ -1,13 +1,13 @@
 """
-Shared Sessions endpoints.
+Session sharing endpoints.
 
 Enables session sharing between users for collaborative access to conversation history.
 
 Endpoints:
-    POST   /api/v1/sessions/{session_id}/share           - Share a session with another user
-    DELETE /api/v1/sessions/{session_id}/share/{user_id} - Revoke a share (soft delete)
-    GET    /api/v1/shared-with-me                        - Get users sharing sessions with you
-    GET    /api/v1/shared-with-me/{user_id}/messages     - Get messages from a user's shared sessions
+    POST   /api/v1/sessions/{session_id}/share                      - Share a session with another user
+    DELETE /api/v1/sessions/{session_id}/share/{user_id}            - Revoke a share (soft delete)
+    GET    /api/v1/sessions/shared-with-me                          - Get users sharing sessions with you
+    GET    /api/v1/sessions/shared-with-me/{user_id}/messages       - Get messages from a user's shared sessions
 
 See src/rem/models/entities/shared_session.py for full documentation.
 """
@@ -82,7 +82,7 @@ class ShareSessionResponse(BaseModel):
     "/sessions/{session_id}/share",
     response_model=ShareSessionResponse,
     status_code=201,
-    tags=["shared-sessions"],
+    tags=["sessions"],
 )
 async def share_session(
     request: Request,
@@ -174,7 +174,7 @@ async def share_session(
 @router.delete(
     "/sessions/{session_id}/share/{shared_with_user_id}",
     status_code=200,
-    tags=["shared-sessions"],
+    tags=["sessions"],
 )
 async def remove_session_share(
     request: Request,
@@ -247,9 +247,9 @@ async def remove_session_share(
 
 
 @router.get(
-    "/shared-with-me",
+    "/sessions/shared-with-me",
     response_model=SharedWithMeResponse,
-    tags=["shared-sessions"],
+    tags=["sessions"],
 )
 async def get_shared_with_me(
     request: Request,
@@ -325,9 +325,9 @@ async def get_shared_with_me(
 
 
 @router.get(
-    "/shared-with-me/{owner_user_id}/messages",
+    "/sessions/shared-with-me/{owner_user_id}/messages",
     response_model=SharedMessagesResponse,
-    tags=["shared-sessions"],
+    tags=["sessions"],
 )
 async def get_shared_messages(
     request: Request,

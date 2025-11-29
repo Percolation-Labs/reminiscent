@@ -17,7 +17,7 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 # Single namespace for all application components
-namespace: siggy
+namespace: rem
 
 # Common labels applied to all resources
 commonLabels:
@@ -33,7 +33,7 @@ resources:
   - ../components/api
   - ../components/worker
   # NOTE: dreaming-worker disabled for MVP - needs fixes:
-  #   - Hardcoded namespace (rem-app vs siggy)
+  #   - Hardcoded namespace (needs alignment with kustomize namespace)
   #   - IRSA placeholder ${REM_WORKER_ROLE_ARN} needs Pod Identity
   #   - Secret references need alignment
   # - ../components/dreaming-worker
@@ -51,14 +51,44 @@ configMapGenerator:
       - BUILD_DATE=unset
       - ENVIRONMENT=base
 
-  # Application config - required by deployments
-  # Override in environment overlays (staging, prod)
+  # ==========================================================================
+  # rem-config: Single source of truth for application configuration
+  # ==========================================================================
+  # Override values in environment overlays (staging, prod) using behavior: merge
+  #
+  # Categories:
+  #   - Environment: ENVIRONMENT, LOG_LEVEL
+  #   - AWS: AWS_REGION, S3__BUCKET_NAME, S3__REGION
+  #   - Database: POSTGRES__POOL_MIN_SIZE, POSTGRES__POOL_MAX_SIZE
+  #   - Observability: OTEL__ENABLED, OTEL_COLLECTOR_ENDPOINT, OTEL_SERVICE_NAME
+  #   - LLM: LLM__DEFAULT_MODEL
+  #   - Auth: AUTH__ENABLED
+  #   - Custom Models: MODELS__IMPORT_MODULES
+  #
+  # Secrets (API keys, passwords) are NOT in ConfigMap - use ExternalSecrets
+  # ==========================================================================
   - name: rem-config
     literals:
+      # Environment
       - ENVIRONMENT=base
+      - LOG_LEVEL=info
+      # AWS
       - AWS_REGION=us-east-1
-      - S3__BUCKET_NAME=unset  # Override in overlay
-      - OTEL_COLLECTOR_ENDPOINT=http://localhost:4317
+      - S3__BUCKET_NAME=unset
+      - S3__REGION=us-east-1
+      # Database pool settings (connection string is built from secrets in deployment)
+      - POSTGRES__POOL_MIN_SIZE=5
+      - POSTGRES__POOL_MAX_SIZE=20
+      # Observability - override OTEL_COLLECTOR_ENDPOINT in overlays
+      - OTEL__ENABLED=true
+      - OTEL_COLLECTOR_ENDPOINT=http://localhost:4318
+      - OTEL_SERVICE_NAME=rem-api
+      # LLM defaults
+      - LLM__DEFAULT_MODEL=openai:gpt-4.1
+      # Auth
+      - AUTH__ENABLED=false
+      # Custom models (for downstream apps)
+      - MODELS__IMPORT_MODULES=models
 
 # Generate labels for version tracking
 labels:

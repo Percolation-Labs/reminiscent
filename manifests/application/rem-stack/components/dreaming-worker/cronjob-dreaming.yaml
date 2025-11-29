@@ -71,7 +71,7 @@ spec:
               value: "text-embedding-3-small"
 
             - name: REM_DEFAULT_MODEL
-              value: "gpt-4o"
+              value: "gpt-4.1"
 
             - name: REM_LOOKBACK_HOURS
               value: "24"
@@ -268,7 +268,7 @@ spec:
               value: "text-embedding-3-small"
 
             - name: REM_DEFAULT_MODEL
-              value: "gpt-4o"
+              value: "gpt-4.1"
 
             - name: OPENAI_API_KEY
               valueFrom:

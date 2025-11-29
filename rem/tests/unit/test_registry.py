@@ -472,3 +472,80 @@ properties:
 
             schema = load_agent_schema("custom-eval")
             assert schema["description"] == "Custom evaluator"
+
+
+class TestModelsSettings:
+    """Test MODELS__IMPORT_MODULES settings for downstream model discovery."""
+
+    def test_models_settings_default_empty(self):
+        """ModelsSettings defaults to empty import_modules."""
+        from rem.settings import ModelsSettings
+
+        settings = ModelsSettings()
+        assert settings.import_modules == ""
+        assert settings.module_list == []
+
+    def test_models_settings_single_module(self):
+        """ModelsSettings parses single module correctly."""
+        from rem.settings import ModelsSettings
+
+        settings = ModelsSettings(import_modules="models")
+        assert settings.module_list == ["models"]
+
+    def test_models_settings_multiple_modules(self):
+        """ModelsSettings parses semicolon-separated modules."""
+        from rem.settings import ModelsSettings
+
+        settings = ModelsSettings(import_modules="models;myapp.entities;custom.models")
+        assert settings.module_list == ["models", "myapp.entities", "custom.models"]
+
+    def test_models_settings_filters_empty_strings(self):
+        """ModelsSettings filters out empty strings from module list."""
+        from rem.settings import ModelsSettings
+
+        settings = ModelsSettings(import_modules="models;;another;")
+        assert "" not in settings.module_list
+        assert settings.module_list == ["models", "another"]
+
+    def test_models_settings_strips_whitespace(self):
+        """ModelsSettings strips whitespace from module names."""
+        from rem.settings import ModelsSettings
+
+        settings = ModelsSettings(import_modules="  models ; another  ;  third  ")
+        assert settings.module_list == ["models", "another", "third"]
+
+    def test_import_model_modules_function(self, monkeypatch):
+        """_import_model_modules successfully imports valid modules."""
+        from rem.cli.commands.schema import _import_model_modules
+        from rem.settings import ModelsSettings
+
+        # Create a settings object with a valid module
+        mock_settings = ModelsSettings(import_modules="json")
+
+        # Patch the global settings.models
+        import rem.settings
+        original_models = rem.settings.settings.models
+        try:
+            # Need to patch the models attribute at module level
+            object.__setattr__(rem.settings.settings, "models", mock_settings)
+            imported = _import_model_modules()
+            assert "json" in imported
+        finally:
+            object.__setattr__(rem.settings.settings, "models", original_models)
+
+    def test_import_model_modules_handles_missing_module(self, monkeypatch):
+        """_import_model_modules gracefully handles missing modules."""
+        from rem.cli.commands.schema import _import_model_modules
+        from rem.settings import ModelsSettings
+
+        # Create a settings object with a nonexistent module
+        mock_settings = ModelsSettings(import_modules="nonexistent_module_xyz")
+
+        import rem.settings
+        original_models = rem.settings.settings.models
+        try:
+            object.__setattr__(rem.settings.settings, "models", mock_settings)
+            imported = _import_model_modules()
+            assert "nonexistent_module_xyz" not in imported
+        finally:
+            object.__setattr__(rem.settings.settings, "models", original_models)

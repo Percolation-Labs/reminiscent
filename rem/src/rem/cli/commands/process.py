@@ -12,12 +12,12 @@ from rem.services.content import ContentService
 
 @click.command(name="ingest")
 @click.argument("file_path", type=click.Path(exists=True))
-@click.option("--user-id", required=True, help="User ID to own the file")
+@click.option("--user-id", default=None, help="User ID to scope file privately (default: public/shared)")
 @click.option("--category", help="Optional file category")
 @click.option("--tags", help="Optional comma-separated tags")
 def process_ingest(
     file_path: str,
-    user_id: str,
+    user_id: str | None,
     category: str | None,
     tags: str | None,
 ):
@@ -32,8 +32,9 @@ def process_ingest(
     5. Creates a File entity record.
 
     Examples:
-        rem process ingest sample.pdf --user-id user-123
-        rem process ingest contract.docx --user-id user-123 --category legal --tags contract,2023
+        rem process ingest sample.pdf
+        rem process ingest contract.docx --category legal --tags contract,2023
+        rem process ingest agent.yaml  # Auto-detects kind=agent, saves to schemas table
     """
     import asyncio
     from ...services.content import ContentService
@@ -56,7 +57,8 @@ def process_ingest(
 
             tag_list = tags.split(",") if tags else None
 
-            logger.info(f"Ingesting file: {file_path} for user: {user_id}")
+            scope_msg = f"user: {user_id}" if user_id else "public"
+            logger.info(f"Ingesting file: {file_path} ({scope_msg})")
             result = await service.ingest_file(
                 file_uri=file_path,
                 user_id=user_id,
@@ -65,11 +67,15 @@ def process_ingest(
                 is_local_server=True, # CLI is local
             )
 
-            if result.get("processing_status") == "completed":
-                logger.success(f"File ingested successfully: {result['file_name']}")
+            # Handle schema ingestion (agents/evaluators)
+            if result.get("schema_name"):
+                logger.success(f"Schema ingested: {result['schema_name']} (kind={result.get('kind', 'agent')})")
+                logger.info(f"Version: {result.get('version', '1.0.0')}")
+            # Handle file ingestion
+            elif result.get("processing_status") == "completed":
+                logger.success(f"File ingested: {result['file_name']}")
                 logger.info(f"File ID: {result['file_id']}")
                 logger.info(f"Resources created: {result['resources_created']}")
-                logger.info(f"Status: {result['processing_status']}")
             else:
                 logger.error(f"Ingestion failed: {result.get('message', 'Unknown error')}")
                 sys.exit(1)

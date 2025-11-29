@@ -4,7 +4,9 @@
 
 services:
   postgres:
-    image: pgvector/pgvector:pg18
+    # Custom image with pgvector + pg_net extensions
+    # Alternative: pgvector/pgvector:pg18 (works but without pg_net - optional extensions will be skipped)
+    image: percolationlabs/rem-pg:18
     container_name: rem-postgres-test
     environment:
       POSTGRES_DB: rem
@@ -18,6 +20,13 @@ services:
       - ./sql/migrations:/docker-entrypoint-initdb.d:ro
       # Persistent data volume (PostgreSQL 18 format)
       - postgres_data_test:/var/lib/postgresql
+    # pg_net requires shared_preload_libraries (safe to include even if not using pg_net)
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_net
+      - -c
+      - pg_net.database_name=rem
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U rem -d rem"]
       interval: 5s

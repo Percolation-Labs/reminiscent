@@ -26,10 +26,10 @@ Endpoints:
 - /health                    : Health check
 - /api/v1/mcp                : MCP endpoint (HTTP transport)
 - /api/v1/chat/completions   : OpenAI-compatible chat completions (streaming & non-streaming)
-- /api/v1/query              : REM query execution (TODO)
+- /api/v1/query              : REM query execution (rem-dialect or natural-language)
 - /api/v1/resources          : Resource CRUD (TODO)
 - /api/v1/moments            : Moment CRUD (TODO)
-- /api/auth/*                : OAuth/OIDC authentication (TODO)
+- /api/auth/*                : OAuth/OIDC authentication
 - /docs                      : OpenAPI documentation
 
 Headers → AgentContext Mapping:
@@ -372,6 +372,7 @@ def create_app() -> FastAPI:
     from .routers.feedback import router as feedback_router
     from .routers.admin import router as admin_router
     from .routers.shared_sessions import router as shared_sessions_router
+    from .routers.query import router as query_router
 
     app.include_router(chat_router)
     app.include_router(models_router)
@@ -379,6 +380,7 @@ def create_app() -> FastAPI:
     app.include_router(feedback_router)
     app.include_router(admin_router)
     app.include_router(shared_sessions_router)
+    app.include_router(query_router)
 
     # Register auth router (if enabled)
     if settings.auth.enabled:

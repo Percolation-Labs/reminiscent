@@ -2,6 +2,7 @@
 PostgreSQL service for CloudNativePG database operations.
 """
 
+from .diff_service import DiffService, SchemaDiff
 from .repository import Repository
 from .service import PostgresService
 
@@ -20,4 +21,4 @@ def get_postgres_service() -> PostgresService | None:
     return PostgresService()
 
 
-__all__ = ["PostgresService", "get_postgres_service", "Repository"]
+__all__ = ["PostgresService", "get_postgres_service", "Repository", "DiffService", "SchemaDiff"]

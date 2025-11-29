@@ -222,18 +222,16 @@ kubectl apply -k manifests/application/rem-stack/components/postgres
 
 ### SQL Init Scripts
 
-PostgreSQL initialization scripts are managed via ConfigMap generator:
+PostgreSQL initialization scripts are included when generating cluster manifests:
 
 ```bash
-# Generate ConfigMap from SQL migrations
-./manifests/generate-sql-configmap.sh > \
-  manifests/application/rem-stack/components/postgres/postgres-init-configmap.yaml
+# Generate all manifests (includes SQL ConfigMap)
+rem cluster generate
 
-# The script:
-# - Reads rem/sql/migrations/*.sql
-# - Generates ConfigMap with all scripts
-# - Auto-splits if size exceeds 800KB (Kubernetes limit: 1MB)
-# - Outputs size statistics
+# The command generates:
+# - ArgoCD Application manifests
+# - ClusterSecretStore configurations
+# - SQL init ConfigMap (from rem/sql/migrations/*.sql)
 ```
 
 ## Features

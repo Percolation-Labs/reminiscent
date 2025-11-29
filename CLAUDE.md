@@ -16,7 +16,8 @@ cd rem
 pytest tests/integration/ -v -m "not llm"  # Run non-LLM tests
 ./scripts/run_mypy.sh                       # Type checking
 rem ask "query"                             # Test queries
-rem db migrate                              # Apply migrations
+rem db diff                                 # Check schema drift
+rem db schema generate                      # Regenerate schema SQL
 ```
 
 ---
@@ -112,16 +113,31 @@ remstack/
 
 - MCP is NOT separate - mounted in FastAPI
 - Data scoped by `user_id` (not `tenant_id`)
-- Schema evolution via Pydantic models (no Alembic)
+- Schema evolution via Pydantic models + Alembic diff
 - OTEL disabled locally, enabled in prod via `OTEL__ENABLED=true`
 
-**Schema Workflow (when adding/modifying entity models):**
+**Schema Management (code is source of truth):**
+
+Two migration files only:
+- `001_install.sql` - Core infrastructure (extensions, functions, KV store)
+- `002_install_models.sql` - Entity tables (auto-generated from models)
+
+No incremental migrations (003, 004, etc.) - regenerate from code.
+
 ```bash
+# Adding/modifying models:
 # 1. Edit models in src/rem/models/entities/
-# 2. Regenerate migration file
-rem db schema generate -m src/rem/models/entities
-# 3. Apply to database
-rem db migrate
+# 2. Register new models in src/rem/registry.py
+rem db schema generate   # Regenerate 002_install_models.sql
+rem db diff              # See what changed
+rem db apply src/rem/sql/migrations/002_install_models.sql
+
+# CI/CD - detect drift:
+rem db diff --check      # Exit 1 if drift detected
+
+# Remote database (production/staging):
+kubectl port-forward -n <namespace> svc/rem-postgres-rw 5433:5432 &
+POSTGRES__CONNECTION_STRING="postgresql://rem:rem@localhost:5433/rem" rem db diff
 ```
 
 ---
@@ -214,12 +230,8 @@ uv publish --token $PYPI_TOKEN
 
 ## Active Migrations
 
-### tenant_id → user_id (90% complete)
+### tenant_id → user_id (Complete)
 
 Data now scoped by `user_id`, not `tenant_id`. The `tenant_id` column remains for backwards compatibility but is set to `user_id` value.
 
-**Migration file:** `src/rem/sql/migrations/006_tenant_to_user_migration.sql`
-
-**Remaining:** Dreaming worker signatures, integration tests.
-
-See `rem/REFACTORING_TODO.md` for tracking.
+Schema changes are now managed via the diff-based workflow - no incremental migration files.

@@ -1,0 +1,46 @@
+#!/bin/bash
+# =============================================================================
+# Pre-commit Hook: Run Unit Tests
+# =============================================================================
+# Runs unit tests before allowing commits. Fails fast on any test failure.
+#
+# Install: git config core.hooksPath .githooks
+# =============================================================================
+
+set -e
+
+echo "=== Pre-commit: Running unit tests ==="
+
+# Get the repo root
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+# Check if rem has changes
+REM_CHANGED=$(git diff --cached --name-only -- 'rem/' | wc -l | tr -d ' ')
+
+# Run backend tests if rem changed
+if [ "$REM_CHANGED" -gt 0 ]; then
+    echo ""
+    echo ">>> REM changes detected - running pytest..."
+    cd "$REPO_ROOT/rem"
+
+    # Sync dependencies if needed
+    if [ ! -d ".venv" ]; then
+        echo "Installing dependencies..."
+        uv sync --frozen --quiet
+    fi
+
+    # Run unit tests (skip integration tests in pre-commit for speed)
+    uv run pytest -q tests/unit/ 2>/dev/null || {
+        echo "Unit tests failed!"
+        exit 1
+    }
+    echo "✓ Unit tests passed"
+fi
+
+# If nothing changed in rem dir, skip tests
+if [ "$REM_CHANGED" -eq 0 ]; then
+    echo "No REM changes - skipping unit tests"
+fi
+
+echo ""
+echo "=== Pre-commit: OK ==="

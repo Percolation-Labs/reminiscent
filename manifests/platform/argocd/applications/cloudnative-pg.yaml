@@ -1,3 +1,10 @@
+# CloudNativePG Operator - ArgoCD Application
+#
+# Installs the CloudNativePG operator for managing PostgreSQL clusters.
+# Uses HTTPS chart (not OCI) for reliability.
+#
+# Note: PodMonitor is disabled by default. Enable only if Prometheus Operator is installed.
+
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -7,25 +14,36 @@ metadata:
     - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
+
   source:
-    repoURL: oci://ghcr.io/cloudnative-pg/charts
+    # Use HTTPS chart repo
+    repoURL: https://cloudnative-pg.github.io/charts
     chart: cloudnative-pg
-    targetRevision: 0.26.1
+    targetRevision: "0.26.1"
+
     helm:
       valuesObject:
+        # Install CRDs
         crds:
           create: true
+
+        # Monitoring - DISABLED by default
+        # Enable only if Prometheus Operator (PodMonitor CRD) is installed
         monitoring:
-          podMonitorEnabled: true
+          podMonitorEnabled: false
           grafanaDashboard:
             create: false
+
+        # Propagate external-secrets labels to pods
         config:
           data:
             INHERITED_ANNOTATIONS: "external-secrets.io/*"
             INHERITED_LABELS: "app.kubernetes.io/*"
+
   destination:
     server: https://kubernetes.default.svc
     namespace: cnpg-system
+
   syncPolicy:
     automated:
       prune: true

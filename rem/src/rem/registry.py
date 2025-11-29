@@ -123,6 +123,7 @@ class ModelRegistry:
             return
 
         from .models.entities import (
+            Feedback,
             File,
             ImageResource,
             Message,
@@ -131,19 +132,24 @@ class ModelRegistry:
             OntologyConfig,
             Resource,
             Schema,
+            Session,
+            SharedSession,
             User,
         )
 
         core_models = [
-            Resource,
+            Feedback,
+            File,
             ImageResource,
             Message,
-            User,
-            File,
             Moment,
-            Schema,
             Ontology,
             OntologyConfig,
+            Resource,
+            Schema,
+            Session,
+            SharedSession,
+            User,
         ]
 
         for model in core_models:

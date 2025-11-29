@@ -1,0 +1,36 @@
+# Minimal test cluster for pg_net extension (baked into custom image)
+# This is a temporary test file - delete after verification
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: pg-net-test
+  namespace: rem
+spec:
+  instances: 1
+
+  # Custom PostgreSQL 18 image with pg_net baked in
+  imageName: percolationlabs/rem-pg:18
+
+  bootstrap:
+    initdb:
+      database: testdb
+      owner: testuser
+      secret:
+        name: rem-database-credentials
+
+  storage:
+    size: 1Gi
+    storageClass: gp3
+
+  postgresql:
+    # pg_net requires shared_preload_libraries
+    shared_preload_libraries:
+      - pg_net
+
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"

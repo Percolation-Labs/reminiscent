@@ -348,8 +348,27 @@ results = await service.vector_search(
 
 ### Initialize Service
 
+There are two ways to initialize the PostgresService:
+
+**Option 1: Factory function (recommended for apps using remdb as a library)**
+
 ```python
-from rem.services.postgres import PostgresService, Repository
+from rem.services.postgres import get_postgres_service
+
+# Uses POSTGRES__CONNECTION_STRING from environment
+pg = get_postgres_service()
+if pg is None:
+    raise RuntimeError("Database not configured - set POSTGRES__CONNECTION_STRING")
+
+await pg.connect()
+# ... use pg ...
+await pg.disconnect()
+```
+
+**Option 2: Direct instantiation**
+
+```python
+from rem.services.postgres import PostgresService
 
 service = PostgresService(
     connection_string="postgresql://user:pass@localhost/remdb",
@@ -358,6 +377,9 @@ service = PostgresService(
 
 await service.connect()
 ```
+
+> **Note**: `get_postgres_service()` returns the service directly. It does NOT support
+> `async with` context manager syntax. Always call `connect()` and `disconnect()` explicitly.
 
 ### Using Repository Pattern
 
@@ -514,53 +536,156 @@ results = await service.vector_search(
 - HNSW parameters: `m=16, ef_construction=64` (tunable)
 - Monitor shared_buffers and work_mem
 
-## Migrations
+## Schema Management
 
-### Using the CLI (Recommended)
+REM uses a **code-as-source-of-truth** approach. Pydantic models define the schema, and the database is kept in sync via diff-based migrations.
+
+### File Structure
+
+```
+src/rem/sql/
+├── migrations/
+│   ├── 001_install.sql          # Core infrastructure (manual)
+│   └── 002_install_models.sql   # Entity tables (auto-generated)
+└── background_indexes.sql       # HNSW vector indexes (optional)
+```
+
+**Key principle**: Only two migration files. No incremental `003_`, `004_` files.
+
+### CLI Commands
 
 ```bash
-# Apply all migrations
+# Apply migrations (installs extensions, core tables, entity tables)
 rem db migrate
 
 # Check migration status
 rem db status
-```
 
-### Migration Files
-
-Located in `src/rem/sql/migrations/`:
-- `001_install.sql` - Core infrastructure (extensions, functions, kv_store)
-- `002_install_models.sql` - Entity tables (auto-generated from Pydantic models)
-- `003_seed_default_user.sql` - Default user setup
-
-Background indexes (after data load):
-```bash
-rem db migrate --background-indexes
-```
-
-## CLI Usage
-
-### Generate Schema from Models
-
-When you add or modify Pydantic models, regenerate the schema:
-
-```bash
-# Generate 002_install_models.sql from entity models
+# Generate schema SQL from models (for remdb development)
 rem db schema generate --models src/rem/models/entities
 
-# Output: src/rem/sql/migrations/002_install_models.sql
-# Then apply: rem db migrate
+# Validate models for schema generation
+rem db schema validate --models src/rem/models/entities
 ```
 
-**Workflow for adding new models:**
-1. Add/modify models in `src/rem/models/entities/`
-2. Run `rem db schema generate -m src/rem/models/entities`
-3. Run `rem db migrate` to apply changes
+### Model Registry
 
-### Validate Models
+Models are discovered via the registry:
+
+```python
+import rem
+from rem.models.core import CoreModel
+
+@rem.register_model
+class MyEntity(CoreModel):
+    name: str
+    description: str  # Auto-embeds
+```
+
+## Using REM as a Library (Downstream Apps)
+
+When building an application that **depends on remdb as a package** (e.g., `pip install remdb`),
+there are important differences from developing remdb itself.
+
+### What Works Out of the Box
+
+1. **All core entity tables** - Resources, Messages, Users, Sessions, etc.
+2. **PostgresService** - Full database access via `get_postgres_service()`
+3. **Repository pattern** - CRUD operations for core entities
+4. **Migrations** - `rem db migrate` applies the bundled SQL files
+
+```python
+# In your downstream app (e.g., myapp/main.py)
+from rem.services.postgres import get_postgres_service
+from rem.models.entities import Message, Resource
+
+pg = get_postgres_service()
+await pg.connect()
+
+# Use core entities - tables already exist
+messages = await pg.query(Message, {"session_id": "abc"})
+```
+
+### Custom Models in Downstream Apps
+
+The `@rem.register_model` decorator registers models in the **runtime registry**, which is useful for:
+- Schema introspection at runtime
+- Future tooling that reads the registry
+
+However, **`rem db migrate` only applies SQL files bundled in the remdb package**.
+Custom models from downstream apps do NOT automatically get tables created.
+
+**Options for custom model tables:**
+
+**Option A: Use core entities with metadata**
+
+Store custom data in the `metadata` JSONB field of existing entities:
+
+```python
+resource = Resource(
+    name="my-custom-thing",
+    content="...",
+    metadata={"custom_field": "value", "another": 123}
+)
+```
+
+**Option B: Create tables manually**
+
+Write and apply your own SQL:
+
+```sql
+-- myapp/sql/custom_tables.sql
+CREATE TABLE IF NOT EXISTS conversation_summaries (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_ref TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    -- ... include CoreModel fields for compatibility
+    user_id VARCHAR(256),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
 
 ```bash
-rem db schema validate --models src/rem/models/entities
+psql $DATABASE_URL -f myapp/sql/custom_tables.sql
+```
+
+**Option C: Contribute upstream**
+
+If your model is generally useful, contribute it to remdb so it's included in
+the next release and `rem db migrate` creates it automatically.
+
+### Example: Downstream App Structure
+
+```
+myapp/
+├── main.py              # Import models, start API
+├── models/
+│   └── __init__.py      # @rem.register_model decorators
+├── sql/
+│   └── custom.sql       # Manual migrations for custom tables
+├── .env                 # POSTGRES__CONNECTION_STRING, LLM keys
+└── pyproject.toml       # dependencies = ["remdb>=0.3.110"]
+```
+
+```python
+# myapp/models/__init__.py
+import rem
+from rem.models.core import CoreModel
+
+@rem.register_model
+class ConversationSummary(CoreModel):
+    """Registered for introspection, but table created via sql/custom.sql"""
+    session_ref: str
+    summary: str
+```
+
+```python
+# myapp/main.py
+import models  # Registers custom models
+
+from rem.api.main import app  # Use REM's FastAPI app
+# Or build your own app using rem.services
 ```
 
 ## Configuration

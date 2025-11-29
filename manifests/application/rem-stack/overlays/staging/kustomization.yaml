@@ -25,10 +25,10 @@ resources:
   - ../../components/postgres
   - ../../../phoenix  # Phoenix for OTEL/observability
 
-# Namespace: siggy (inherited from base)
+# Namespace: rem (inherited from base)
 
-# Environment labels
-commonLabels:
+# Environment labels (annotations only to avoid selector conflicts)
+commonAnnotations:
   environment: staging
 
 # Patches for staging-specific configuration
@@ -47,18 +47,19 @@ configMapGenerator:
       - GIT_COMMIT=${GIT_COMMIT:-unknown}
       - BUILD_DATE=${BUILD_DATE:-unknown}
 
-  # Application configuration - merged into base rem-config
+  # Staging overrides for rem-config (merges with base)
+  # Only specify values that differ from base
   - name: rem-config
     behavior: merge
     literals:
-      - OTEL_COLLECTOR_ENDPOINT=http://phoenix.siggy.svc.cluster.local:4317
       - ENVIRONMENT=staging
-      - AWS_REGION=us-east-1
-      - S3__BUCKET_NAME=siggy-application-cluster-a-app-bucket
+      - S3__BUCKET_NAME=rem-application-cluster-app-bucket
+      - OTEL_COLLECTOR_ENDPOINT=http://phoenix.rem.svc.cluster.local:4317
+      - AUTH__ENABLED=true
 
-# Labels for version tracking
+# Labels for version tracking (no selectors to avoid immutable field conflicts)
 labels:
   - pairs:
       app.kubernetes.io/version: latest
-    includeSelectors: true
+    includeSelectors: false
     includeTemplates: true

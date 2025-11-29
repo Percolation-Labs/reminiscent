@@ -2,13 +2,15 @@ apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
   name: rem-postgres
-  namespace: siggy
+  namespace: rem
 spec:
   instances: 3
   primaryUpdateStrategy: unsupervised
 
-  # PostgreSQL 18 with pgvector extension
-  imageName: ghcr.io/cloudnative-pg/postgresql:18.1
+  # Custom PostgreSQL 18 with pg_net extension baked in
+  # Standard CNPG image works too - pg_net just won't be available
+  # See: manifests/application/rem-stack/components/postgres/extensions/README.md
+  imageName: percolationlabs/rem-pg:18
 
   bootstrap:
     initdb:
@@ -17,7 +19,7 @@ spec:
       secret:
         name: rem-database-credentials
       # Run SQL migrations from ConfigMap on first startup
-      # ConfigMap generated from rem/sql/migrations/*.sql via ./manifests/generate-sql-configmap.sh
+      # ConfigMap generated via: rem cluster generate
 
       # postInitSQL runs as superuser in postgres database context
       # Phoenix needs isolated database to avoid table conflicts (both have 'users' table)
@@ -32,6 +34,8 @@ spec:
             key: 001_install.sql
           - name: rem-postgres-init-sql
             key: 002_install_models.sql
+          - name: rem-postgres-init-sql
+            key: 003_optional_extensions.sql
 
   # Storage configuration
   # Available storage classes (configured in CDK):
@@ -80,7 +84,13 @@ spec:
 
   # PostgreSQL configuration optimized for AI workloads
   postgresql:
+    # pg_net requires shared_preload_libraries (extension baked into custom image)
+    shared_preload_libraries:
+      - pg_net
+
     parameters:
+      # pg_net background worker database (must match where CREATE EXTENSION runs)
+      pg_net.database_name: "remdb"
       # Connection settings
       max_connections: "300"
 

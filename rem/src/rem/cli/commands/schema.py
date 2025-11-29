@@ -8,6 +8,7 @@ Usage:
 """
 
 import asyncio
+import importlib
 from pathlib import Path
 
 import click
@@ -17,14 +18,32 @@ from ...settings import settings
 from ...services.postgres.schema_generator import SchemaGenerator
 
 
+def _import_model_modules() -> list[str]:
+    """
+    Import modules specified in MODELS__IMPORT_MODULES setting.
+
+    This ensures downstream models decorated with @rem.register_model
+    are registered before schema generation.
+
+    Returns:
+        List of successfully imported module names
+    """
+    imported = []
+    for module_name in settings.models.module_list:
+        try:
+            importlib.import_module(module_name)
+            imported.append(module_name)
+            logger.debug(f"Imported model module: {module_name}")
+        except ImportError as e:
+            logger.warning(f"Failed to import model module '{module_name}': {e}")
+            click.echo(
+                click.style(f"  ⚠ Could not import '{module_name}': {e}", fg="yellow"),
+                err=True,
+            )
+    return imported
+
+
 @click.command()
-@click.option(
-    "--models",
-    "-m",
-    required=True,
-    type=click.Path(exists=True, path_type=Path),
-    help="Directory containing Pydantic models",
-)
 @click.option(
     "--output",
     "-o",
@@ -38,11 +57,11 @@ from ...services.postgres.schema_generator import SchemaGenerator
     default=None,
     help=f"Base output directory (default: {settings.sql_dir}/migrations)",
 )
-def generate(models: Path, output: Path, output_dir: Path | None):
+def generate(output: Path, output_dir: Path | None):
     """
-    Generate database schema from Pydantic models.
+    Generate database schema from registered Pydantic models.
 
-    Scans the specified directory for Pydantic models and generates:
+    Uses the model registry (core models + user-registered models) to generate:
     - CREATE TABLE statements
     - Embeddings tables (embeddings_<table>)
     - KV_STORE triggers for cache maintenance
@@ -51,24 +70,53 @@ def generate(models: Path, output: Path, output_dir: Path | None):
     Output is written to src/rem/sql/migrations/002_install_models.sql by default.
 
     Example:
-        rem db schema generate --models src/rem/models/entities
+        rem db schema generate
+
+    To register custom models in downstream apps:
+
+    1. Create models with @rem.register_model decorator:
+
+        # models/__init__.py
+        import rem
+        from rem.models.core import CoreModel
+
+        @rem.register_model
+        class MyEntity(CoreModel):
+            name: str
+
+    2. Set MODELS__IMPORT_MODULES in your .env:
+
+        MODELS__IMPORT_MODULES=models
+
+    3. Run schema generation:
+
+        rem db schema generate
 
     This creates:
     - src/rem/sql/migrations/002_install_models.sql - Entity tables and triggers
     - src/rem/sql/background_indexes.sql - HNSW indexes (apply after data load)
 
-    After generation, apply with:
-        rem db migrate
+    After generation, verify with:
+        rem db diff
     """
-    click.echo(f"Discovering models in {models}")
+    from ...registry import get_model_registry
+
+    # Import downstream model modules to trigger @rem.register_model decorators
+    imported_modules = _import_model_modules()
+    if imported_modules:
+        click.echo(f"Imported model modules: {', '.join(imported_modules)}")
+
+    registry = get_model_registry()
+    models = registry.get_models(include_core=True)
+    click.echo(f"Generating schema from {len(models)} registered models")
 
     # Default to migrations directory
     actual_output_dir = output_dir or Path(settings.sql_dir) / "migrations"
     generator = SchemaGenerator(output_dir=actual_output_dir)
 
-    # Generate schema
+    # Generate schema from registry
     try:
-        schema_sql = asyncio.run(generator.generate_from_directory(models, output_file=output.name))
+        schema_sql = asyncio.run(generator.generate_from_registry(output_file=output.name))
 
         click.echo(f"✓ Schema generated: {len(generator.schemas)} tables")
         click.echo(f"✓ Written to: {actual_output_dir / output.name}")
@@ -94,47 +142,45 @@ def generate(models: Path, output: Path, output_dir: Path | None):
 
 
 @click.command()
-@click.option(
-    "--models",
-    "-m",
-    required=True,
-    type=click.Path(exists=True, path_type=Path),
-    help="Directory containing Pydantic models",
-)
-def validate(models: Path):
+def validate():
     """
-    Validate Pydantic models for schema generation.
+    Validate registered Pydantic models for schema generation.
 
     Checks:
-    - Models can be loaded
+    - Models can be loaded from registry
     - Models have suitable entity_key fields
     - Fields with embeddings are properly configured
+
+    Set MODELS__IMPORT_MODULES to include custom models from downstream apps.
     """
-    click.echo(f"Validating models in {models}")
+    from ...registry import get_model_registry
 
-    generator = SchemaGenerator()
-    discovered = generator.discover_models(models)
+    # Import downstream model modules to trigger @rem.register_model decorators
+    imported_modules = _import_model_modules()
+    if imported_modules:
+        click.echo(f"Imported model modules: {', '.join(imported_modules)}")
 
-    if not discovered:
-        click.echo("✗ No models found", err=True)
+    registry = get_model_registry()
+    models = registry.get_models(include_core=True)
+
+    click.echo(f"Validating {len(models)} registered models")
+
+    if not models:
+        click.echo("✗ No models found in registry", err=True)
         raise click.Abort()
 
-    click.echo(f"✓ Discovered {len(discovered)} models")
-
+    generator = SchemaGenerator()
     errors: list[str] = []
     warnings: list[str] = []
 
-    for model_name, model in discovered.items():
-        table_name = generator.infer_table_name(model)
-        entity_key = generator.infer_entity_key_field(model)
+    for model_name, ext in models.items():
+        model = ext.model
+        table_name = ext.table_name or generator.infer_table_name(model)
+        entity_key = ext.entity_key_field or generator.infer_entity_key_field(model)
 
         # Check for entity_key
         if entity_key == "id":
             warnings.append(f"{model_name}: No natural key field, using 'id'")
-
-        # Check for embeddable fields
-        # TODO: Implement should_embed_field check
-        embeddable: list[str] = []  # Placeholder - needs implementation
 
         click.echo(f"  {model_name} -> {table_name} (key: {entity_key})")
 

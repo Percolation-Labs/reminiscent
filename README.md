@@ -221,26 +221,50 @@ docker exec rem-api rem ask "What is REM?"
 ### Prerequisites
 
 - AWS Account with credentials configured
-- kubectl installed
-- Pulumi CLI installed
+- AWS CLI and kubectl installed
+- Node.js and CDK CLI installed (`npm install -g aws-cdk`)
+- REM CLI installed (`pip install remdb`)
 
 ### Deploy to AWS EKS
 
 ```bash
-# 1. Deploy infrastructure (~25-30 min)
-cd manifests/infra/pulumi/eks-yaml
-pulumi up
-kubectl apply -f karpenter-nodepools.yaml
+# 1. Install remdb and initialize (auto-downloads manifests)
+pip install remdb
+rem cluster init --project-name myproject -y
 
-# 2. Deploy platform (~10-15 min)
-kubectl apply -k manifests/platform/argocd/
-kubectl apply -f manifests/platform/argocd/app-of-apps.yaml
+# Or specify a specific manifest version
+rem cluster init --project-name myproject --manifest-version v0.5.0 -y
 
-# 3. Deploy application (~5-10 min)
-kubectl apply -f manifests/application/rem-api/argocd-application.yaml
+# 2. Deploy CDK infrastructure (~25-30 min)
+cd manifests/infra/cdk-eks
+cdk deploy REMApplicationClusterA
+
+# 3. Setup SSM parameters (secrets)
+rem cluster setup-ssm
+
+# 4. Generate all manifests (includes SQL ConfigMap)
+rem cluster generate
+
+# 5. Validate prerequisites
+rem cluster validate
+
+# 6. Deploy via ArgoCD (~5-10 min)
+kubectl apply -f manifests/application/rem-stack/argocd-staging.yaml
 ```
 
-See infrastructure README for detailed deployment guide.
+### CLI Cluster Commands
+
+| Command | Description |
+|---------|-------------|
+| `rem cluster init` | Initialize config & download manifests |
+| `rem cluster init -y` | Auto-download without prompting |
+| `rem cluster init --manifest-version v0.5.0` | Download specific manifest version |
+| `rem cluster setup-ssm` | Create required SSM parameters |
+| `rem cluster generate` | Generate all manifests (ArgoCD, SQL ConfigMap, etc.) |
+| `rem cluster validate` | Validate deployment prerequisites |
+| `rem cluster env check` | Validate .env for cluster deployment |
+
+See [manifests/TROUBLESHOOTING.md](manifests/TROUBLESHOOTING.md) for detailed deployment guide and common issues.
 
 ## Core Design Patterns
 

@@ -50,9 +50,36 @@ class RemQueryParser:
         params: Dict[str, Any] = {}
         positional_args: List[str] = []
 
-        # Process remaining tokens
-        for token in tokens[1:]:
-            if "=" in token:
+        # For SQL queries, preserve the raw query (keywords like LIMIT are SQL keywords)
+        if query_type == QueryType.SQL:
+            # Everything after "SQL" is the raw SQL query
+            raw_sql = query_string[3:].strip()  # Skip "SQL" prefix
+            params["raw_query"] = raw_sql
+            return query_type, params
+
+        # Process remaining tokens, handling REM keywords
+        i = 1
+        while i < len(tokens):
+            token = tokens[i]
+            token_upper = token.upper()
+
+            # Handle REM keywords that take a value
+            if token_upper in ("LIMIT", "DEPTH", "THRESHOLD", "TYPE", "FROM", "WITH"):
+                if i + 1 < len(tokens):
+                    keyword_map = {
+                        "LIMIT": "limit",
+                        "DEPTH": "max_depth",
+                        "THRESHOLD": "threshold",
+                        "TYPE": "edge_types",
+                        "FROM": "initial_query",
+                        "WITH": "initial_query",
+                    }
+                    key = keyword_map[token_upper]
+                    value = tokens[i + 1]
+                    params[key] = self._convert_value(key, value)
+                    i += 2
+                    continue
+            elif "=" in token:
                 # It's a keyword argument
                 key, value = token.split("=", 1)
                 # Handle parameter aliases
@@ -61,6 +88,7 @@ class RemQueryParser:
             else:
                 # It's a positional argument part
                 positional_args.append(token)
+            i += 1
 
         # Map positional arguments to specific fields based on QueryType
         self._map_positional_args(query_type, positional_args, params)
@@ -133,13 +161,20 @@ class RemQueryParser:
             params["query_text"] = combined_value
 
         elif query_type == QueryType.SEARCH:
-            params["query_text"] = combined_value
+            # SEARCH expects: SEARCH <table> <query_text> [LIMIT n]
+            # First positional arg is table name, rest is query text
+            if len(positional_args) >= 2:
+                params["table_name"] = positional_args[0]
+                params["query_text"] = " ".join(positional_args[1:])
+            elif len(positional_args) == 1:
+                # Could be table name or query text - assume query text if no table
+                params["query_text"] = positional_args[0]
+            # If no positional args, params stays empty
 
         elif query_type == QueryType.TRAVERSE:
             params["initial_query"] = combined_value
         
-        # SQL typically requires named arguments (table=...), but if we supported 
-        # SQL SELECT * FROM ..., we might handle it differently. 
-        # For now, RemService expects table=...
-        # If there are positional args for SQL, we might ignore or raise, 
-        # but current service doesn't use them.
+        elif query_type == QueryType.SQL:
+            # SQL with positional args means "SQL SELECT * FROM ..." form
+            # Treat the combined positional args as the raw SQL query
+            params["raw_query"] = combined_value

@@ -1,196 +1,308 @@
-# Deployment Troubleshooting Log
+# REM Stack Deployment Guide
 
-This document captures issues found during deployment and their fixes to ensure the stack is reproducible.
+This document provides a comprehensive deployment checklist and troubleshooting guide for deploying REM to Kubernetes.
 
-## Session: 2025-11-27 - siggy EKS Cluster Deployment
+## Quick Start
 
-### Summary of Issues Found
+```bash
+# 1. Install remdb and initialize (auto-downloads manifests)
+pip install remdb
+rem cluster init --project-name myproject -y
 
-The following issues were discovered when deploying to a fresh `siggy-application-cluster-a` EKS cluster. Each issue represents a gap in the manifests that should be fixed for reproducible deployments.
+# Or specify a specific manifest version (manifests are versioned separately)
+rem cluster init --project-name myproject --manifest-version v0.5.0 -y
+
+# 2. Deploy CDK infrastructure
+cd manifests/infra/cdk-eks
+cdk deploy REMApplicationClusterA
+
+# 3. Setup SSM parameters
+rem cluster setup-ssm
+
+# 4. Generate all manifests (includes SQL ConfigMap)
+rem cluster generate
+
+# 5. Validate prerequisites
+rem cluster validate
+
+# 6. Deploy via ArgoCD
+kubectl apply -f manifests/application/rem-stack/argocd-staging.yaml
+```
+
+**Note:** The `--manifest-version` flag downloads manifests from GitHub releases. Use `latest` (default) or a specific version tag like `v0.5.0`. This is independent of the installed `remdb` package version.
 
 ---
 
-## Issue 1: Platform Operators Not Pre-Installed
+## Deployment Checklist
 
-**Error**: CRD not found when applying manifests
-**Root Cause**: ESO and CNPG operators were not installed on the cluster
+### Phase 1: Infrastructure (CDK)
 
-**Fix Applied**:
+Before applying Kubernetes manifests, CDK must have created:
+
+- [ ] **EKS Cluster** with Pod Identity enabled
+- [ ] **S3 Buckets**
+  - `{project}-io-{env}` - Application files
+  - `{project}-io-pg-backups-{env}` - PostgreSQL backups
+- [ ] **SQS Queues**
+  - `{cluster}-file-processing-{env}` - File processing
+  - `{cluster}-karpenter-interruption` - Spot interruptions
+- [ ] **Pod Identity Associations** (critical for AWS access)
+  - `rem-app` in `{namespace}` - S3, SQS, SSM access
+  - `external-secrets` in `external-secrets-system` - SSM/Secrets Manager
+  - `keda-operator` in `keda` - SQS (for autoscaling)
+  - `{project}-postgres` in `{namespace}` - S3 backups
+  - `otel-collector` in `observability` - X-Ray, CloudWatch
+
+Verify Pod Identity associations:
 ```bash
-# Install External Secrets Operator
+aws eks list-pod-identity-associations --cluster-name your-cluster --region us-east-1
+```
+
+### Phase 2: SSM Parameters
+
+Create these parameters BEFORE deploying (use `rem cluster setup-ssm`):
+
+```bash
+# Required
+/rem/postgres/username        # String: "remuser"
+/rem/postgres/password        # SecureString: random
+
+# LLM API Keys
+/rem/llm/anthropic-api-key    # SecureString: your key
+/rem/llm/openai-api-key       # SecureString: your key
+
+# Optional (Phoenix observability)
+/rem/phoenix/api-key          # SecureString: random
+/rem/phoenix/secret           # SecureString: random
+```
+
+### Phase 3: Platform Operators
+
+Install operators via ArgoCD or manually:
+
+```bash
+# Option A: ArgoCD (recommended)
+kubectl apply -f manifests/platform/argocd/applications/external-secrets-operator.yaml
+kubectl apply -f manifests/platform/argocd/applications/cloudnative-pg.yaml
+kubectl apply -f manifests/platform/argocd/applications/keda.yaml
+
+# Option B: Manual Helm
 helm install external-secrets external-secrets/external-secrets \
   -n external-secrets-system --create-namespace
 
-# Install CloudNativePG
 helm install cnpg cloudnative-pg/cloudnative-pg \
   -n cnpg-system --create-namespace
+
+helm install keda kedacore/keda \
+  -n keda --create-namespace
 ```
 
-**Documentation Gap**: Platform README needed manual installation instructions since ArgoCD wasn't deploying them.
+### Phase 4: ClusterSecretStores
 
----
+Apply secret stores for External Secrets Operator:
 
-## Issue 2: ESO Installed in Wrong Namespace
-
-**Error**: ExternalSecrets failing with "AccessDeniedException" from SSM
-**Root Cause**: ESO was installed in `external-secrets` namespace but CDK Pod Identity expects `external-secrets-system`
-
-**Fix Applied**:
-- Reinstalled ESO in correct namespace `external-secrets-system`
-- Updated platform README with correct namespace
-
----
-
-## Issue 3: Missing ClusterSecretStore for Kubernetes Secrets
-
-**Error**: `ClusterSecretStore "kubernetes-secrets" not found`
-**Root Cause**: Phoenix external secret references a ClusterSecretStore for reading Kubernetes secrets (CNPG-generated), but it wasn't being applied.
-
-**Fix Applied**:
-- Created `manifests/platform/external-secrets/kubernetes-cluster-secret-store.yaml`
-- Applied manually: `kubectl apply -f manifests/platform/external-secrets/kubernetes-cluster-secret-store.yaml`
-
-**Gap**: This ClusterSecretStore should be part of the platform layer and applied automatically.
-
----
-
-## Issue 4: PostgreSQL NodeSelector Preventing Scheduling
-
-**Error**: Pod stuck in Pending with `label "workload-type" does not have known values`
-**Root Cause**: Base postgres-cluster.yaml had `nodeSelector: workload-type=stateful` but Karpenter nodepool doesn't define this label.
-
-**Fix Applied**:
-- Removed nodeSelector and tolerations from base `postgres-cluster.yaml`
-- These should be added in production overlay only when dedicated stateful nodes exist
-
-**Files Changed**:
-- `manifests/application/rem-stack/components/postgres/postgres-cluster.yaml` - removed nodeSelector/tolerations
-- `manifests/application/rem-stack/overlays/staging/postgres-patch.yaml` - simplified affinity
-
----
-
-## Issue 5: PostgreSQL Memory Request Below shared_buffers
-
-**Error**: `Memory request is lower than PostgreSQL 'shared_buffers' value`
-**Root Cause**: Staging patch had `memory: 1Gi` but base config has `shared_buffers: 2GB`
-
-**Fix Applied**:
-- Updated staging patch to `memory: 4Gi` (must be >= shared_buffers)
-
-**Files Changed**:
-- `manifests/application/rem-stack/overlays/staging/postgres-patch.yaml`
-
----
-
-## Issue 6: Missing PostgreSQL Bootstrap Credentials Secret
-
-**Error**: `secret "rem-database-credentials" not found`
-**Root Cause**: CNPG cluster references `rem-database-credentials` for bootstrap, but no ExternalSecret was creating it.
-
-**Fix Applied**:
-1. Created SSM parameters:
-   ```bash
-   aws ssm put-parameter --name "/siggy/postgres/username" --value "remuser" --type String
-   aws ssm put-parameter --name "/siggy/postgres/password" --value "$(openssl rand -base64 24)" --type SecureString
-   ```
-
-2. Created ExternalSecret:
-   - `manifests/application/rem-stack/components/postgres/postgres-credentials-external-secret.yaml`
-
-3. Added to kustomization.yaml
-
-**Gap**: PostgreSQL bootstrap credentials should be documented as a required SSM parameter.
-
----
-
-## Issue 7: Missing SSM Parameters
-
-**Error**: ExternalSecrets failing with "ParameterNotFound"
-**Root Cause**: Required SSM parameters weren't created before deployment
-
-**Required SSM Parameters** (must exist before deployment):
-```
-/siggy/llm/anthropic-api-key    (SecureString)
-/siggy/llm/openai-api-key       (SecureString)
-/siggy/phoenix/api-key          (SecureString)
-/siggy/postgres/username        (String)
-/siggy/postgres/password        (SecureString)
-```
-
----
-
-## Issue 8: Phoenix Database Conflict with REM
-
-**Error**: `DuplicateTable) relation "users" already exists`
-**Root Cause**: Phoenix and REM both have a `users` table. When sharing `remdb`, whichever app runs migrations first creates the table, and the second fails.
-
-**Fix Applied**:
-1. Phoenix needs its own isolated database `phoenixdb`
-2. Updated `phoenix/postgres-external-secret.yaml` to use `phoenixdb` instead of `remdb`
-3. Added inline `postInitSQL` to postgres-cluster.yaml to create phoenixdb during CNPG bootstrap
-
-**Files Changed**:
-- `manifests/application/rem-stack/components/postgres/postgres-cluster.yaml` - Added postInitSQL for phoenixdb
-- `manifests/application/phoenix/postgres-external-secret.yaml` - Changed to use phoenixdb
-
-**Manual Fix** (for existing clusters without phoenixdb):
 ```bash
-# Connect to postgres and create phoenixdb
-kubectl exec rem-postgres-1 -n siggy -- psql -U postgres -c "CREATE DATABASE phoenixdb OWNER remuser;"
-# Restart Phoenix to pick up new config
-kubectl rollout restart deployment/phoenix -n siggy
+kubectl apply -f manifests/platform/external-secrets/cluster-secret-store.yaml
+kubectl apply -f manifests/platform/external-secrets/kubernetes-cluster-secret-store.yaml
 ```
 
-**Why This Happens**: Phoenix is an observability platform (OTEL collector) that has its own user management for access control. Its `users` table conflicts with REM's `users` table for application users.
-
----
-
-## Checklist for Clean Deployment
-
-Before running `kubectl apply -k manifests/application/rem-stack/overlays/staging`:
-
-### 1. Infrastructure (CDK)
-- [ ] EKS cluster deployed with Pod Identity enabled
-- [ ] S3 bucket created
-- [ ] SQS queue created
-- [ ] Pod Identity associations created for: `external-secrets`, `rem-app`
-
-### 2. Platform Layer
-- [ ] External Secrets Operator installed in `external-secrets-system` namespace
-- [ ] CloudNativePG operator installed in `cnpg-system` namespace
-- [ ] ClusterSecretStore `aws-parameter-store` applied
-- [ ] ClusterSecretStore `kubernetes-secrets` applied
-
-### 3. SSM Parameters
-- [ ] `/siggy/llm/anthropic-api-key` created (SecureString)
-- [ ] `/siggy/llm/openai-api-key` created (SecureString)
-- [ ] `/siggy/phoenix/api-key` created (SecureString)
-- [ ] `/siggy/phoenix/secret` created (SecureString) - for session signing
-- [ ] `/siggy/phoenix/admin-secret` created (SecureString) - for admin API access
-- [ ] `/siggy/postgres/username` created (String, value: `remuser`)
-- [ ] `/siggy/postgres/password` created (SecureString, random value)
-
-### 4. Application Manifests
+Verify:
 ```bash
+kubectl get clustersecretstore
+# Should show: aws-parameter-store, kubernetes-secrets
+```
+
+### Phase 5: SQL ConfigMap
+
+Generate and apply the PostgreSQL init ConfigMap:
+
+```bash
+rem cluster generate-sql-configmap --apply
+
+# Or manually:
+kubectl apply -f manifests/application/rem-stack/components/postgres/postgres-init-configmap.yaml
+```
+
+### Phase 6: Deploy Application
+
+```bash
+# Via ArgoCD
+kubectl apply -f manifests/application/rem-stack/argocd-staging.yaml
+
+# Or via kubectl directly
 kubectl apply -k manifests/application/rem-stack/overlays/staging
 ```
 
 ---
 
-## Files Modified in This Session
+## Common Issues & Fixes
 
-| File | Change |
-|------|--------|
-| `manifests/platform/README.md` | Updated with manual install instructions, Pod Identity docs |
-| `manifests/application/rem-stack/components/postgres/postgres-cluster.yaml` | Removed nodeSelector/tolerations |
-| `manifests/application/rem-stack/components/postgres/kustomization.yaml` | Added postgres-credentials-external-secret.yaml |
-| `manifests/application/rem-stack/components/postgres/postgres-credentials-external-secret.yaml` | **NEW** - PostgreSQL bootstrap credentials |
-| `manifests/application/rem-stack/overlays/staging/postgres-patch.yaml` | Fixed memory to 4Gi, simplified affinity |
-| `manifests/application/rem-stack/components/worker/deployment.yaml` | Changed to use rem-app service account |
-| `manifests/application/rem-stack/components/worker/kustomization.yaml` | Re-enabled KEDA resources |
-| `manifests/application/rem-stack/components/worker/triggerauthentication.yaml` | Changed identityOwner to workload |
-| `manifests/application/rem-stack/components/worker/keda-scaledobject.yaml` | Updated SQS queue URL |
-| `manifests/application/phoenix/postgres-external-secret.yaml` | Changed to use phoenixdb |
-| `manifests/application/phoenix/phoenix-secrets-external.yaml` | **NEW** - Phoenix auth secrets from SSM |
-| `manifests/application/phoenix/kustomization.yaml` | Added phoenix-secrets-external.yaml |
-| `manifests/application/rem-stack/components/api/kustomization.yaml` | Removed obsolete secretstore.yaml |
+### Issue 1: ExternalSecret AccessDeniedException
+
+**Error**: `AccessDeniedException: User... is not authorized to perform: ssm:GetParameter`
+
+**Cause**: Pod Identity not configured or namespace mismatch.
+
+**Fix**:
+1. Verify ESO is in `external-secrets-system` namespace (not `external-secrets`)
+2. Check CDK Pod Identity association exists:
+   ```bash
+   aws eks list-pod-identity-associations --cluster-name your-cluster | grep external-secrets
+   ```
+3. Restart ESO pods after fixing:
+   ```bash
+   kubectl rollout restart deployment -n external-secrets-system
+   ```
+
+### Issue 2: CNPG Cluster Stuck Pending
+
+**Error**: Pod stuck with "label does not have known values"
+
+**Cause**: nodeSelector references labels that don't exist (e.g., `workload-type: stateful`).
+
+**Fix**: Remove nodeSelector from base postgres-cluster.yaml or ensure Karpenter NodePool defines the labels.
+
+### Issue 3: KEDA ScaledObject Not Scaling
+
+**Error**: ScaledObject shows "error getting queue attributes"
+
+**Causes**:
+1. KEDA operator doesn't have SQS permissions (missing Pod Identity)
+2. TriggerAuthentication misconfigured
+
+**Fix**:
+1. Verify KEDA Pod Identity:
+   ```bash
+   aws eks list-pod-identity-associations --cluster-name your-cluster | grep keda
+   ```
+2. If using `identityOwner: keda`, KEDA operator needs SQS access
+3. If using `identityOwner: workload`, the workload SA needs SQS access
+
+### Issue 4: Phoenix "users" Table Conflict
+
+**Error**: `DuplicateTable: relation "users" already exists`
+
+**Cause**: Phoenix and REM both have `users` tables. Sharing `remdb` causes conflicts.
+
+**Fix**: Phoenix uses separate `phoenixdb`:
+1. postgres-cluster.yaml creates `phoenixdb` via `postInitSQL`
+2. Phoenix external-secret uses `phoenixdb` in connection string
+
+For existing clusters:
+```bash
+kubectl exec rem-postgres-1 -n rem -- psql -U postgres -c "CREATE DATABASE phoenixdb OWNER remuser;"
+kubectl rollout restart deployment/phoenix -n rem
+```
+
+### Issue 5: ArgoCD OutOfSync Loop
+
+**Error**: Application constantly syncing, never healthy
+
+**Cause**: Operators add default fields that don't match git manifests.
+
+**Fix**: Add `ignoreDifferences` and `RespectIgnoreDifferences=true`:
+```yaml
+ignoreDifferences:
+  - group: external-secrets.io
+    kind: ExternalSecret
+    jqPathExpressions:
+      - .spec.data[].remoteRef.conversionStrategy
+      - .spec.target.deletionPolicy
+  - group: postgresql.cnpg.io
+    kind: Cluster
+    jsonPointers:
+      - /spec
+syncOptions:
+  - RespectIgnoreDifferences=true  # CRITICAL
+```
+
+### Issue 6: ESO Chart 403 Forbidden
+
+**Error**: `failed to pull chart: 403 Forbidden`
+
+**Cause**: Using OCI registry that requires auth or doesn't exist.
+
+**Fix**: Use HTTPS chart repository:
+```yaml
+source:
+  repoURL: https://charts.external-secrets.io  # NOT oci://ghcr.io/...
+  chart: external-secrets
+  targetRevision: "0.20.4"
+```
+
+### Issue 7: CNPG PodMonitor Error
+
+**Error**: `no matches for kind "PodMonitor"`
+
+**Cause**: Prometheus Operator CRD not installed but `podMonitorEnabled: true`.
+
+**Fix**: Disable PodMonitor in cloudnative-pg.yaml:
+```yaml
+monitoring:
+  podMonitorEnabled: false
+```
+
+---
+
+## Pod Identity Quick Reference
+
+| Service Account | Namespace | Purpose |
+|-----------------|-----------|---------|
+| `external-secrets` | `external-secrets-system` | SSM/Secrets Manager access |
+| `keda-operator` | `keda` | SQS GetQueueAttributes |
+| `rem-app` | `rem` | S3, SQS, SSM for application |
+| `rem-postgres` | `rem` | S3 for CNPG backups |
+| `otel-collector` | `observability` | X-Ray, CloudWatch |
+| `aws-load-balancer-controller` | `kube-system` | ALB provisioning |
+| `karpenter` | `karpenter` | EC2/Spot instance management |
+
+---
+
+## Validation Commands
+
+```bash
+# Check Pod Identity associations
+aws eks list-pod-identity-associations --cluster-name your-cluster --region us-east-1
+
+# Check ExternalSecrets status
+kubectl get externalsecrets -A
+kubectl describe externalsecret <name> -n <ns>
+
+# Check CNPG cluster health
+kubectl get clusters.postgresql.cnpg.io -n rem
+kubectl cnpg status rem-postgres -n rem
+
+# Check KEDA ScaledObjects
+kubectl get scaledobject -A
+kubectl describe scaledobject file-processor-scaler -n rem
+
+# Check ArgoCD sync status
+argocd app list
+argocd app get rem-stack-staging
+
+# Verify secret was created
+kubectl get secrets -n rem
+kubectl get secret rem-api-secrets -n rem -o yaml
+```
+
+---
+
+## Files Modified by Deployment
+
+| File | Purpose |
+|------|---------|
+| `manifests/cluster-config.yaml` | Deployment configuration |
+| `manifests/platform/external-secrets/*.yaml` | ClusterSecretStores |
+| `manifests/platform/argocd/applications/*.yaml` | Platform operator apps |
+| `manifests/application/rem-stack/argocd-staging.yaml` | Main ArgoCD application |
+| `manifests/application/rem-stack/components/postgres/*.yaml` | PostgreSQL cluster config |
+| `manifests/application/rem-stack/components/worker/*.yaml` | KEDA scaling config |
+
+---
+
+## Related Documentation
+
+- [REM README](../rem/README.md) - Full package documentation
+- [CDK Infrastructure](infra/cdk-eks/README.md) - AWS infrastructure
+- [Platform README](platform/README.md) - Platform operators
+- [Application README](application/README.md) - Application deployment

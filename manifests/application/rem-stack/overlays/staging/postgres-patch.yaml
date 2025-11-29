@@ -26,7 +26,7 @@ apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
   name: rem-postgres
-  namespace: siggy
+  namespace: rem
 spec:
   # -----------------------------------------------------------------------------
   # Replicas: 1 for MVP (no HA), 2+ for production (primary + replica)
@@ -34,8 +34,9 @@ spec:
   # -----------------------------------------------------------------------------
   instances: 1  # MVP: 1 | SCALED: 2
 
-  # PostgreSQL 18 with pgvector extension
-  imageName: ghcr.io/cloudnative-pg/postgresql:18.1
+  # Custom PostgreSQL 18 with pg_net + pgvector extensions
+  # See: manifests/application/rem-stack/components/postgres/extensions/README.md
+  imageName: percolationlabs/rem-pg:18
 
   # -----------------------------------------------------------------------------
   # Storage: Start small, expand later (can only increase, never decrease)
