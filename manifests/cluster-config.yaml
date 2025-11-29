@@ -33,7 +33,7 @@ project:
 # =============================================================================
 git:
   # Git repository URL for ArgoCD to sync from
-  repoURL: https://github.com/anthropics/remstack.git
+  repoURL: https://github.com/Percolation-Labs/reminiscent.git
 
   # Branch/tag/commit to deploy
   # Use 'main' for production, feature branches for testing

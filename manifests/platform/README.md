@@ -7,19 +7,22 @@ Platform components deployed via ArgoCD using OCI Helm charts.
 For a fresh cluster, use the bootstrap script which handles all prerequisites:
 
 ```bash
-# 1. Install rem CLI (required)
-pip install remdb
-
-# 2. Copy and configure environment variables
+# 1. Copy and configure environment variables
 cp .env.example .env
 # Edit .env with your values (API keys, GitHub credentials, repo URL)
 source .env
 
-# 3. Validate prerequisites
+# 2. Validate prerequisites
 ./scripts/validate-prereqs.sh
 
-# 4. Run bootstrap (creates SSM params, secrets, and deploys ArgoCD apps)
+# 3. Run bootstrap (creates SSM params, secrets, and deploys ArgoCD apps)
 ./scripts/bootstrap-argocd.sh
+```
+
+**Optional**: Install rem CLI for regenerating ConfigMaps if you modify SQL migrations:
+```bash
+pip install remdb
+rem cluster generate  # Regenerate postgres init configmap
 ```
 
 **Required environment variables:**
@@ -42,7 +45,7 @@ source .env
 The bootstrap script will:
 1. Create SSM parameters for all secrets (auto-generates PostgreSQL password, Phoenix keys, etc.)
 2. Create ArgoCD repository secret for private repo access
-3. Use `rem` CLI to generate PostgreSQL init ConfigMaps
+3. Create the rem namespace
 4. Deploy platform-apps (app-of-apps) and rem-stack
 
 ## Forking This Stack

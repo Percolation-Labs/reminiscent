@@ -5,6 +5,7 @@
 #   - rem/sql/migrations/001_install.sql
 #   - rem/sql/migrations/002_install_models.sql
 #   - rem/sql/migrations/003_optional_extensions.sql
+#   - rem/sql/migrations/004_cache_system.sql
 #
 apiVersion: v1
 kind: ConfigMap
@@ -284,6 +285,68 @@ data:
     \ EXISTS idx_rate_limits_expires ON rate_limits (expires_at);\n\nCOMMENT ON TABLE\
     \ rate_limits IS\n'UNLOGGED rate limiting table. Counts may be lost on crash (acceptable\
     \ for rate limiting).';\n\n-- ============================================================================\n\
+    -- SHARED SESSIONS HELPER FUNCTIONS\n-- ============================================================================\n\
+    -- Note: The shared_sessions TABLE is created by 002_install_models.sql (auto-generated)\n\
+    -- These functions provide aggregate queries for the session sharing workflow.\n\
+    \n-- Count distinct users sharing sessions with the current user\nCREATE OR REPLACE\
+    \ FUNCTION fn_count_shared_with_me(\n    p_tenant_id VARCHAR(100),\n    p_user_id\
+    \ VARCHAR(256)\n)\nRETURNS BIGINT AS $$\nBEGIN\n    RETURN (\n        SELECT COUNT(DISTINCT\
+    \ owner_user_id)\n        FROM shared_sessions\n        WHERE tenant_id = p_tenant_id\n\
+    \          AND shared_with_user_id = p_user_id\n          AND deleted_at IS NULL\n\
+    \    );\nEND;\n$$ LANGUAGE plpgsql STABLE;\n\nCOMMENT ON FUNCTION fn_count_shared_with_me\
+    \ IS\n'Count distinct users sharing sessions with the specified user.';\n\n--\
+    \ Get aggregated summary of users sharing sessions with current user\nCREATE OR\
+    \ REPLACE FUNCTION fn_get_shared_with_me(\n    p_tenant_id VARCHAR(100),\n   \
+    \ p_user_id VARCHAR(256),\n    p_limit INTEGER DEFAULT 50,\n    p_offset INTEGER\
+    \ DEFAULT 0\n)\nRETURNS TABLE(\n    user_id VARCHAR(256),\n    name VARCHAR(256),\n\
+    \    email VARCHAR(256),\n    session_count BIGINT,\n    message_count BIGINT,\n\
+    \    first_message_at TIMESTAMP,\n    last_message_at TIMESTAMP\n) AS $$\nBEGIN\n\
+    \    RETURN QUERY\n    SELECT\n        ss.owner_user_id AS user_id,\n        COALESCE(u.name,\
+    \ ss.owner_user_id) AS name,\n        u.email AS email,\n        COUNT(DISTINCT\
+    \ ss.session_id)::BIGINT AS session_count,\n        COALESCE(SUM(msg_counts.msg_count),\
+    \ 0)::BIGINT AS message_count,\n        MIN(msg_counts.first_msg)::TIMESTAMP AS\
+    \ first_message_at,\n        MAX(msg_counts.last_msg)::TIMESTAMP AS last_message_at\n\
+    \    FROM shared_sessions ss\n    LEFT JOIN users u ON u.user_id = ss.owner_user_id\
+    \ AND u.tenant_id = ss.tenant_id\n    LEFT JOIN (\n        SELECT\n          \
+    \  m.session_id,\n            m.user_id,\n            COUNT(*)::BIGINT AS msg_count,\n\
+    \            MIN(m.created_at) AS first_msg,\n            MAX(m.created_at) AS\
+    \ last_msg\n        FROM messages m\n        WHERE m.tenant_id = p_tenant_id\n\
+    \          AND m.deleted_at IS NULL\n        GROUP BY m.session_id, m.user_id\n\
+    \    ) msg_counts ON msg_counts.session_id = ss.session_id AND msg_counts.user_id\
+    \ = ss.owner_user_id\n    WHERE ss.tenant_id = p_tenant_id\n      AND ss.shared_with_user_id\
+    \ = p_user_id\n      AND ss.deleted_at IS NULL\n    GROUP BY ss.owner_user_id,\
+    \ u.name, u.email\n    ORDER BY MAX(msg_counts.last_msg) DESC NULLS LAST\n   \
+    \ LIMIT p_limit\n    OFFSET p_offset;\nEND;\n$$ LANGUAGE plpgsql STABLE;\n\nCOMMENT\
+    \ ON FUNCTION fn_get_shared_with_me IS\n'Get aggregated summary of users sharing\
+    \ sessions with the specified user.';\n\n-- Count messages in sessions shared\
+    \ by a specific user\nCREATE OR REPLACE FUNCTION fn_count_shared_messages(\n \
+    \   p_tenant_id VARCHAR(100),\n    p_recipient_user_id VARCHAR(256),\n    p_owner_user_id\
+    \ VARCHAR(256)\n)\nRETURNS BIGINT AS $$\nBEGIN\n    RETURN (\n        SELECT COUNT(*)\n\
+    \        FROM messages m\n        WHERE m.tenant_id = p_tenant_id\n          AND\
+    \ m.deleted_at IS NULL\n          AND m.session_id IN (\n              SELECT\
+    \ ss.session_id\n              FROM shared_sessions ss\n              WHERE ss.tenant_id\
+    \ = p_tenant_id\n                AND ss.owner_user_id = p_owner_user_id\n    \
+    \            AND ss.shared_with_user_id = p_recipient_user_id\n              \
+    \  AND ss.deleted_at IS NULL\n          )\n    );\nEND;\n$$ LANGUAGE plpgsql STABLE;\n\
+    \nCOMMENT ON FUNCTION fn_count_shared_messages IS\n'Count messages in sessions\
+    \ shared by a specific user with the recipient.';\n\n-- Get messages from sessions\
+    \ shared by a specific user\nCREATE OR REPLACE FUNCTION fn_get_shared_messages(\n\
+    \    p_tenant_id VARCHAR(100),\n    p_recipient_user_id VARCHAR(256),\n    p_owner_user_id\
+    \ VARCHAR(256),\n    p_limit INTEGER DEFAULT 50,\n    p_offset INTEGER DEFAULT\
+    \ 0\n)\nRETURNS TABLE(\n    id UUID,\n    content TEXT,\n    message_type VARCHAR(256),\n\
+    \    session_id VARCHAR(256),\n    model VARCHAR(256),\n    token_count INTEGER,\n\
+    \    created_at TIMESTAMP,\n    metadata JSONB\n) AS $$\nBEGIN\n    RETURN QUERY\n\
+    \    SELECT\n        m.id,\n        m.content,\n        m.message_type,\n    \
+    \    m.session_id,\n        m.model,\n        m.token_count,\n        m.created_at,\n\
+    \        m.metadata\n    FROM messages m\n    WHERE m.tenant_id = p_tenant_id\n\
+    \      AND m.deleted_at IS NULL\n      AND m.session_id IN (\n          SELECT\
+    \ ss.session_id\n          FROM shared_sessions ss\n          WHERE ss.tenant_id\
+    \ = p_tenant_id\n            AND ss.owner_user_id = p_owner_user_id\n        \
+    \    AND ss.shared_with_user_id = p_recipient_user_id\n            AND ss.deleted_at\
+    \ IS NULL\n      )\n    ORDER BY m.created_at DESC\n    LIMIT p_limit\n    OFFSET\
+    \ p_offset;\nEND;\n$$ LANGUAGE plpgsql STABLE;\n\nCOMMENT ON FUNCTION fn_get_shared_messages\
+    \ IS\n'Get messages from sessions shared by a specific user with the recipient.';\n\
+    \n-- ============================================================================\n\
     -- RECORD INSTALLATION\n-- ============================================================================\n\
     \nINSERT INTO rem_migrations (name, type, version)\nVALUES ('install.sql', 'install',\
     \ '1.0.0')\nON CONFLICT (name) DO UPDATE\nSET applied_at = CURRENT_TIMESTAMP,\n\
@@ -328,11 +391,12 @@ data:
     \ NOTICE '============================================================';\nEND\
     \ $$;\n"
   002_install_models.sql: "-- REM Model Schema (install_models.sql)\n-- Generated\
-    \ from Pydantic models\n-- Source: model registry\n-- Generated at: 2025-11-29T11:08:16.713884\n\
+    \ from Pydantic models\n-- Source: model registry\n-- Generated at: 2025-11-29T18:45:11.372432\n\
     --\n-- DO NOT EDIT MANUALLY - Regenerate with: rem db schema generate\n--\n--\
     \ This script creates:\n-- 1. Primary entity tables\n-- 2. Embeddings tables (embeddings_<table>)\n\
     -- 3. KV_STORE triggers for cache maintenance\n-- 4. Indexes (foreground only,\
-    \ background indexes separate)\n\n-- ============================================================================\n\
+    \ background indexes separate)\n-- 5. Schema table entries (for agent-like table\
+    \ access)\n\n-- ============================================================================\n\
     -- PREREQUISITES CHECK\n-- ============================================================================\n\
     \nDO $$\nBEGIN\n    -- Check that install.sql has been run\n    IF NOT EXISTS\
     \ (SELECT 1 FROM pg_tables WHERE tablename = 'kv_store') THEN\n        RAISE EXCEPTION\
@@ -868,6 +932,1413 @@ data:
     DROP TRIGGER IF EXISTS trg_users_kv_store ON users;\nCREATE TRIGGER trg_users_kv_store\n\
     AFTER INSERT OR UPDATE OR DELETE ON users\nFOR EACH ROW EXECUTE FUNCTION fn_users_kv_store_upsert();\n\
     \n-- ============================================================================\n\
+    -- SCHEMA TABLE ENTRIES\n-- Every entity table gets a schemas entry for agent-like\
+    \ access\n-- ============================================================================\n\
+    \n-- Schema entry for Feedback (feedbacks)\nINSERT INTO schemas (id, tenant_id,\
+    \ name, content, spec, category, metadata)\nVALUES (\n    'ae554853-e743-5d73-a2db-1ce20e7089fe'::uuid,\n\
+    \    'system',\n    'Feedback',\n    '# Feedback\n\n\n    User feedback on a message\
+    \ or session.\n\n    Captures structured feedback including:\n    - Rating (1-5\
+    \ scale or thumbs up/down)\n    - Categories (predefined or custom)\n    - Free-text\
+    \ comment\n    - Trace reference for OTEL/Phoenix integration\n\n    The feedback\
+    \ can be attached to:\n    - A specific message (message_id set)\n    - An entire\
+    \ session (session_id set, message_id null)\n    \n\n## Overview\n\nThe `Feedback`\
+    \ entity is stored in the `feedbacks` table. Each record is uniquely\nidentified\
+    \ by its `id` field for lookups and graph traversal.\n\n## Search Capabilities\n\
+    \nThis schema includes the `search_rem` tool which supports:\n- **LOOKUP**: O(1)\
+    \ exact match by id (e.g., `LOOKUP \"entity-name\"`)\n- **FUZZY**: Typo-tolerant\
+    \ search (e.g., `FUZZY \"partial\" THRESHOLD 0.3`)\n- **SEARCH**: Semantic vector\
+    \ search on content (e.g., `SEARCH \"concept\" FROM feedbacks LIMIT 10`)\n- **SQL**:\
+    \ Complex queries (e.g., `SELECT * FROM feedbacks WHERE ...`)\n\n## Table Info\n\
+    \n| Property | Value |\n|----------|-------|\n| Table | `feedbacks` |\n| Entity\
+    \ Key | `id` |\n| Embedding Fields | None |\n| Tools | `search_rem` |\n\n## Fields\n\
+    \n### `id`\n- **Type**: `typing.Union[uuid.UUID, str, NoneType]`\n- **Optional**\n\
+    - Unique identifier (UUID or string, generated per model type). Generated automatically\
+    \ if not provided.\n\n### `created_at`\n- **Type**: `<class ''datetime.datetime''>`\n\
+    - **Optional**\n- Entity creation timestamp\n\n### `updated_at`\n- **Type**: `<class\
+    \ ''datetime.datetime''>`\n- **Optional**\n- Last update timestamp\n\n### `deleted_at`\n\
+    - **Type**: `typing.Optional[datetime.datetime]`\n- **Optional**\n- Soft deletion\
+    \ timestamp\n\n### `tenant_id`\n- **Type**: `typing.Optional[str]`\n- **Optional**\n\
+    - Tenant identifier for multi-tenancy isolation\n\n### `user_id`\n- **Type**:\
+    \ `typing.Optional[str]`\n- **Optional**\n- Owner user identifier (tenant-scoped).\
+    \ This is a VARCHAR(256), not a UUID, to allow flexibility for external identity\
+    \ providers. Typically generated as a hash of the user''s email address. In future,\
+    \ other strong unique claims (e.g., OAuth sub, verified phone) could also be used\
+    \ for generation.\n\n### `graph_edges`\n- **Type**: `list[dict]`\n- **Optional**\n\
+    - Knowledge graph edges stored as InlineEdge dicts\n\n### `metadata`\n- **Type**:\
+    \ `<class ''dict''>`\n- **Optional**\n- Flexible metadata storage\n\n### `tags`\n\
+    - **Type**: `list[str]`\n- **Optional**\n- Entity tags\n\n### `session_id`\n-\
+    \ **Type**: `<class ''str''>`\n- **Required**\n- Session ID this feedback relates\
+    \ to\n\n### `message_id`\n- **Type**: `str | None`\n- **Optional**\n- Specific\
+    \ message ID (null for session-level feedback)\n\n### `rating`\n- **Type**: `int\
+    \ | None`\n- **Optional**\n- Rating: -1 (thumbs down), 1 (thumbs up), or 1-5 scale\n\
+    \n### `categories`\n- **Type**: `list[str]`\n- **Optional**\n- Selected feedback\
+    \ categories (from FeedbackCategory or custom)\n\n### `comment`\n- **Type**: `str\
+    \ | None`\n- **Optional**\n- Optional free-text feedback comment\n\n### `trace_id`\n\
+    - **Type**: `str | None`\n- **Optional**\n- OTEL trace ID for linking to observability\n\
+    \n### `span_id`\n- **Type**: `str | None`\n- **Optional**\n- OTEL span ID for\
+    \ specific span feedback\n\n### `phoenix_synced`\n- **Type**: `<class ''bool''>`\n\
+    - **Optional**\n- Whether feedback has been synced to Phoenix as annotation\n\n\
+    ### `phoenix_annotation_id`\n- **Type**: `str | None`\n- **Optional**\n- Phoenix\
+    \ annotation ID after sync\n\n### `annotator_kind`\n- **Type**: `<class ''str''>`\n\
+    - **Optional**\n- Annotator type: HUMAN, LLM, CODE\n\n',\n    '{\"type\": \"object\"\
+    , \"description\": \"\\n    User feedback on a message or session.\\n\\n    Captures\
+    \ structured feedback including:\\n    - Rating (1-5 scale or thumbs up/down)\\\
+    n    - Categories (predefined or custom)\\n    - Free-text comment\\n    - Trace\
+    \ reference for OTEL/Phoenix integration\\n\\n    The feedback can be attached\
+    \ to:\\n    - A specific message (message_id set)\\n    - An entire session (session_id\
+    \ set, message_id null)\\n    \\n\\nThis agent can search the `feedbacks` table\
+    \ using the `search_rem` tool. Use REM query syntax: LOOKUP for exact match, FUZZY\
+    \ for typo-tolerant search, SEARCH for semantic similarity, or SQL for complex\
+    \ queries.\", \"properties\": {\"id\": {\"anyOf\": [{\"format\": \"uuid\", \"\
+    type\": \"string\"}, {\"type\": \"string\"}, {\"type\": \"null\"}], \"default\"\
+    : null, \"description\": \"Unique identifier (UUID or string, generated per model\
+    \ type). Generated automatically if not provided.\", \"title\": \"Id\"}, \"created_at\"\
+    : {\"description\": \"Entity creation timestamp\", \"format\": \"date-time\",\
+    \ \"title\": \"Created At\", \"type\": \"string\"}, \"updated_at\": {\"description\"\
+    : \"Last update timestamp\", \"format\": \"date-time\", \"title\": \"Updated At\"\
+    , \"type\": \"string\"}, \"deleted_at\": {\"anyOf\": [{\"format\": \"date-time\"\
+    , \"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\"\
+    : \"Soft deletion timestamp\", \"title\": \"Deleted At\"}, \"tenant_id\": {\"\
+    anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"\
+    description\": \"Tenant identifier for multi-tenancy isolation\", \"title\": \"\
+    Tenant Id\"}, \"user_id\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"\
+    null\"}], \"default\": null, \"description\": \"Owner user identifier (tenant-scoped).\
+    \ This is a VARCHAR(256), not a UUID, to allow flexibility for external identity\
+    \ providers. Typically generated as a hash of the user''s email address. In future,\
+    \ other strong unique claims (e.g., OAuth sub, verified phone) could also be used\
+    \ for generation.\", \"title\": \"User Id\"}, \"graph_edges\": {\"description\"\
+    : \"Knowledge graph edges stored as InlineEdge dicts\", \"items\": {\"additionalProperties\"\
+    : true, \"type\": \"object\"}, \"title\": \"Graph Edges\", \"type\": \"array\"\
+    }, \"metadata\": {\"additionalProperties\": true, \"description\": \"Flexible\
+    \ metadata storage\", \"title\": \"Metadata\", \"type\": \"object\"}, \"tags\"\
+    : {\"description\": \"Entity tags\", \"items\": {\"type\": \"string\"}, \"title\"\
+    : \"Tags\", \"type\": \"array\"}, \"session_id\": {\"description\": \"Session\
+    \ ID this feedback relates to\", \"title\": \"Session Id\", \"type\": \"string\"\
+    }, \"message_id\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}],\
+    \ \"default\": null, \"description\": \"Specific message ID (null for session-level\
+    \ feedback)\", \"title\": \"Message Id\"}, \"rating\": {\"anyOf\": [{\"maximum\"\
+    : 5, \"minimum\": -1, \"type\": \"integer\"}, {\"type\": \"null\"}], \"default\"\
+    : null, \"description\": \"Rating: -1 (thumbs down), 1 (thumbs up), or 1-5 scale\"\
+    , \"title\": \"Rating\"}, \"categories\": {\"description\": \"Selected feedback\
+    \ categories (from FeedbackCategory or custom)\", \"items\": {\"type\": \"string\"\
+    }, \"title\": \"Categories\", \"type\": \"array\"}, \"comment\": {\"anyOf\": [{\"\
+    type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\"\
+    : \"Optional free-text feedback comment\", \"title\": \"Comment\"}, \"trace_id\"\
+    : {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null,\
+    \ \"description\": \"OTEL trace ID for linking to observability\", \"title\":\
+    \ \"Trace Id\"}, \"span_id\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\":\
+    \ \"null\"}], \"default\": null, \"description\": \"OTEL span ID for specific\
+    \ span feedback\", \"title\": \"Span Id\"}, \"phoenix_synced\": {\"default\":\
+    \ false, \"description\": \"Whether feedback has been synced to Phoenix as annotation\"\
+    , \"title\": \"Phoenix Synced\", \"type\": \"boolean\"}, \"phoenix_annotation_id\"\
+    : {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null,\
+    \ \"description\": \"Phoenix annotation ID after sync\", \"title\": \"Phoenix\
+    \ Annotation Id\"}, \"annotator_kind\": {\"default\": \"HUMAN\", \"description\"\
+    : \"Annotator type: HUMAN, LLM, CODE\", \"title\": \"Annotator Kind\", \"type\"\
+    : \"string\"}}, \"required\": [\"session_id\"], \"json_schema_extra\": {\"table_name\"\
+    : \"feedbacks\", \"entity_key_field\": \"id\", \"embedding_fields\": [], \"fully_qualified_name\"\
+    : \"rem.models.entities.feedback.Feedback\", \"tools\": [\"search_rem\"], \"default_search_table\"\
+    : \"feedbacks\", \"has_embeddings\": false}}'::jsonb,\n    'entity',\n    '{\"\
+    table_name\": \"feedbacks\", \"entity_key_field\": \"id\", \"embedding_fields\"\
+    : [], \"fqn\": \"rem.models.entities.feedback.Feedback\"}'::jsonb\n)\nON CONFLICT\
+    \ (id) DO UPDATE SET\n    name = EXCLUDED.name,\n    content = EXCLUDED.content,\n\
+    \    spec = EXCLUDED.spec,\n    category = EXCLUDED.category,\n    metadata =\
+    \ EXCLUDED.metadata,\n    updated_at = CURRENT_TIMESTAMP;\n\n-- Schema entry for\
+    \ File (files)\nINSERT INTO schemas (id, tenant_id, name, content, spec, category,\
+    \ metadata)\nVALUES (\n    'c3b3ef33-59d4-57a1-81a3-cc6adc45b194'::uuid,\n   \
+    \ 'system',\n    'File',\n    '# File\n\n\n    File metadata and tracking.\n\n\
+    \    Represents files uploaded to or referenced by the REM system,\n    tracking\
+    \ their metadata and processing status. Tenant isolation\n    is provided via\
+    \ CoreModel.tenant_id field.\n    \n\n## Overview\n\nThe `File` entity is stored\
+    \ in the `files` table. Each record is uniquely\nidentified by its `id` field\
+    \ for lookups and graph traversal.\n\n## Search Capabilities\n\nThis schema includes\
+    \ the `search_rem` tool which supports:\n- **LOOKUP**: O(1) exact match by id\
+    \ (e.g., `LOOKUP \"entity-name\"`)\n- **FUZZY**: Typo-tolerant search (e.g., `FUZZY\
+    \ \"partial\" THRESHOLD 0.3`)\n- **SEARCH**: Semantic vector search on content\
+    \ (e.g., `SEARCH \"concept\" FROM files LIMIT 10`)\n- **SQL**: Complex queries\
+    \ (e.g., `SELECT * FROM files WHERE ...`)\n\n## Table Info\n\n| Property | Value\
+    \ |\n|----------|-------|\n| Table | `files` |\n| Entity Key | `id` |\n| Embedding\
+    \ Fields | `content` |\n| Tools | `search_rem` |\n\n## Fields\n\n### `id`\n- **Type**:\
+    \ `typing.Union[uuid.UUID, str, NoneType]`\n- **Optional**\n- Unique identifier\
+    \ (UUID or string, generated per model type). Generated automatically if not provided.\n\
+    \n### `created_at`\n- **Type**: `<class ''datetime.datetime''>`\n- **Optional**\n\
+    - Entity creation timestamp\n\n### `updated_at`\n- **Type**: `<class ''datetime.datetime''>`\n\
+    - **Optional**\n- Last update timestamp\n\n### `deleted_at`\n- **Type**: `typing.Optional[datetime.datetime]`\n\
+    - **Optional**\n- Soft deletion timestamp\n\n### `tenant_id`\n- **Type**: `typing.Optional[str]`\n\
+    - **Optional**\n- Tenant identifier for multi-tenancy isolation\n\n### `user_id`\n\
+    - **Type**: `typing.Optional[str]`\n- **Optional**\n- Owner user identifier (tenant-scoped).\
+    \ This is a VARCHAR(256), not a UUID, to allow flexibility for external identity\
+    \ providers. Typically generated as a hash of the user''s email address. In future,\
+    \ other strong unique claims (e.g., OAuth sub, verified phone) could also be used\
+    \ for generation.\n\n### `graph_edges`\n- **Type**: `list[dict]`\n- **Optional**\n\
+    - Knowledge graph edges stored as InlineEdge dicts\n\n### `metadata`\n- **Type**:\
+    \ `<class ''dict''>`\n- **Optional**\n- Flexible metadata storage\n\n### `tags`\n\
+    - **Type**: `list[str]`\n- **Optional**\n- Entity tags\n\n### `name`\n- **Type**:\
+    \ `<class ''str''>`\n- **Required**\n- File name\n\n### `uri`\n- **Type**: `<class\
+    \ ''str''>`\n- **Required**\n- File storage URI (S3, local path, etc.)\n\n###\
+    \ `content`\n- **Type**: `typing.Optional[str]`\n- **Optional**\n- Extracted text\
+    \ content (if applicable)\n\n### `timestamp`\n- **Type**: `typing.Optional[str]`\n\
+    - **Optional**\n- File creation/modification timestamp\n\n### `size_bytes`\n-\
+    \ **Type**: `typing.Optional[int]`\n- **Optional**\n- File size in bytes\n\n###\
+    \ `mime_type`\n- **Type**: `typing.Optional[str]`\n- **Optional**\n- File MIME\
+    \ type\n\n### `processing_status`\n- **Type**: `typing.Optional[str]`\n- **Optional**\n\
+    - File processing status (pending, processing, completed, failed)\n\n',\n    '{\"\
+    type\": \"object\", \"description\": \"\\n    File metadata and tracking.\\n\\\
+    n    Represents files uploaded to or referenced by the REM system,\\n    tracking\
+    \ their metadata and processing status. Tenant isolation\\n    is provided via\
+    \ CoreModel.tenant_id field.\\n    \\n\\nThis agent can search the `files` table\
+    \ using the `search_rem` tool. Use REM query syntax: LOOKUP for exact match, FUZZY\
+    \ for typo-tolerant search, SEARCH for semantic similarity, or SQL for complex\
+    \ queries.\", \"properties\": {\"id\": {\"anyOf\": [{\"format\": \"uuid\", \"\
+    type\": \"string\"}, {\"type\": \"string\"}, {\"type\": \"null\"}], \"default\"\
+    : null, \"description\": \"Unique identifier (UUID or string, generated per model\
+    \ type). Generated automatically if not provided.\", \"title\": \"Id\"}, \"created_at\"\
+    : {\"description\": \"Entity creation timestamp\", \"format\": \"date-time\",\
+    \ \"title\": \"Created At\", \"type\": \"string\"}, \"updated_at\": {\"description\"\
+    : \"Last update timestamp\", \"format\": \"date-time\", \"title\": \"Updated At\"\
+    , \"type\": \"string\"}, \"deleted_at\": {\"anyOf\": [{\"format\": \"date-time\"\
+    , \"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\"\
+    : \"Soft deletion timestamp\", \"title\": \"Deleted At\"}, \"tenant_id\": {\"\
+    anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"\
+    description\": \"Tenant identifier for multi-tenancy isolation\", \"title\": \"\
+    Tenant Id\"}, \"user_id\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"\
+    null\"}], \"default\": null, \"description\": \"Owner user identifier (tenant-scoped).\
+    \ This is a VARCHAR(256), not a UUID, to allow flexibility for external identity\
+    \ providers. Typically generated as a hash of the user''s email address. In future,\
+    \ other strong unique claims (e.g., OAuth sub, verified phone) could also be used\
+    \ for generation.\", \"title\": \"User Id\"}, \"graph_edges\": {\"description\"\
+    : \"Knowledge graph edges stored as InlineEdge dicts\", \"items\": {\"additionalProperties\"\
+    : true, \"type\": \"object\"}, \"title\": \"Graph Edges\", \"type\": \"array\"\
+    }, \"metadata\": {\"additionalProperties\": true, \"description\": \"Flexible\
+    \ metadata storage\", \"title\": \"Metadata\", \"type\": \"object\"}, \"tags\"\
+    : {\"description\": \"Entity tags\", \"items\": {\"type\": \"string\"}, \"title\"\
+    : \"Tags\", \"type\": \"array\"}, \"name\": {\"description\": \"File name\", \"\
+    title\": \"Name\", \"type\": \"string\"}, \"uri\": {\"description\": \"File storage\
+    \ URI (S3, local path, etc.)\", \"title\": \"Uri\", \"type\": \"string\"}, \"\
+    content\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\"\
+    : null, \"description\": \"Extracted text content (if applicable)\", \"title\"\
+    : \"Content\"}, \"timestamp\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\"\
+    : \"null\"}], \"default\": null, \"description\": \"File creation/modification\
+    \ timestamp\", \"title\": \"Timestamp\"}, \"size_bytes\": {\"anyOf\": [{\"type\"\
+    : \"integer\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"\
+    File size in bytes\", \"title\": \"Size Bytes\"}, \"mime_type\": {\"anyOf\": [{\"\
+    type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\"\
+    : \"File MIME type\", \"title\": \"Mime Type\"}, \"processing_status\": {\"anyOf\"\
+    : [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": \"pending\", \"\
+    description\": \"File processing status (pending, processing, completed, failed)\"\
+    , \"title\": \"Processing Status\"}}, \"required\": [\"name\", \"uri\"], \"json_schema_extra\"\
+    : {\"table_name\": \"files\", \"entity_key_field\": \"id\", \"embedding_fields\"\
+    : [\"content\"], \"fully_qualified_name\": \"rem.models.entities.file.File\",\
+    \ \"tools\": [\"search_rem\"], \"default_search_table\": \"files\", \"has_embeddings\"\
+    : true}}'::jsonb,\n    'entity',\n    '{\"table_name\": \"files\", \"entity_key_field\"\
+    : \"id\", \"embedding_fields\": [\"content\"], \"fqn\": \"rem.models.entities.file.File\"\
+    }'::jsonb\n)\nON CONFLICT (id) DO UPDATE SET\n    name = EXCLUDED.name,\n    content\
+    \ = EXCLUDED.content,\n    spec = EXCLUDED.spec,\n    category = EXCLUDED.category,\n\
+    \    metadata = EXCLUDED.metadata,\n    updated_at = CURRENT_TIMESTAMP;\n\n--\
+    \ Schema entry for ImageResource (image_resources)\nINSERT INTO schemas (id, tenant_id,\
+    \ name, content, spec, category, metadata)\nVALUES (\n    'ab4bc90c-2cda-55b2-bd4b-e78e19f7d4a7'::uuid,\n\
+    \    'system',\n    'ImageResource',\n    '# ImageResource\n\n\n    Image-specific\
+    \ resource with CLIP embeddings.\n\n    Stored in separate `image_resources` table\
+    \ with CLIP embeddings\n    instead of text embeddings. This enables:\n    - Multimodal\
+    \ search (text-to-image, image-to-image)\n    - Proper dimensionality (512/768\
+    \ for CLIP vs 1536 for text)\n    - Cost tracking (CLIP tokens separate from text\
+    \ tokens)\n\n    Embedding Strategy:\n    - Default (when JINA_API_KEY set): Jina\
+    \ CLIP API (jina-clip-v2)\n    - Future: Self-hosted OpenCLIP models via KEDA-scaled\
+    \ pods\n    - Fallback: No embeddings (images searchable by metadata only)\n\n\
+    \    Vision LLM Strategy (tier/sampling gated):\n    - Gold tier: Always get vision\
+    \ descriptions\n    - Silver/Free: Probabilistic sampling (IMAGE_VLLM_SAMPLE_RATE)\n\
+    \    - Fallback: Basic metadata only\n\n    Tenant isolation provided via CoreModel.tenant_id\
+    \ field.\n    \n\n## Overview\n\nThe `ImageResource` entity is stored in the `image_resources`\
+    \ table. Each record is uniquely\nidentified by its `name` field for lookups and\
+    \ graph traversal.\n\n## Search Capabilities\n\nThis schema includes the `search_rem`\
+    \ tool which supports:\n- **LOOKUP**: O(1) exact match by name (e.g., `LOOKUP\
+    \ \"entity-name\"`)\n- **FUZZY**: Typo-tolerant search (e.g., `FUZZY \"partial\"\
+    \ THRESHOLD 0.3`)\n- **SEARCH**: Semantic vector search on content (e.g., `SEARCH\
+    \ \"concept\" FROM image_resources LIMIT 10`)\n- **SQL**: Complex queries (e.g.,\
+    \ `SELECT * FROM image_resources WHERE ...`)\n\n## Table Info\n\n| Property |\
+    \ Value |\n|----------|-------|\n| Table | `image_resources` |\n| Entity Key |\
+    \ `name` |\n| Embedding Fields | `content` |\n| Tools | `search_rem` |\n\n## Fields\n\
+    \n### `id`\n- **Type**: `typing.Union[uuid.UUID, str, NoneType]`\n- **Optional**\n\
+    - Unique identifier (UUID or string, generated per model type). Generated automatically\
+    \ if not provided.\n\n### `created_at`\n- **Type**: `<class ''datetime.datetime''>`\n\
+    - **Optional**\n- Entity creation timestamp\n\n### `updated_at`\n- **Type**: `<class\
+    \ ''datetime.datetime''>`\n- **Optional**\n- Last update timestamp\n\n### `deleted_at`\n\
+    - **Type**: `typing.Optional[datetime.datetime]`\n- **Optional**\n- Soft deletion\
+    \ timestamp\n\n### `tenant_id`\n- **Type**: `typing.Optional[str]`\n- **Optional**\n\
+    - Tenant identifier for multi-tenancy isolation\n\n### `user_id`\n- **Type**:\
+    \ `typing.Optional[str]`\n- **Optional**\n- Owner user identifier (tenant-scoped).\
+    \ This is a VARCHAR(256), not a UUID, to allow flexibility for external identity\
+    \ providers. Typically generated as a hash of the user''s email address. In future,\
+    \ other strong unique claims (e.g., OAuth sub, verified phone) could also be used\
+    \ for generation.\n\n### `graph_edges`\n- **Type**: `list[dict]`\n- **Optional**\n\
+    - Knowledge graph edges stored as InlineEdge dicts\n\n### `metadata`\n- **Type**:\
+    \ `<class ''dict''>`\n- **Optional**\n- Flexible metadata storage\n\n### `tags`\n\
+    - **Type**: `list[str]`\n- **Optional**\n- Entity tags\n\n### `name`\n- **Type**:\
+    \ `typing.Optional[str]`\n- **Optional**\n- Human-readable resource name (used\
+    \ as graph label). Auto-generated from uri+ordinal if not provided.\n\n### `uri`\n\
+    - **Type**: `typing.Optional[str]`\n- **Optional**\n- Content URI or identifier\
+    \ (file path, URL, etc.)\n\n### `ordinal`\n- **Type**: `<class ''int''>`\n- **Optional**\n\
+    - Chunk ordinal for splitting large documents (0 for single-chunk resources)\n\
+    \n### `content`\n- **Type**: `<class ''str''>`\n- **Optional**\n- Resource content\
+    \ text\n\n### `timestamp`\n- **Type**: `<class ''datetime.datetime''>`\n- **Optional**\n\
+    - Resource timestamp (content creation/publication time)\n\n### `category`\n-\
+    \ **Type**: `typing.Optional[str]`\n- **Optional**\n- Resource category (document,\
+    \ conversation, artifact, etc.)\n\n### `related_entities`\n- **Type**: `list[dict]`\n\
+    - **Optional**\n- Extracted entities (people, projects, concepts) with metadata\n\
+    \n### `image_width`\n- **Type**: `typing.Optional[int]`\n- **Optional**\n- Image\
+    \ width in pixels\n\n### `image_height`\n- **Type**: `typing.Optional[int]`\n\
+    - **Optional**\n- Image height in pixels\n\n### `image_format`\n- **Type**: `typing.Optional[str]`\n\
+    - **Optional**\n- Image format (PNG, JPEG, GIF, WebP)\n\n### `vision_description`\n\
+    - **Type**: `typing.Optional[str]`\n- **Optional**\n- Vision LLM generated description\
+    \ (markdown, only for gold tier or sampled images)\n\n### `vision_provider`\n\
+    - **Type**: `typing.Optional[str]`\n- **Optional**\n- Vision provider used (anthropic,\
+    \ gemini, openai)\n\n### `vision_model`\n- **Type**: `typing.Optional[str]`\n\
+    - **Optional**\n- Vision model used for description\n\n### `clip_embedding`\n\
+    - **Type**: `typing.Optional[list[float]]`\n- **Optional**\n- CLIP embedding vector\
+    \ (512 or 768 dimensions, from Jina AI or self-hosted)\n\n### `clip_dimensions`\n\
+    - **Type**: `typing.Optional[int]`\n- **Optional**\n- CLIP embedding dimensionality\
+    \ (512 for jina-clip-v2, 768 for jina-clip-v1)\n\n',\n    '{\"type\": \"object\"\
+    , \"description\": \"\\n    Image-specific resource with CLIP embeddings.\\n\\\
+    n    Stored in separate `image_resources` table with CLIP embeddings\\n    instead\
+    \ of text embeddings. This enables:\\n    - Multimodal search (text-to-image,\
+    \ image-to-image)\\n    - Proper dimensionality (512/768 for CLIP vs 1536 for\
+    \ text)\\n    - Cost tracking (CLIP tokens separate from text tokens)\\n\\n  \
+    \  Embedding Strategy:\\n    - Default (when JINA_API_KEY set): Jina CLIP API\
+    \ (jina-clip-v2)\\n    - Future: Self-hosted OpenCLIP models via KEDA-scaled pods\\\
+    n    - Fallback: No embeddings (images searchable by metadata only)\\n\\n    Vision\
+    \ LLM Strategy (tier/sampling gated):\\n    - Gold tier: Always get vision descriptions\\\
+    n    - Silver/Free: Probabilistic sampling (IMAGE_VLLM_SAMPLE_RATE)\\n    - Fallback:\
+    \ Basic metadata only\\n\\n    Tenant isolation provided via CoreModel.tenant_id\
+    \ field.\\n    \\n\\nThis agent can search the `image_resources` table using the\
+    \ `search_rem` tool. Use REM query syntax: LOOKUP for exact match, FUZZY for typo-tolerant\
+    \ search, SEARCH for semantic similarity, or SQL for complex queries.\", \"properties\"\
+    : {\"id\": {\"anyOf\": [{\"format\": \"uuid\", \"type\": \"string\"}, {\"type\"\
+    : \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Unique\
+    \ identifier (UUID or string, generated per model type). Generated automatically\
+    \ if not provided.\", \"title\": \"Id\"}, \"created_at\": {\"description\": \"\
+    Entity creation timestamp\", \"format\": \"date-time\", \"title\": \"Created At\"\
+    , \"type\": \"string\"}, \"updated_at\": {\"description\": \"Last update timestamp\"\
+    , \"format\": \"date-time\", \"title\": \"Updated At\", \"type\": \"string\"},\
+    \ \"deleted_at\": {\"anyOf\": [{\"format\": \"date-time\", \"type\": \"string\"\
+    }, {\"type\": \"null\"}], \"default\": null, \"description\": \"Soft deletion\
+    \ timestamp\", \"title\": \"Deleted At\"}, \"tenant_id\": {\"anyOf\": [{\"type\"\
+    : \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Tenant\
+    \ identifier for multi-tenancy isolation\", \"title\": \"Tenant Id\"}, \"user_id\"\
+    : {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null,\
+    \ \"description\": \"Owner user identifier (tenant-scoped). This is a VARCHAR(256),\
+    \ not a UUID, to allow flexibility for external identity providers. Typically\
+    \ generated as a hash of the user''s email address. In future, other strong unique\
+    \ claims (e.g., OAuth sub, verified phone) could also be used for generation.\"\
+    , \"title\": \"User Id\"}, \"graph_edges\": {\"description\": \"Knowledge graph\
+    \ edges stored as InlineEdge dicts\", \"items\": {\"additionalProperties\": true,\
+    \ \"type\": \"object\"}, \"title\": \"Graph Edges\", \"type\": \"array\"}, \"\
+    metadata\": {\"additionalProperties\": true, \"description\": \"Flexible metadata\
+    \ storage\", \"title\": \"Metadata\", \"type\": \"object\"}, \"tags\": {\"description\"\
+    : \"Entity tags\", \"items\": {\"type\": \"string\"}, \"title\": \"Tags\", \"\
+    type\": \"array\"}, \"name\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\":\
+    \ \"null\"}], \"default\": null, \"description\": \"Human-readable resource name\
+    \ (used as graph label). Auto-generated from uri+ordinal if not provided.\", \"\
+    entity_key\": true, \"title\": \"Name\"}, \"uri\": {\"anyOf\": [{\"type\": \"\
+    string\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Content\
+    \ URI or identifier (file path, URL, etc.)\", \"title\": \"Uri\"}, \"ordinal\"\
+    : {\"composite_key\": true, \"default\": 0, \"description\": \"Chunk ordinal for\
+    \ splitting large documents (0 for single-chunk resources)\", \"title\": \"Ordinal\"\
+    , \"type\": \"integer\"}, \"content\": {\"default\": \"\", \"description\": \"\
+    Resource content text\", \"title\": \"Content\", \"type\": \"string\"}, \"timestamp\"\
+    : {\"description\": \"Resource timestamp (content creation/publication time)\"\
+    , \"format\": \"date-time\", \"title\": \"Timestamp\", \"type\": \"string\"},\
+    \ \"category\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"\
+    default\": null, \"description\": \"Resource category (document, conversation,\
+    \ artifact, etc.)\", \"title\": \"Category\"}, \"related_entities\": {\"description\"\
+    : \"Extracted entities (people, projects, concepts) with metadata\", \"items\"\
+    : {\"additionalProperties\": true, \"type\": \"object\"}, \"title\": \"Related\
+    \ Entities\", \"type\": \"array\"}, \"image_width\": {\"anyOf\": [{\"type\": \"\
+    integer\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Image\
+    \ width in pixels\", \"title\": \"Image Width\"}, \"image_height\": {\"anyOf\"\
+    : [{\"type\": \"integer\"}, {\"type\": \"null\"}], \"default\": null, \"description\"\
+    : \"Image height in pixels\", \"title\": \"Image Height\"}, \"image_format\":\
+    \ {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null,\
+    \ \"description\": \"Image format (PNG, JPEG, GIF, WebP)\", \"title\": \"Image\
+    \ Format\"}, \"vision_description\": {\"anyOf\": [{\"type\": \"string\"}, {\"\
+    type\": \"null\"}], \"default\": null, \"description\": \"Vision LLM generated\
+    \ description (markdown, only for gold tier or sampled images)\", \"title\": \"\
+    Vision Description\"}, \"vision_provider\": {\"anyOf\": [{\"type\": \"string\"\
+    }, {\"type\": \"null\"}], \"default\": null, \"description\": \"Vision provider\
+    \ used (anthropic, gemini, openai)\", \"title\": \"Vision Provider\"}, \"vision_model\"\
+    : {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null,\
+    \ \"description\": \"Vision model used for description\", \"title\": \"Vision\
+    \ Model\"}, \"clip_embedding\": {\"anyOf\": [{\"items\": {\"type\": \"number\"\
+    }, \"type\": \"array\"}, {\"type\": \"null\"}], \"default\": null, \"description\"\
+    : \"CLIP embedding vector (512 or 768 dimensions, from Jina AI or self-hosted)\"\
+    , \"title\": \"Clip Embedding\"}, \"clip_dimensions\": {\"anyOf\": [{\"type\"\
+    : \"integer\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"\
+    CLIP embedding dimensionality (512 for jina-clip-v2, 768 for jina-clip-v1)\",\
+    \ \"title\": \"Clip Dimensions\"}}, \"required\": [], \"json_schema_extra\": {\"\
+    table_name\": \"image_resources\", \"entity_key_field\": \"name\", \"embedding_fields\"\
+    : [\"content\"], \"fully_qualified_name\": \"rem.models.entities.image_resource.ImageResource\"\
+    , \"tools\": [\"search_rem\"], \"default_search_table\": \"image_resources\",\
+    \ \"has_embeddings\": true}}'::jsonb,\n    'entity',\n    '{\"table_name\": \"\
+    image_resources\", \"entity_key_field\": \"name\", \"embedding_fields\": [\"content\"\
+    ], \"fqn\": \"rem.models.entities.image_resource.ImageResource\"}'::jsonb\n)\n\
+    ON CONFLICT (id) DO UPDATE SET\n    name = EXCLUDED.name,\n    content = EXCLUDED.content,\n\
+    \    spec = EXCLUDED.spec,\n    category = EXCLUDED.category,\n    metadata =\
+    \ EXCLUDED.metadata,\n    updated_at = CURRENT_TIMESTAMP;\n\n-- Schema entry for\
+    \ Message (messages)\nINSERT INTO schemas (id, tenant_id, name, content, spec,\
+    \ category, metadata)\nVALUES (\n    'be36f9da-6df4-51ba-bb41-bf51246ecec1'::uuid,\n\
+    \    'system',\n    'Message',\n    '# Message\n\n\n    Communication content\
+    \ unit.\n\n    Represents individual messages in conversations, chats, or other\n\
+    \    communication contexts. Tenant isolation is provided via CoreModel.tenant_id\
+    \ field.\n\n    Trace fields (trace_id, span_id) enable integration with OTEL/Phoenix\n\
+    \    for observability and feedback annotation.\n    \n\n## Overview\n\nThe `Message`\
+    \ entity is stored in the `messages` table. Each record is uniquely\nidentified\
+    \ by its `id` field for lookups and graph traversal.\n\n## Search Capabilities\n\
+    \nThis schema includes the `search_rem` tool which supports:\n- **LOOKUP**: O(1)\
+    \ exact match by id (e.g., `LOOKUP \"entity-name\"`)\n- **FUZZY**: Typo-tolerant\
+    \ search (e.g., `FUZZY \"partial\" THRESHOLD 0.3`)\n- **SEARCH**: Semantic vector\
+    \ search on content (e.g., `SEARCH \"concept\" FROM messages LIMIT 10`)\n- **SQL**:\
+    \ Complex queries (e.g., `SELECT * FROM messages WHERE ...`)\n\n## Table Info\n\
+    \n| Property | Value |\n|----------|-------|\n| Table | `messages` |\n| Entity\
+    \ Key | `id` |\n| Embedding Fields | `content` |\n| Tools | `search_rem` |\n\n\
+    ## Fields\n\n### `id`\n- **Type**: `typing.Union[uuid.UUID, str, NoneType]`\n\
+    - **Optional**\n- Unique identifier (UUID or string, generated per model type).\
+    \ Generated automatically if not provided.\n\n### `created_at`\n- **Type**: `<class\
+    \ ''datetime.datetime''>`\n- **Optional**\n- Entity creation timestamp\n\n###\
+    \ `updated_at`\n- **Type**: `<class ''datetime.datetime''>`\n- **Optional**\n\
+    - Last update timestamp\n\n### `deleted_at`\n- **Type**: `typing.Optional[datetime.datetime]`\n\
+    - **Optional**\n- Soft deletion timestamp\n\n### `tenant_id`\n- **Type**: `typing.Optional[str]`\n\
+    - **Optional**\n- Tenant identifier for multi-tenancy isolation\n\n### `user_id`\n\
+    - **Type**: `typing.Optional[str]`\n- **Optional**\n- Owner user identifier (tenant-scoped).\
+    \ This is a VARCHAR(256), not a UUID, to allow flexibility for external identity\
+    \ providers. Typically generated as a hash of the user''s email address. In future,\
+    \ other strong unique claims (e.g., OAuth sub, verified phone) could also be used\
+    \ for generation.\n\n### `graph_edges`\n- **Type**: `list[dict]`\n- **Optional**\n\
+    - Knowledge graph edges stored as InlineEdge dicts\n\n### `metadata`\n- **Type**:\
+    \ `<class ''dict''>`\n- **Optional**\n- Flexible metadata storage\n\n### `tags`\n\
+    - **Type**: `list[str]`\n- **Optional**\n- Entity tags\n\n### `content`\n- **Type**:\
+    \ `<class ''str''>`\n- **Required**\n- Message content text\n\n### `message_type`\n\
+    - **Type**: `str | None`\n- **Optional**\n- Message type e.g. role: ''user'',\
+    \ ''assistant'', ''system'', ''tool''\n\n### `session_id`\n- **Type**: `str |\
+    \ None`\n- **Optional**\n- Session identifier for tracking message context\n\n\
+    ### `prompt`\n- **Type**: `str | None`\n- **Optional**\n- Custom prompt used for\
+    \ this message (if overridden from default)\n\n### `model`\n- **Type**: `str |\
+    \ None`\n- **Optional**\n- Model used for generating this message (provider:model\
+    \ format)\n\n### `token_count`\n- **Type**: `int | None`\n- **Optional**\n- Token\
+    \ count for this message\n\n### `trace_id`\n- **Type**: `str | None`\n- **Optional**\n\
+    - OTEL trace ID for observability integration\n\n### `span_id`\n- **Type**: `str\
+    \ | None`\n- **Optional**\n- OTEL span ID for specific span reference\n\n',\n\
+    \    '{\"type\": \"object\", \"description\": \"\\n    Communication content unit.\\\
+    n\\n    Represents individual messages in conversations, chats, or other\\n  \
+    \  communication contexts. Tenant isolation is provided via CoreModel.tenant_id\
+    \ field.\\n\\n    Trace fields (trace_id, span_id) enable integration with OTEL/Phoenix\\\
+    n    for observability and feedback annotation.\\n    \\n\\nThis agent can search\
+    \ the `messages` table using the `search_rem` tool. Use REM query syntax: LOOKUP\
+    \ for exact match, FUZZY for typo-tolerant search, SEARCH for semantic similarity,\
+    \ or SQL for complex queries.\", \"properties\": {\"id\": {\"anyOf\": [{\"format\"\
+    : \"uuid\", \"type\": \"string\"}, {\"type\": \"string\"}, {\"type\": \"null\"\
+    }], \"default\": null, \"description\": \"Unique identifier (UUID or string, generated\
+    \ per model type). Generated automatically if not provided.\", \"title\": \"Id\"\
+    }, \"created_at\": {\"description\": \"Entity creation timestamp\", \"format\"\
+    : \"date-time\", \"title\": \"Created At\", \"type\": \"string\"}, \"updated_at\"\
+    : {\"description\": \"Last update timestamp\", \"format\": \"date-time\", \"title\"\
+    : \"Updated At\", \"type\": \"string\"}, \"deleted_at\": {\"anyOf\": [{\"format\"\
+    : \"date-time\", \"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null,\
+    \ \"description\": \"Soft deletion timestamp\", \"title\": \"Deleted At\"}, \"\
+    tenant_id\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\"\
+    : null, \"description\": \"Tenant identifier for multi-tenancy isolation\", \"\
+    title\": \"Tenant Id\"}, \"user_id\": {\"anyOf\": [{\"type\": \"string\"}, {\"\
+    type\": \"null\"}], \"default\": null, \"description\": \"Owner user identifier\
+    \ (tenant-scoped). This is a VARCHAR(256), not a UUID, to allow flexibility for\
+    \ external identity providers. Typically generated as a hash of the user''s email\
+    \ address. In future, other strong unique claims (e.g., OAuth sub, verified phone)\
+    \ could also be used for generation.\", \"title\": \"User Id\"}, \"graph_edges\"\
+    : {\"description\": \"Knowledge graph edges stored as InlineEdge dicts\", \"items\"\
+    : {\"additionalProperties\": true, \"type\": \"object\"}, \"title\": \"Graph Edges\"\
+    , \"type\": \"array\"}, \"metadata\": {\"additionalProperties\": true, \"description\"\
+    : \"Flexible metadata storage\", \"title\": \"Metadata\", \"type\": \"object\"\
+    }, \"tags\": {\"description\": \"Entity tags\", \"items\": {\"type\": \"string\"\
+    }, \"title\": \"Tags\", \"type\": \"array\"}, \"content\": {\"description\": \"\
+    Message content text\", \"title\": \"Content\", \"type\": \"string\"}, \"message_type\"\
+    : {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null,\
+    \ \"description\": \"Message type e.g. role: ''user'', ''assistant'', ''system'',\
+    \ ''tool''\", \"title\": \"Message Type\"}, \"session_id\": {\"anyOf\": [{\"type\"\
+    : \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Session\
+    \ identifier for tracking message context\", \"title\": \"Session Id\"}, \"prompt\"\
+    : {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null,\
+    \ \"description\": \"Custom prompt used for this message (if overridden from default)\"\
+    , \"title\": \"Prompt\"}, \"model\": {\"anyOf\": [{\"type\": \"string\"}, {\"\
+    type\": \"null\"}], \"default\": null, \"description\": \"Model used for generating\
+    \ this message (provider:model format)\", \"title\": \"Model\"}, \"token_count\"\
+    : {\"anyOf\": [{\"type\": \"integer\"}, {\"type\": \"null\"}], \"default\": null,\
+    \ \"description\": \"Token count for this message\", \"title\": \"Token Count\"\
+    }, \"trace_id\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"\
+    default\": null, \"description\": \"OTEL trace ID for observability integration\"\
+    , \"title\": \"Trace Id\"}, \"span_id\": {\"anyOf\": [{\"type\": \"string\"},\
+    \ {\"type\": \"null\"}], \"default\": null, \"description\": \"OTEL span ID for\
+    \ specific span reference\", \"title\": \"Span Id\"}}, \"required\": [\"content\"\
+    ], \"json_schema_extra\": {\"table_name\": \"messages\", \"entity_key_field\"\
+    : \"id\", \"embedding_fields\": [\"content\"], \"fully_qualified_name\": \"rem.models.entities.message.Message\"\
+    , \"tools\": [\"search_rem\"], \"default_search_table\": \"messages\", \"has_embeddings\"\
+    : true}}'::jsonb,\n    'entity',\n    '{\"table_name\": \"messages\", \"entity_key_field\"\
+    : \"id\", \"embedding_fields\": [\"content\"], \"fqn\": \"rem.models.entities.message.Message\"\
+    }'::jsonb\n)\nON CONFLICT (id) DO UPDATE SET\n    name = EXCLUDED.name,\n    content\
+    \ = EXCLUDED.content,\n    spec = EXCLUDED.spec,\n    category = EXCLUDED.category,\n\
+    \    metadata = EXCLUDED.metadata,\n    updated_at = CURRENT_TIMESTAMP;\n\n--\
+    \ Schema entry for Moment (moments)\nINSERT INTO schemas (id, tenant_id, name,\
+    \ content, spec, category, metadata)\nVALUES (\n    'a08f0a8c-5bab-5bf5-9760-0e67bc69bd74'::uuid,\n\
+    \    'system',\n    'Moment',\n    '# Moment\n\n\n    Temporal narrative extracted\
+    \ from resources.\n\n    Moments provide temporal structure and context for the\
+    \ REM graph,\n    enabling time-based queries and understanding of when events\
+    \ occurred.\n    Tenant isolation is provided via CoreModel.tenant_id field.\n\
+    \    \n\n## Overview\n\nThe `Moment` entity is stored in the `moments` table.\
+    \ Each record is uniquely\nidentified by its `name` field for lookups and graph\
+    \ traversal.\n\n## Search Capabilities\n\nThis schema includes the `search_rem`\
+    \ tool which supports:\n- **LOOKUP**: O(1) exact match by name (e.g., `LOOKUP\
+    \ \"entity-name\"`)\n- **FUZZY**: Typo-tolerant search (e.g., `FUZZY \"partial\"\
+    \ THRESHOLD 0.3`)\n- **SEARCH**: Semantic vector search on summary (e.g., `SEARCH\
+    \ \"concept\" FROM moments LIMIT 10`)\n- **SQL**: Complex queries (e.g., `SELECT\
+    \ * FROM moments WHERE ...`)\n\n## Table Info\n\n| Property | Value |\n|----------|-------|\n\
+    | Table | `moments` |\n| Entity Key | `name` |\n| Embedding Fields | `summary`\
+    \ |\n| Tools | `search_rem` |\n\n## Fields\n\n### `id`\n- **Type**: `typing.Union[uuid.UUID,\
+    \ str, NoneType]`\n- **Optional**\n- Unique identifier (UUID or string, generated\
+    \ per model type). Generated automatically if not provided.\n\n### `created_at`\n\
+    - **Type**: `<class ''datetime.datetime''>`\n- **Optional**\n- Entity creation\
+    \ timestamp\n\n### `updated_at`\n- **Type**: `<class ''datetime.datetime''>`\n\
+    - **Optional**\n- Last update timestamp\n\n### `deleted_at`\n- **Type**: `typing.Optional[datetime.datetime]`\n\
+    - **Optional**\n- Soft deletion timestamp\n\n### `tenant_id`\n- **Type**: `typing.Optional[str]`\n\
+    - **Optional**\n- Tenant identifier for multi-tenancy isolation\n\n### `user_id`\n\
+    - **Type**: `typing.Optional[str]`\n- **Optional**\n- Owner user identifier (tenant-scoped).\
+    \ This is a VARCHAR(256), not a UUID, to allow flexibility for external identity\
+    \ providers. Typically generated as a hash of the user''s email address. In future,\
+    \ other strong unique claims (e.g., OAuth sub, verified phone) could also be used\
+    \ for generation.\n\n### `graph_edges`\n- **Type**: `list[dict]`\n- **Optional**\n\
+    - Knowledge graph edges stored as InlineEdge dicts\n\n### `metadata`\n- **Type**:\
+    \ `<class ''dict''>`\n- **Optional**\n- Flexible metadata storage\n\n### `tags`\n\
+    - **Type**: `list[str]`\n- **Optional**\n- Entity tags\n\n### `name`\n- **Type**:\
+    \ `typing.Optional[str]`\n- **Optional**\n- Human-readable moment name (used as\
+    \ graph label). Auto-generated from starts_timestamp+moment_type if not provided.\n\
+    \n### `moment_type`\n- **Type**: `typing.Optional[str]`\n- **Optional**\n- Moment\
+    \ classification (meeting, coding-session, conversation, etc.)\n\n### `category`\n\
+    - **Type**: `typing.Optional[str]`\n- **Optional**\n- Moment category for grouping\
+    \ and filtering\n\n### `starts_timestamp`\n- **Type**: `<class ''datetime.datetime''>`\n\
+    - **Required**\n- Moment start time\n\n### `ends_timestamp`\n- **Type**: `typing.Optional[datetime.datetime]`\n\
+    - **Optional**\n- Moment end time\n\n### `present_persons`\n- **Type**: `list[rem.models.entities.moment.Person]`\n\
+    - **Optional**\n- People present in the moment\n\n### `emotion_tags`\n- **Type**:\
+    \ `list[str]`\n- **Optional**\n- Emotion/sentiment tags (happy, frustrated, focused,\
+    \ etc.)\n\n### `topic_tags`\n- **Type**: `list[str]`\n- **Optional**\n- Topic/concept\
+    \ tags (project names, technologies, etc.)\n\n### `summary`\n- **Type**: `typing.Optional[str]`\n\
+    - **Optional**\n- Natural language summary of the moment\n\n### `source_resource_ids`\n\
+    - **Type**: `list[str]`\n- **Optional**\n- Resource IDs used to construct this\
+    \ moment\n\n',\n    '{\"type\": \"object\", \"description\": \"\\n    Temporal\
+    \ narrative extracted from resources.\\n\\n    Moments provide temporal structure\
+    \ and context for the REM graph,\\n    enabling time-based queries and understanding\
+    \ of when events occurred.\\n    Tenant isolation is provided via CoreModel.tenant_id\
+    \ field.\\n    \\n\\nThis agent can search the `moments` table using the `search_rem`\
+    \ tool. Use REM query syntax: LOOKUP for exact match, FUZZY for typo-tolerant\
+    \ search, SEARCH for semantic similarity, or SQL for complex queries.\", \"properties\"\
+    : {\"id\": {\"anyOf\": [{\"format\": \"uuid\", \"type\": \"string\"}, {\"type\"\
+    : \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Unique\
+    \ identifier (UUID or string, generated per model type). Generated automatically\
+    \ if not provided.\", \"title\": \"Id\"}, \"created_at\": {\"description\": \"\
+    Entity creation timestamp\", \"format\": \"date-time\", \"title\": \"Created At\"\
+    , \"type\": \"string\"}, \"updated_at\": {\"description\": \"Last update timestamp\"\
+    , \"format\": \"date-time\", \"title\": \"Updated At\", \"type\": \"string\"},\
+    \ \"deleted_at\": {\"anyOf\": [{\"format\": \"date-time\", \"type\": \"string\"\
+    }, {\"type\": \"null\"}], \"default\": null, \"description\": \"Soft deletion\
+    \ timestamp\", \"title\": \"Deleted At\"}, \"tenant_id\": {\"anyOf\": [{\"type\"\
+    : \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Tenant\
+    \ identifier for multi-tenancy isolation\", \"title\": \"Tenant Id\"}, \"user_id\"\
+    : {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null,\
+    \ \"description\": \"Owner user identifier (tenant-scoped). This is a VARCHAR(256),\
+    \ not a UUID, to allow flexibility for external identity providers. Typically\
+    \ generated as a hash of the user''s email address. In future, other strong unique\
+    \ claims (e.g., OAuth sub, verified phone) could also be used for generation.\"\
+    , \"title\": \"User Id\"}, \"graph_edges\": {\"description\": \"Knowledge graph\
+    \ edges stored as InlineEdge dicts\", \"items\": {\"additionalProperties\": true,\
+    \ \"type\": \"object\"}, \"title\": \"Graph Edges\", \"type\": \"array\"}, \"\
+    metadata\": {\"additionalProperties\": true, \"description\": \"Flexible metadata\
+    \ storage\", \"title\": \"Metadata\", \"type\": \"object\"}, \"tags\": {\"description\"\
+    : \"Entity tags\", \"items\": {\"type\": \"string\"}, \"title\": \"Tags\", \"\
+    type\": \"array\"}, \"name\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\":\
+    \ \"null\"}], \"default\": null, \"description\": \"Human-readable moment name\
+    \ (used as graph label). Auto-generated from starts_timestamp+moment_type if not\
+    \ provided.\", \"entity_key\": true, \"title\": \"Name\"}, \"moment_type\": {\"\
+    anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"\
+    description\": \"Moment classification (meeting, coding-session, conversation,\
+    \ etc.)\", \"title\": \"Moment Type\"}, \"category\": {\"anyOf\": [{\"type\":\
+    \ \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Moment\
+    \ category for grouping and filtering\", \"title\": \"Category\"}, \"starts_timestamp\"\
+    : {\"description\": \"Moment start time\", \"format\": \"date-time\", \"title\"\
+    : \"Starts Timestamp\", \"type\": \"string\"}, \"ends_timestamp\": {\"anyOf\"\
+    : [{\"format\": \"date-time\", \"type\": \"string\"}, {\"type\": \"null\"}], \"\
+    default\": null, \"description\": \"Moment end time\", \"title\": \"Ends Timestamp\"\
+    }, \"present_persons\": {\"description\": \"People present in the moment\", \"\
+    items\": {\"$ref\": \"#/$defs/Person\"}, \"title\": \"Present Persons\", \"type\"\
+    : \"array\"}, \"emotion_tags\": {\"description\": \"Emotion/sentiment tags (happy,\
+    \ frustrated, focused, etc.)\", \"items\": {\"type\": \"string\"}, \"title\":\
+    \ \"Emotion Tags\", \"type\": \"array\"}, \"topic_tags\": {\"description\": \"\
+    Topic/concept tags (project names, technologies, etc.)\", \"items\": {\"type\"\
+    : \"string\"}, \"title\": \"Topic Tags\", \"type\": \"array\"}, \"summary\": {\"\
+    anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"\
+    description\": \"Natural language summary of the moment\", \"title\": \"Summary\"\
+    }, \"source_resource_ids\": {\"description\": \"Resource IDs used to construct\
+    \ this moment\", \"items\": {\"type\": \"string\"}, \"title\": \"Source Resource\
+    \ Ids\", \"type\": \"array\"}}, \"required\": [\"starts_timestamp\"], \"json_schema_extra\"\
+    : {\"table_name\": \"moments\", \"entity_key_field\": \"name\", \"embedding_fields\"\
+    : [\"summary\"], \"fully_qualified_name\": \"rem.models.entities.moment.Moment\"\
+    , \"tools\": [\"search_rem\"], \"default_search_table\": \"moments\", \"has_embeddings\"\
+    : true}}'::jsonb,\n    'entity',\n    '{\"table_name\": \"moments\", \"entity_key_field\"\
+    : \"name\", \"embedding_fields\": [\"summary\"], \"fqn\": \"rem.models.entities.moment.Moment\"\
+    }'::jsonb\n)\nON CONFLICT (id) DO UPDATE SET\n    name = EXCLUDED.name,\n    content\
+    \ = EXCLUDED.content,\n    spec = EXCLUDED.spec,\n    category = EXCLUDED.category,\n\
+    \    metadata = EXCLUDED.metadata,\n    updated_at = CURRENT_TIMESTAMP;\n\n--\
+    \ Schema entry for Ontology (ontologies)\nINSERT INTO schemas (id, tenant_id,\
+    \ name, content, spec, category, metadata)\nVALUES (\n    'a702ed74-8988-534a-9917-2977349777c1'::uuid,\n\
+    \    'system',\n    'Ontology',\n    '# Ontology\n\nDomain-specific knowledge\
+    \ extracted from files using custom agents.\n\n    Attributes:\n        name:\
+    \ Human-readable label for this ontology instance\n        file_id: Foreign key\
+    \ to File entity that was processed\n        agent_schema_id: Foreign key to Schema\
+    \ entity that performed extraction\n        provider_name: LLM provider used for\
+    \ extraction (e.g., \"anthropic\", \"openai\")\n        model_name: Specific model\
+    \ used (e.g., \"claude-sonnet-4-5\")\n        extracted_data: Structured data\
+    \ extracted by agent (arbitrary JSON)\n        confidence_score: Optional confidence\
+    \ score from extraction (0.0-1.0)\n        extraction_timestamp: When extraction\
+    \ was performed\n        embedding_text: Text used for generating embedding (derived\
+    \ from extracted_data)\n\n    Inherited from CoreModel:\n        id: UUID or string\
+    \ identifier\n        created_at: Entity creation timestamp\n        updated_at:\
+    \ Last update timestamp\n        deleted_at: Soft deletion timestamp\n       \
+    \ tenant_id: Multi-tenancy isolation\n        user_id: Ownership\n        graph_edges:\
+    \ Relationships to other entities\n        metadata: Flexible metadata storage\n\
+    \        tags: Classification tags\n        column: Database schema metadata\n\
+    \n    Example Usage:\n        # CV extraction\n        cv_ontology = Ontology(\n\
+    \            name=\"john-doe-cv-2024\",\n            file_id=\"file-uuid-123\"\
+    ,\n            agent_schema_id=\"cv-parser-v1\",\n            provider_name=\"\
+    anthropic\",\n            model_name=\"claude-sonnet-4-5-20250929\",\n       \
+    \     extracted_data={\n                \"candidate_name\": \"John Doe\",\n  \
+    \              \"email\": \"john@example.com\",\n                \"skills\": [\"\
+    Python\", \"PostgreSQL\", \"Kubernetes\"],\n                \"experience\": [\n\
+    \                    {\n                        \"company\": \"TechCorp\",\n \
+    \                       \"role\": \"Senior Engineer\",\n                     \
+    \   \"years\": 3,\n                        \"achievements\": [\"Led migration\
+    \ to k8s\", \"Reduced costs 40%\"]\n                    }\n                ],\n\
+    \                \"education\": [\n                    {\"degree\": \"BS Computer\
+    \ Science\", \"institution\": \"MIT\", \"year\": 2018}\n                ]\n  \
+    \          },\n            confidence_score=0.95,\n            tags=[\"cv\", \"\
+    engineering\", \"senior-level\"]\n        )\n\n        # Contract extraction\n\
+    \        contract_ontology = Ontology(\n            name=\"acme-supplier-agreement-2024\"\
+    ,\n            file_id=\"file-uuid-456\",\n            agent_schema_id=\"contract-parser-v2\"\
+    ,\n            provider_name=\"openai\",\n            model_name=\"gpt-4o\",\n\
+    \            extracted_data={\n                \"contract_type\": \"supplier_agreement\"\
+    ,\n                \"parties\": [\n                    {\"name\": \"ACME Corp\"\
+    , \"role\": \"buyer\"},\n                    {\"name\": \"SupplyChain Inc\", \"\
+    role\": \"supplier\"}\n                ],\n                \"effective_date\"\
+    : \"2024-01-01\",\n                \"termination_date\": \"2026-12-31\",\n   \
+    \             \"payment_terms\": {\n                    \"amount\": 500000,\n\
+    \                    \"currency\": \"USD\",\n                    \"frequency\"\
+    : \"quarterly\"\n                },\n                \"key_obligations\": [\n\
+    \                    \"Supplier must deliver within 30 days\",\n             \
+    \       \"Buyer must pay within 60 days of invoice\"\n                ]\n    \
+    \        },\n            confidence_score=0.92,\n            tags=[\"contract\"\
+    , \"supplier\", \"procurement\"]\n        )\n    \n\n## Overview\n\nThe `Ontology`\
+    \ entity is stored in the `ontologies` table. Each record is uniquely\nidentified\
+    \ by its `id` field for lookups and graph traversal.\n\n## Search Capabilities\n\
+    \nThis schema includes the `search_rem` tool which supports:\n- **LOOKUP**: O(1)\
+    \ exact match by id (e.g., `LOOKUP \"entity-name\"`)\n- **FUZZY**: Typo-tolerant\
+    \ search (e.g., `FUZZY \"partial\" THRESHOLD 0.3`)\n- **SEARCH**: Semantic vector\
+    \ search on content (e.g., `SEARCH \"concept\" FROM ontologies LIMIT 10`)\n- **SQL**:\
+    \ Complex queries (e.g., `SELECT * FROM ontologies WHERE ...`)\n\n## Table Info\n\
+    \n| Property | Value |\n|----------|-------|\n| Table | `ontologies` |\n| Entity\
+    \ Key | `id` |\n| Embedding Fields | None |\n| Tools | `search_rem` |\n\n## Fields\n\
+    \n### `id`\n- **Type**: `typing.Union[uuid.UUID, str, NoneType]`\n- **Optional**\n\
+    - Unique identifier (UUID or string, generated per model type). Generated automatically\
+    \ if not provided.\n\n### `created_at`\n- **Type**: `<class ''datetime.datetime''>`\n\
+    - **Optional**\n- Entity creation timestamp\n\n### `updated_at`\n- **Type**: `<class\
+    \ ''datetime.datetime''>`\n- **Optional**\n- Last update timestamp\n\n### `deleted_at`\n\
+    - **Type**: `typing.Optional[datetime.datetime]`\n- **Optional**\n- Soft deletion\
+    \ timestamp\n\n### `tenant_id`\n- **Type**: `typing.Optional[str]`\n- **Optional**\n\
+    - Tenant identifier for multi-tenancy isolation\n\n### `user_id`\n- **Type**:\
+    \ `typing.Optional[str]`\n- **Optional**\n- Owner user identifier (tenant-scoped).\
+    \ This is a VARCHAR(256), not a UUID, to allow flexibility for external identity\
+    \ providers. Typically generated as a hash of the user''s email address. In future,\
+    \ other strong unique claims (e.g., OAuth sub, verified phone) could also be used\
+    \ for generation.\n\n### `graph_edges`\n- **Type**: `list[dict]`\n- **Optional**\n\
+    - Knowledge graph edges stored as InlineEdge dicts\n\n### `metadata`\n- **Type**:\
+    \ `<class ''dict''>`\n- **Optional**\n- Flexible metadata storage\n\n### `tags`\n\
+    - **Type**: `list[str]`\n- **Optional**\n- Entity tags\n\n### `name`\n- **Type**:\
+    \ `<class ''str''>`\n- **Required**\n\n### `file_id`\n- **Type**: `uuid.UUID |\
+    \ str`\n- **Required**\n\n### `agent_schema_id`\n- **Type**: `<class ''str''>`\n\
+    - **Required**\n\n### `provider_name`\n- **Type**: `<class ''str''>`\n- **Required**\n\
+    \n### `model_name`\n- **Type**: `<class ''str''>`\n- **Required**\n\n### `extracted_data`\n\
+    - **Type**: `dict[str, typing.Any]`\n- **Required**\n\n### `confidence_score`\n\
+    - **Type**: `typing.Optional[float]`\n- **Optional**\n\n### `extraction_timestamp`\n\
+    - **Type**: `typing.Optional[str]`\n- **Optional**\n\n### `embedding_text`\n-\
+    \ **Type**: `typing.Optional[str]`\n- **Optional**\n\n',\n    '{\"type\": \"object\"\
+    , \"description\": \"Domain-specific knowledge extracted from files using custom\
+    \ agents.\\n\\n    Attributes:\\n        name: Human-readable label for this ontology\
+    \ instance\\n        file_id: Foreign key to File entity that was processed\\\
+    n        agent_schema_id: Foreign key to Schema entity that performed extraction\\\
+    n        provider_name: LLM provider used for extraction (e.g., \\\"anthropic\\\
+    \", \\\"openai\\\")\\n        model_name: Specific model used (e.g., \\\"claude-sonnet-4-5\\\
+    \")\\n        extracted_data: Structured data extracted by agent (arbitrary JSON)\\\
+    n        confidence_score: Optional confidence score from extraction (0.0-1.0)\\\
+    n        extraction_timestamp: When extraction was performed\\n        embedding_text:\
+    \ Text used for generating embedding (derived from extracted_data)\\n\\n    Inherited\
+    \ from CoreModel:\\n        id: UUID or string identifier\\n        created_at:\
+    \ Entity creation timestamp\\n        updated_at: Last update timestamp\\n   \
+    \     deleted_at: Soft deletion timestamp\\n        tenant_id: Multi-tenancy isolation\\\
+    n        user_id: Ownership\\n        graph_edges: Relationships to other entities\\\
+    n        metadata: Flexible metadata storage\\n        tags: Classification tags\\\
+    n        column: Database schema metadata\\n\\n    Example Usage:\\n        #\
+    \ CV extraction\\n        cv_ontology = Ontology(\\n            name=\\\"john-doe-cv-2024\\\
+    \",\\n            file_id=\\\"file-uuid-123\\\",\\n            agent_schema_id=\\\
+    \"cv-parser-v1\\\",\\n            provider_name=\\\"anthropic\\\",\\n        \
+    \    model_name=\\\"claude-sonnet-4-5-20250929\\\",\\n            extracted_data={\\\
+    n                \\\"candidate_name\\\": \\\"John Doe\\\",\\n                \\\
+    \"email\\\": \\\"john@example.com\\\",\\n                \\\"skills\\\": [\\\"\
+    Python\\\", \\\"PostgreSQL\\\", \\\"Kubernetes\\\"],\\n                \\\"experience\\\
+    \": [\\n                    {\\n                        \\\"company\\\": \\\"\
+    TechCorp\\\",\\n                        \\\"role\\\": \\\"Senior Engineer\\\"\
+    ,\\n                        \\\"years\\\": 3,\\n                        \\\"achievements\\\
+    \": [\\\"Led migration to k8s\\\", \\\"Reduced costs 40%\\\"]\\n             \
+    \       }\\n                ],\\n                \\\"education\\\": [\\n     \
+    \               {\\\"degree\\\": \\\"BS Computer Science\\\", \\\"institution\\\
+    \": \\\"MIT\\\", \\\"year\\\": 2018}\\n                ]\\n            },\\n \
+    \           confidence_score=0.95,\\n            tags=[\\\"cv\\\", \\\"engineering\\\
+    \", \\\"senior-level\\\"]\\n        )\\n\\n        # Contract extraction\\n  \
+    \      contract_ontology = Ontology(\\n            name=\\\"acme-supplier-agreement-2024\\\
+    \",\\n            file_id=\\\"file-uuid-456\\\",\\n            agent_schema_id=\\\
+    \"contract-parser-v2\\\",\\n            provider_name=\\\"openai\\\",\\n     \
+    \       model_name=\\\"gpt-4o\\\",\\n            extracted_data={\\n         \
+    \       \\\"contract_type\\\": \\\"supplier_agreement\\\",\\n                \\\
+    \"parties\\\": [\\n                    {\\\"name\\\": \\\"ACME Corp\\\", \\\"\
+    role\\\": \\\"buyer\\\"},\\n                    {\\\"name\\\": \\\"SupplyChain\
+    \ Inc\\\", \\\"role\\\": \\\"supplier\\\"}\\n                ],\\n           \
+    \     \\\"effective_date\\\": \\\"2024-01-01\\\",\\n                \\\"termination_date\\\
+    \": \\\"2026-12-31\\\",\\n                \\\"payment_terms\\\": {\\n        \
+    \            \\\"amount\\\": 500000,\\n                    \\\"currency\\\": \\\
+    \"USD\\\",\\n                    \\\"frequency\\\": \\\"quarterly\\\"\\n     \
+    \           },\\n                \\\"key_obligations\\\": [\\n               \
+    \     \\\"Supplier must deliver within 30 days\\\",\\n                    \\\"\
+    Buyer must pay within 60 days of invoice\\\"\\n                ]\\n          \
+    \  },\\n            confidence_score=0.92,\\n            tags=[\\\"contract\\\"\
+    , \\\"supplier\\\", \\\"procurement\\\"]\\n        )\\n    \\n\\nThis agent can\
+    \ search the `ontologies` table using the `search_rem` tool. Use REM query syntax:\
+    \ LOOKUP for exact match, FUZZY for typo-tolerant search, SEARCH for semantic\
+    \ similarity, or SQL for complex queries.\", \"properties\": {\"id\": {\"anyOf\"\
+    : [{\"format\": \"uuid\", \"type\": \"string\"}, {\"type\": \"string\"}, {\"type\"\
+    : \"null\"}], \"default\": null, \"description\": \"Unique identifier (UUID or\
+    \ string, generated per model type). Generated automatically if not provided.\"\
+    , \"title\": \"Id\"}, \"created_at\": {\"description\": \"Entity creation timestamp\"\
+    , \"format\": \"date-time\", \"title\": \"Created At\", \"type\": \"string\"},\
+    \ \"updated_at\": {\"description\": \"Last update timestamp\", \"format\": \"\
+    date-time\", \"title\": \"Updated At\", \"type\": \"string\"}, \"deleted_at\"\
+    : {\"anyOf\": [{\"format\": \"date-time\", \"type\": \"string\"}, {\"type\": \"\
+    null\"}], \"default\": null, \"description\": \"Soft deletion timestamp\", \"\
+    title\": \"Deleted At\"}, \"tenant_id\": {\"anyOf\": [{\"type\": \"string\"},\
+    \ {\"type\": \"null\"}], \"default\": null, \"description\": \"Tenant identifier\
+    \ for multi-tenancy isolation\", \"title\": \"Tenant Id\"}, \"user_id\": {\"anyOf\"\
+    : [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\"\
+    : \"Owner user identifier (tenant-scoped). This is a VARCHAR(256), not a UUID,\
+    \ to allow flexibility for external identity providers. Typically generated as\
+    \ a hash of the user''s email address. In future, other strong unique claims (e.g.,\
+    \ OAuth sub, verified phone) could also be used for generation.\", \"title\":\
+    \ \"User Id\"}, \"graph_edges\": {\"description\": \"Knowledge graph edges stored\
+    \ as InlineEdge dicts\", \"items\": {\"additionalProperties\": true, \"type\"\
+    : \"object\"}, \"title\": \"Graph Edges\", \"type\": \"array\"}, \"metadata\"\
+    : {\"additionalProperties\": true, \"description\": \"Flexible metadata storage\"\
+    , \"title\": \"Metadata\", \"type\": \"object\"}, \"tags\": {\"description\":\
+    \ \"Entity tags\", \"items\": {\"type\": \"string\"}, \"title\": \"Tags\", \"\
+    type\": \"array\"}, \"name\": {\"title\": \"Name\", \"type\": \"string\"}, \"\
+    file_id\": {\"anyOf\": [{\"format\": \"uuid\", \"type\": \"string\"}, {\"type\"\
+    : \"string\"}], \"title\": \"File Id\"}, \"agent_schema_id\": {\"title\": \"Agent\
+    \ Schema Id\", \"type\": \"string\"}, \"provider_name\": {\"title\": \"Provider\
+    \ Name\", \"type\": \"string\"}, \"model_name\": {\"title\": \"Model Name\", \"\
+    type\": \"string\"}, \"extracted_data\": {\"additionalProperties\": true, \"title\"\
+    : \"Extracted Data\", \"type\": \"object\"}, \"confidence_score\": {\"anyOf\"\
+    : [{\"type\": \"number\"}, {\"type\": \"null\"}], \"default\": null, \"title\"\
+    : \"Confidence Score\"}, \"extraction_timestamp\": {\"anyOf\": [{\"type\": \"\
+    string\"}, {\"type\": \"null\"}], \"default\": null, \"title\": \"Extraction Timestamp\"\
+    }, \"embedding_text\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"\
+    }], \"default\": null, \"title\": \"Embedding Text\"}}, \"required\": [\"name\"\
+    , \"file_id\", \"agent_schema_id\", \"provider_name\", \"model_name\", \"extracted_data\"\
+    ], \"json_schema_extra\": {\"table_name\": \"ontologies\", \"entity_key_field\"\
+    : \"id\", \"embedding_fields\": [], \"fully_qualified_name\": \"rem.models.entities.ontology.Ontology\"\
+    , \"tools\": [\"search_rem\"], \"default_search_table\": \"ontologies\", \"has_embeddings\"\
+    : false}}'::jsonb,\n    'entity',\n    '{\"table_name\": \"ontologies\", \"entity_key_field\"\
+    : \"id\", \"embedding_fields\": [], \"fqn\": \"rem.models.entities.ontology.Ontology\"\
+    }'::jsonb\n)\nON CONFLICT (id) DO UPDATE SET\n    name = EXCLUDED.name,\n    content\
+    \ = EXCLUDED.content,\n    spec = EXCLUDED.spec,\n    category = EXCLUDED.category,\n\
+    \    metadata = EXCLUDED.metadata,\n    updated_at = CURRENT_TIMESTAMP;\n\n--\
+    \ Schema entry for OntologyConfig (ontology_configs)\nINSERT INTO schemas (id,\
+    \ tenant_id, name, content, spec, category, metadata)\nVALUES (\n    '9a7e50d0-ef3a-5641-9ff4-b2be5a77053b'::uuid,\n\
+    \    'system',\n    'OntologyConfig',\n    '# OntologyConfig\n\nUser configuration\
+    \ for automatic ontology extraction.\n\n    Attributes:\n        name: Human-readable\
+    \ config name\n        agent_schema_id: Foreign key to Schema entity to use for\
+    \ extraction\n        description: Purpose and scope of this config\n\n      \
+    \  # File matching rules (ANY matching rule triggers extraction)\n        mime_type_pattern:\
+    \ Regex pattern for file MIME types (e.g., \"application/pdf\")\n        uri_pattern:\
+    \ Regex pattern for file URIs (e.g., \"s3://bucket/resumes/.*\")\n        tag_filter:\
+    \ List of tags (file must have ALL tags to match)\n\n        # Execution control\n\
+    \        priority: Execution order (higher = earlier, default 100)\n        enabled:\
+    \ Whether this config is active (default True)\n\n        # LLM provider configuration\n\
+    \        provider_name: Optional LLM provider override (defaults to settings)\n\
+    \        model_name: Optional model override (defaults to settings)\n\n    Inherited\
+    \ from CoreModel:\n        id, created_at, updated_at, deleted_at, tenant_id,\
+    \ user_id,\n        graph_edges, metadata, tags, column\n\n    Example Usage:\n\
+    \        # CV extraction for recruitment\n        cv_config = OntologyConfig(\n\
+    \            name=\"recruitment-cv-parser\",\n            agent_schema_id=\"cv-parser-v1\"\
+    ,\n            description=\"Extract candidate information from resumes\",\n \
+    \           mime_type_pattern=\"application/pdf\",\n            uri_pattern=\"\
+    .*/resumes/.*\",\n            tag_filter=[\"cv\", \"candidate\"],\n          \
+    \  priority=100,\n            enabled=True,\n            tenant_id=\"acme-corp\"\
+    ,\n            tags=[\"recruitment\", \"hr\"]\n        )\n\n        # Contract\
+    \ analysis for legal team\n        contract_config = OntologyConfig(\n       \
+    \     name=\"legal-contract-analyzer\",\n            agent_schema_id=\"contract-parser-v2\"\
+    ,\n            description=\"Extract key terms from supplier contracts\",\n  \
+    \          mime_type_pattern=\"application/(pdf|msword|vnd.openxmlformats.*)\"\
+    ,\n            tag_filter=[\"legal\", \"contract\"],\n            priority=200,\
+    \  # Higher priority = runs first\n            enabled=True,\n            provider_name=\"\
+    openai\",  # Override default provider\n            model_name=\"gpt-4o\",\n \
+    \           tenant_id=\"acme-corp\",\n            tags=[\"legal\", \"procurement\"\
+    ]\n        )\n\n        # Medical records for healthcare\n        medical_config\
+    \ = OntologyConfig(\n            name=\"medical-records-extractor\",\n       \
+    \     agent_schema_id=\"medical-parser-v1\",\n            description=\"Extract\
+    \ diagnoses and treatments from medical records\",\n            mime_type_pattern=\"\
+    application/pdf\",\n            tag_filter=[\"medical\", \"patient-record\"],\n\
+    \            priority=50,\n            enabled=True,\n            tenant_id=\"\
+    healthsystem\",\n            tags=[\"medical\", \"hipaa-compliant\"]\n       \
+    \ )\n    \n\n## Overview\n\nThe `OntologyConfig` entity is stored in the `ontology_configs`\
+    \ table. Each record is uniquely\nidentified by its `id` field for lookups and\
+    \ graph traversal.\n\n## Search Capabilities\n\nThis schema includes the `search_rem`\
+    \ tool which supports:\n- **LOOKUP**: O(1) exact match by id (e.g., `LOOKUP \"\
+    entity-name\"`)\n- **FUZZY**: Typo-tolerant search (e.g., `FUZZY \"partial\" THRESHOLD\
+    \ 0.3`)\n- **SEARCH**: Semantic vector search on description (e.g., `SEARCH \"\
+    concept\" FROM ontology_configs LIMIT 10`)\n- **SQL**: Complex queries (e.g.,\
+    \ `SELECT * FROM ontology_configs WHERE ...`)\n\n## Table Info\n\n| Property |\
+    \ Value |\n|----------|-------|\n| Table | `ontology_configs` |\n| Entity Key\
+    \ | `id` |\n| Embedding Fields | `description` |\n| Tools | `search_rem` |\n\n\
+    ## Fields\n\n### `id`\n- **Type**: `typing.Union[uuid.UUID, str, NoneType]`\n\
+    - **Optional**\n- Unique identifier (UUID or string, generated per model type).\
+    \ Generated automatically if not provided.\n\n### `created_at`\n- **Type**: `<class\
+    \ ''datetime.datetime''>`\n- **Optional**\n- Entity creation timestamp\n\n###\
+    \ `updated_at`\n- **Type**: `<class ''datetime.datetime''>`\n- **Optional**\n\
+    - Last update timestamp\n\n### `deleted_at`\n- **Type**: `typing.Optional[datetime.datetime]`\n\
+    - **Optional**\n- Soft deletion timestamp\n\n### `tenant_id`\n- **Type**: `typing.Optional[str]`\n\
+    - **Optional**\n- Tenant identifier for multi-tenancy isolation\n\n### `user_id`\n\
+    - **Type**: `typing.Optional[str]`\n- **Optional**\n- Owner user identifier (tenant-scoped).\
+    \ This is a VARCHAR(256), not a UUID, to allow flexibility for external identity\
+    \ providers. Typically generated as a hash of the user''s email address. In future,\
+    \ other strong unique claims (e.g., OAuth sub, verified phone) could also be used\
+    \ for generation.\n\n### `graph_edges`\n- **Type**: `list[dict]`\n- **Optional**\n\
+    - Knowledge graph edges stored as InlineEdge dicts\n\n### `metadata`\n- **Type**:\
+    \ `<class ''dict''>`\n- **Optional**\n- Flexible metadata storage\n\n### `tags`\n\
+    - **Type**: `list[str]`\n- **Optional**\n- Entity tags\n\n### `name`\n- **Type**:\
+    \ `<class ''str''>`\n- **Required**\n\n### `agent_schema_id`\n- **Type**: `<class\
+    \ ''str''>`\n- **Required**\n\n### `description`\n- **Type**: `typing.Optional[str]`\n\
+    - **Optional**\n\n### `mime_type_pattern`\n- **Type**: `typing.Optional[str]`\n\
+    - **Optional**\n\n### `uri_pattern`\n- **Type**: `typing.Optional[str]`\n- **Optional**\n\
+    \n### `tag_filter`\n- **Type**: `list[str]`\n- **Optional**\n\n### `priority`\n\
+    - **Type**: `<class ''int''>`\n- **Optional**\n\n### `enabled`\n- **Type**: `<class\
+    \ ''bool''>`\n- **Optional**\n\n### `provider_name`\n- **Type**: `typing.Optional[str]`\n\
+    - **Optional**\n\n### `model_name`\n- **Type**: `typing.Optional[str]`\n- **Optional**\n\
+    \n',\n    '{\"type\": \"object\", \"description\": \"User configuration for automatic\
+    \ ontology extraction.\\n\\n    Attributes:\\n        name: Human-readable config\
+    \ name\\n        agent_schema_id: Foreign key to Schema entity to use for extraction\\\
+    n        description: Purpose and scope of this config\\n\\n        # File matching\
+    \ rules (ANY matching rule triggers extraction)\\n        mime_type_pattern: Regex\
+    \ pattern for file MIME types (e.g., \\\"application/pdf\\\")\\n        uri_pattern:\
+    \ Regex pattern for file URIs (e.g., \\\"s3://bucket/resumes/.*\\\")\\n      \
+    \  tag_filter: List of tags (file must have ALL tags to match)\\n\\n        #\
+    \ Execution control\\n        priority: Execution order (higher = earlier, default\
+    \ 100)\\n        enabled: Whether this config is active (default True)\\n\\n \
+    \       # LLM provider configuration\\n        provider_name: Optional LLM provider\
+    \ override (defaults to settings)\\n        model_name: Optional model override\
+    \ (defaults to settings)\\n\\n    Inherited from CoreModel:\\n        id, created_at,\
+    \ updated_at, deleted_at, tenant_id, user_id,\\n        graph_edges, metadata,\
+    \ tags, column\\n\\n    Example Usage:\\n        # CV extraction for recruitment\\\
+    n        cv_config = OntologyConfig(\\n            name=\\\"recruitment-cv-parser\\\
+    \",\\n            agent_schema_id=\\\"cv-parser-v1\\\",\\n            description=\\\
+    \"Extract candidate information from resumes\\\",\\n            mime_type_pattern=\\\
+    \"application/pdf\\\",\\n            uri_pattern=\\\".*/resumes/.*\\\",\\n   \
+    \         tag_filter=[\\\"cv\\\", \\\"candidate\\\"],\\n            priority=100,\\\
+    n            enabled=True,\\n            tenant_id=\\\"acme-corp\\\",\\n     \
+    \       tags=[\\\"recruitment\\\", \\\"hr\\\"]\\n        )\\n\\n        # Contract\
+    \ analysis for legal team\\n        contract_config = OntologyConfig(\\n     \
+    \       name=\\\"legal-contract-analyzer\\\",\\n            agent_schema_id=\\\
+    \"contract-parser-v2\\\",\\n            description=\\\"Extract key terms from\
+    \ supplier contracts\\\",\\n            mime_type_pattern=\\\"application/(pdf|msword|vnd.openxmlformats.*)\\\
+    \",\\n            tag_filter=[\\\"legal\\\", \\\"contract\\\"],\\n           \
+    \ priority=200,  # Higher priority = runs first\\n            enabled=True,\\\
+    n            provider_name=\\\"openai\\\",  # Override default provider\\n   \
+    \         model_name=\\\"gpt-4o\\\",\\n            tenant_id=\\\"acme-corp\\\"\
+    ,\\n            tags=[\\\"legal\\\", \\\"procurement\\\"]\\n        )\\n\\n  \
+    \      # Medical records for healthcare\\n        medical_config = OntologyConfig(\\\
+    n            name=\\\"medical-records-extractor\\\",\\n            agent_schema_id=\\\
+    \"medical-parser-v1\\\",\\n            description=\\\"Extract diagnoses and treatments\
+    \ from medical records\\\",\\n            mime_type_pattern=\\\"application/pdf\\\
+    \",\\n            tag_filter=[\\\"medical\\\", \\\"patient-record\\\"],\\n   \
+    \         priority=50,\\n            enabled=True,\\n            tenant_id=\\\"\
+    healthsystem\\\",\\n            tags=[\\\"medical\\\", \\\"hipaa-compliant\\\"\
+    ]\\n        )\\n    \\n\\nThis agent can search the `ontology_configs` table using\
+    \ the `search_rem` tool. Use REM query syntax: LOOKUP for exact match, FUZZY for\
+    \ typo-tolerant search, SEARCH for semantic similarity, or SQL for complex queries.\"\
+    , \"properties\": {\"id\": {\"anyOf\": [{\"format\": \"uuid\", \"type\": \"string\"\
+    }, {\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\"\
+    : \"Unique identifier (UUID or string, generated per model type). Generated automatically\
+    \ if not provided.\", \"title\": \"Id\"}, \"created_at\": {\"description\": \"\
+    Entity creation timestamp\", \"format\": \"date-time\", \"title\": \"Created At\"\
+    , \"type\": \"string\"}, \"updated_at\": {\"description\": \"Last update timestamp\"\
+    , \"format\": \"date-time\", \"title\": \"Updated At\", \"type\": \"string\"},\
+    \ \"deleted_at\": {\"anyOf\": [{\"format\": \"date-time\", \"type\": \"string\"\
+    }, {\"type\": \"null\"}], \"default\": null, \"description\": \"Soft deletion\
+    \ timestamp\", \"title\": \"Deleted At\"}, \"tenant_id\": {\"anyOf\": [{\"type\"\
+    : \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Tenant\
+    \ identifier for multi-tenancy isolation\", \"title\": \"Tenant Id\"}, \"user_id\"\
+    : {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null,\
+    \ \"description\": \"Owner user identifier (tenant-scoped). This is a VARCHAR(256),\
+    \ not a UUID, to allow flexibility for external identity providers. Typically\
+    \ generated as a hash of the user''s email address. In future, other strong unique\
+    \ claims (e.g., OAuth sub, verified phone) could also be used for generation.\"\
+    , \"title\": \"User Id\"}, \"graph_edges\": {\"description\": \"Knowledge graph\
+    \ edges stored as InlineEdge dicts\", \"items\": {\"additionalProperties\": true,\
+    \ \"type\": \"object\"}, \"title\": \"Graph Edges\", \"type\": \"array\"}, \"\
+    metadata\": {\"additionalProperties\": true, \"description\": \"Flexible metadata\
+    \ storage\", \"title\": \"Metadata\", \"type\": \"object\"}, \"tags\": {\"description\"\
+    : \"Entity tags\", \"items\": {\"type\": \"string\"}, \"title\": \"Tags\", \"\
+    type\": \"array\"}, \"name\": {\"title\": \"Name\", \"type\": \"string\"}, \"\
+    agent_schema_id\": {\"title\": \"Agent Schema Id\", \"type\": \"string\"}, \"\
+    description\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"\
+    default\": null, \"title\": \"Description\"}, \"mime_type_pattern\": {\"anyOf\"\
+    : [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"title\"\
+    : \"Mime Type Pattern\"}, \"uri_pattern\": {\"anyOf\": [{\"type\": \"string\"\
+    }, {\"type\": \"null\"}], \"default\": null, \"title\": \"Uri Pattern\"}, \"tag_filter\"\
+    : {\"default\": [], \"items\": {\"type\": \"string\"}, \"title\": \"Tag Filter\"\
+    , \"type\": \"array\"}, \"priority\": {\"default\": 100, \"title\": \"Priority\"\
+    , \"type\": \"integer\"}, \"enabled\": {\"default\": true, \"title\": \"Enabled\"\
+    , \"type\": \"boolean\"}, \"provider_name\": {\"anyOf\": [{\"type\": \"string\"\
+    }, {\"type\": \"null\"}], \"default\": null, \"title\": \"Provider Name\"}, \"\
+    model_name\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\"\
+    : null, \"title\": \"Model Name\"}}, \"required\": [\"name\", \"agent_schema_id\"\
+    ], \"json_schema_extra\": {\"table_name\": \"ontology_configs\", \"entity_key_field\"\
+    : \"id\", \"embedding_fields\": [\"description\"], \"fully_qualified_name\": \"\
+    rem.models.entities.ontology_config.OntologyConfig\", \"tools\": [\"search_rem\"\
+    ], \"default_search_table\": \"ontology_configs\", \"has_embeddings\": true}}'::jsonb,\n\
+    \    'entity',\n    '{\"table_name\": \"ontology_configs\", \"entity_key_field\"\
+    : \"id\", \"embedding_fields\": [\"description\"], \"fqn\": \"rem.models.entities.ontology_config.OntologyConfig\"\
+    }'::jsonb\n)\nON CONFLICT (id) DO UPDATE SET\n    name = EXCLUDED.name,\n    content\
+    \ = EXCLUDED.content,\n    spec = EXCLUDED.spec,\n    category = EXCLUDED.category,\n\
+    \    metadata = EXCLUDED.metadata,\n    updated_at = CURRENT_TIMESTAMP;\n\n--\
+    \ Schema entry for Resource (resources)\nINSERT INTO schemas (id, tenant_id, name,\
+    \ content, spec, category, metadata)\nVALUES (\n    'a579f379-4f1c-5414-8ff4-1382d0f783b7'::uuid,\n\
+    \    'system',\n    'Resource',\n    '# Resource\n\n\n    Base content unit in\
+    \ REM.\n\n    Resources are content units that feed into dreaming workflows for\
+    \ moment\n    extraction and affinity graph construction. Tenant isolation is\
+    \ provided\n    via CoreModel.tenant_id field.\n    \n\n## Overview\n\nThe `Resource`\
+    \ entity is stored in the `resources` table. Each record is uniquely\nidentified\
+    \ by its `name` field for lookups and graph traversal.\n\n## Search Capabilities\n\
+    \nThis schema includes the `search_rem` tool which supports:\n- **LOOKUP**: O(1)\
+    \ exact match by name (e.g., `LOOKUP \"entity-name\"`)\n- **FUZZY**: Typo-tolerant\
+    \ search (e.g., `FUZZY \"partial\" THRESHOLD 0.3`)\n- **SEARCH**: Semantic vector\
+    \ search on content (e.g., `SEARCH \"concept\" FROM resources LIMIT 10`)\n- **SQL**:\
+    \ Complex queries (e.g., `SELECT * FROM resources WHERE ...`)\n\n## Table Info\n\
+    \n| Property | Value |\n|----------|-------|\n| Table | `resources` |\n| Entity\
+    \ Key | `name` |\n| Embedding Fields | `content` |\n| Tools | `search_rem` |\n\
+    \n## Fields\n\n### `id`\n- **Type**: `typing.Union[uuid.UUID, str, NoneType]`\n\
+    - **Optional**\n- Unique identifier (UUID or string, generated per model type).\
+    \ Generated automatically if not provided.\n\n### `created_at`\n- **Type**: `<class\
+    \ ''datetime.datetime''>`\n- **Optional**\n- Entity creation timestamp\n\n###\
+    \ `updated_at`\n- **Type**: `<class ''datetime.datetime''>`\n- **Optional**\n\
+    - Last update timestamp\n\n### `deleted_at`\n- **Type**: `typing.Optional[datetime.datetime]`\n\
+    - **Optional**\n- Soft deletion timestamp\n\n### `tenant_id`\n- **Type**: `typing.Optional[str]`\n\
+    - **Optional**\n- Tenant identifier for multi-tenancy isolation\n\n### `user_id`\n\
+    - **Type**: `typing.Optional[str]`\n- **Optional**\n- Owner user identifier (tenant-scoped).\
+    \ This is a VARCHAR(256), not a UUID, to allow flexibility for external identity\
+    \ providers. Typically generated as a hash of the user''s email address. In future,\
+    \ other strong unique claims (e.g., OAuth sub, verified phone) could also be used\
+    \ for generation.\n\n### `graph_edges`\n- **Type**: `list[dict]`\n- **Optional**\n\
+    - Knowledge graph edges stored as InlineEdge dicts\n\n### `metadata`\n- **Type**:\
+    \ `<class ''dict''>`\n- **Optional**\n- Flexible metadata storage\n\n### `tags`\n\
+    - **Type**: `list[str]`\n- **Optional**\n- Entity tags\n\n### `name`\n- **Type**:\
+    \ `typing.Optional[str]`\n- **Optional**\n- Human-readable resource name (used\
+    \ as graph label). Auto-generated from uri+ordinal if not provided.\n\n### `uri`\n\
+    - **Type**: `typing.Optional[str]`\n- **Optional**\n- Content URI or identifier\
+    \ (file path, URL, etc.)\n\n### `ordinal`\n- **Type**: `<class ''int''>`\n- **Optional**\n\
+    - Chunk ordinal for splitting large documents (0 for single-chunk resources)\n\
+    \n### `content`\n- **Type**: `<class ''str''>`\n- **Optional**\n- Resource content\
+    \ text\n\n### `timestamp`\n- **Type**: `<class ''datetime.datetime''>`\n- **Optional**\n\
+    - Resource timestamp (content creation/publication time)\n\n### `category`\n-\
+    \ **Type**: `typing.Optional[str]`\n- **Optional**\n- Resource category (document,\
+    \ conversation, artifact, etc.)\n\n### `related_entities`\n- **Type**: `list[dict]`\n\
+    - **Optional**\n- Extracted entities (people, projects, concepts) with metadata\n\
+    \n',\n    '{\"type\": \"object\", \"description\": \"\\n    Base content unit\
+    \ in REM.\\n\\n    Resources are content units that feed into dreaming workflows\
+    \ for moment\\n    extraction and affinity graph construction. Tenant isolation\
+    \ is provided\\n    via CoreModel.tenant_id field.\\n    \\n\\nThis agent can\
+    \ search the `resources` table using the `search_rem` tool. Use REM query syntax:\
+    \ LOOKUP for exact match, FUZZY for typo-tolerant search, SEARCH for semantic\
+    \ similarity, or SQL for complex queries.\", \"properties\": {\"id\": {\"anyOf\"\
+    : [{\"format\": \"uuid\", \"type\": \"string\"}, {\"type\": \"string\"}, {\"type\"\
+    : \"null\"}], \"default\": null, \"description\": \"Unique identifier (UUID or\
+    \ string, generated per model type). Generated automatically if not provided.\"\
+    , \"title\": \"Id\"}, \"created_at\": {\"description\": \"Entity creation timestamp\"\
+    , \"format\": \"date-time\", \"title\": \"Created At\", \"type\": \"string\"},\
+    \ \"updated_at\": {\"description\": \"Last update timestamp\", \"format\": \"\
+    date-time\", \"title\": \"Updated At\", \"type\": \"string\"}, \"deleted_at\"\
+    : {\"anyOf\": [{\"format\": \"date-time\", \"type\": \"string\"}, {\"type\": \"\
+    null\"}], \"default\": null, \"description\": \"Soft deletion timestamp\", \"\
+    title\": \"Deleted At\"}, \"tenant_id\": {\"anyOf\": [{\"type\": \"string\"},\
+    \ {\"type\": \"null\"}], \"default\": null, \"description\": \"Tenant identifier\
+    \ for multi-tenancy isolation\", \"title\": \"Tenant Id\"}, \"user_id\": {\"anyOf\"\
+    : [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\"\
+    : \"Owner user identifier (tenant-scoped). This is a VARCHAR(256), not a UUID,\
+    \ to allow flexibility for external identity providers. Typically generated as\
+    \ a hash of the user''s email address. In future, other strong unique claims (e.g.,\
+    \ OAuth sub, verified phone) could also be used for generation.\", \"title\":\
+    \ \"User Id\"}, \"graph_edges\": {\"description\": \"Knowledge graph edges stored\
+    \ as InlineEdge dicts\", \"items\": {\"additionalProperties\": true, \"type\"\
+    : \"object\"}, \"title\": \"Graph Edges\", \"type\": \"array\"}, \"metadata\"\
+    : {\"additionalProperties\": true, \"description\": \"Flexible metadata storage\"\
+    , \"title\": \"Metadata\", \"type\": \"object\"}, \"tags\": {\"description\":\
+    \ \"Entity tags\", \"items\": {\"type\": \"string\"}, \"title\": \"Tags\", \"\
+    type\": \"array\"}, \"name\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\":\
+    \ \"null\"}], \"default\": null, \"description\": \"Human-readable resource name\
+    \ (used as graph label). Auto-generated from uri+ordinal if not provided.\", \"\
+    entity_key\": true, \"title\": \"Name\"}, \"uri\": {\"anyOf\": [{\"type\": \"\
+    string\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Content\
+    \ URI or identifier (file path, URL, etc.)\", \"title\": \"Uri\"}, \"ordinal\"\
+    : {\"composite_key\": true, \"default\": 0, \"description\": \"Chunk ordinal for\
+    \ splitting large documents (0 for single-chunk resources)\", \"title\": \"Ordinal\"\
+    , \"type\": \"integer\"}, \"content\": {\"default\": \"\", \"description\": \"\
+    Resource content text\", \"title\": \"Content\", \"type\": \"string\"}, \"timestamp\"\
+    : {\"description\": \"Resource timestamp (content creation/publication time)\"\
+    , \"format\": \"date-time\", \"title\": \"Timestamp\", \"type\": \"string\"},\
+    \ \"category\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"\
+    default\": null, \"description\": \"Resource category (document, conversation,\
+    \ artifact, etc.)\", \"title\": \"Category\"}, \"related_entities\": {\"description\"\
+    : \"Extracted entities (people, projects, concepts) with metadata\", \"items\"\
+    : {\"additionalProperties\": true, \"type\": \"object\"}, \"title\": \"Related\
+    \ Entities\", \"type\": \"array\"}}, \"required\": [], \"json_schema_extra\":\
+    \ {\"table_name\": \"resources\", \"entity_key_field\": \"name\", \"embedding_fields\"\
+    : [\"content\"], \"fully_qualified_name\": \"rem.models.entities.resource.Resource\"\
+    , \"tools\": [\"search_rem\"], \"default_search_table\": \"resources\", \"has_embeddings\"\
+    : true}}'::jsonb,\n    'entity',\n    '{\"table_name\": \"resources\", \"entity_key_field\"\
+    : \"name\", \"embedding_fields\": [\"content\"], \"fqn\": \"rem.models.entities.resource.Resource\"\
+    }'::jsonb\n)\nON CONFLICT (id) DO UPDATE SET\n    name = EXCLUDED.name,\n    content\
+    \ = EXCLUDED.content,\n    spec = EXCLUDED.spec,\n    category = EXCLUDED.category,\n\
+    \    metadata = EXCLUDED.metadata,\n    updated_at = CURRENT_TIMESTAMP;\n\n--\
+    \ Schema entry for Schema (schemas)\nINSERT INTO schemas (id, tenant_id, name,\
+    \ content, spec, category, metadata)\nVALUES (\n    '2372e956-add6-58b8-a638-758a91a2b6c4'::uuid,\n\
+    \    'system',\n    'Schema',\n    '# Schema\n\n\n    Agent schema definition.\n\
+    \n    Schemas define agents that can be dynamically loaded into Pydantic AI.\n\
+    \    They store JsonSchema specifications with embedded metadata for tools,\n\
+    \    resources, and system prompts.\n\n    For ontology extraction agents:\n \
+    \   - `provider_configs` enables multi-provider support (test across Anthropic,\
+    \ OpenAI, etc.)\n    - `embedding_fields` specifies which output fields should\
+    \ be embedded for semantic search\n\n    Tenant isolation is provided via CoreModel.tenant_id\
+    \ field.\n    \n\n## Overview\n\nThe `Schema` entity is stored in the `schemas`\
+    \ table. Each record is uniquely\nidentified by its `id` field for lookups and\
+    \ graph traversal.\n\n## Search Capabilities\n\nThis schema includes the `search_rem`\
+    \ tool which supports:\n- **LOOKUP**: O(1) exact match by id (e.g., `LOOKUP \"\
+    entity-name\"`)\n- **FUZZY**: Typo-tolerant search (e.g., `FUZZY \"partial\" THRESHOLD\
+    \ 0.3`)\n- **SEARCH**: Semantic vector search on content (e.g., `SEARCH \"concept\"\
+    \ FROM schemas LIMIT 10`)\n- **SQL**: Complex queries (e.g., `SELECT * FROM schemas\
+    \ WHERE ...`)\n\n## Table Info\n\n| Property | Value |\n|----------|-------|\n\
+    | Table | `schemas` |\n| Entity Key | `id` |\n| Embedding Fields | `content` |\n\
+    | Tools | `search_rem` |\n\n## Fields\n\n### `id`\n- **Type**: `typing.Union[uuid.UUID,\
+    \ str, NoneType]`\n- **Optional**\n- Unique identifier (UUID or string, generated\
+    \ per model type). Generated automatically if not provided.\n\n### `created_at`\n\
+    - **Type**: `<class ''datetime.datetime''>`\n- **Optional**\n- Entity creation\
+    \ timestamp\n\n### `updated_at`\n- **Type**: `<class ''datetime.datetime''>`\n\
+    - **Optional**\n- Last update timestamp\n\n### `deleted_at`\n- **Type**: `typing.Optional[datetime.datetime]`\n\
+    - **Optional**\n- Soft deletion timestamp\n\n### `tenant_id`\n- **Type**: `typing.Optional[str]`\n\
+    - **Optional**\n- Tenant identifier for multi-tenancy isolation\n\n### `user_id`\n\
+    - **Type**: `typing.Optional[str]`\n- **Optional**\n- Owner user identifier (tenant-scoped).\
+    \ This is a VARCHAR(256), not a UUID, to allow flexibility for external identity\
+    \ providers. Typically generated as a hash of the user''s email address. In future,\
+    \ other strong unique claims (e.g., OAuth sub, verified phone) could also be used\
+    \ for generation.\n\n### `graph_edges`\n- **Type**: `list[dict]`\n- **Optional**\n\
+    - Knowledge graph edges stored as InlineEdge dicts\n\n### `metadata`\n- **Type**:\
+    \ `<class ''dict''>`\n- **Optional**\n- Flexible metadata storage\n\n### `tags`\n\
+    - **Type**: `list[str]`\n- **Optional**\n- Entity tags\n\n### `name`\n- **Type**:\
+    \ `<class ''str''>`\n- **Required**\n- Human-readable schema name (used as identifier)\n\
+    \n### `content`\n- **Type**: `<class ''str''>`\n- **Optional**\n- Markdown documentation\
+    \ and instructions for the schema\n\n### `spec`\n- **Type**: `<class ''dict''>`\n\
+    - **Required**\n- JsonSchema specification defining the agent structure and capabilities\n\
+    \n### `category`\n- **Type**: `typing.Optional[str]`\n- **Optional**\n- Schema\
+    \ category distinguishing schema types. Values: ''agent'' (AI agents), ''evaluator''\
+    \ (LLM-as-a-Judge evaluators). Maps directly from json_schema_extra.kind field\
+    \ during ingestion.\n\n### `provider_configs`\n- **Type**: `list[dict]`\n- **Optional**\n\
+    - Optional provider configurations for multi-provider testing. Each dict has ''provider_name''\
+    \ and ''model_name''. Example: [{''provider_name'': ''anthropic'', ''model_name'':\
+    \ ''claude-sonnet-4-5''}]\n\n### `embedding_fields`\n- **Type**: `list[str]`\n\
+    - **Optional**\n- JSON paths in extracted_data to embed for semantic search. Example:\
+    \ [''summary'', ''candidate_name'', ''skills''] for CV extraction. Values will\
+    \ be concatenated and embedded using configured embedding provider.\n\n',\n  \
+    \  '{\"type\": \"object\", \"description\": \"\\n    Agent schema definition.\\\
+    n\\n    Schemas define agents that can be dynamically loaded into Pydantic AI.\\\
+    n    They store JsonSchema specifications with embedded metadata for tools,\\\
+    n    resources, and system prompts.\\n\\n    For ontology extraction agents:\\\
+    n    - `provider_configs` enables multi-provider support (test across Anthropic,\
+    \ OpenAI, etc.)\\n    - `embedding_fields` specifies which output fields should\
+    \ be embedded for semantic search\\n\\n    Tenant isolation is provided via CoreModel.tenant_id\
+    \ field.\\n    \\n\\nThis agent can search the `schemas` table using the `search_rem`\
+    \ tool. Use REM query syntax: LOOKUP for exact match, FUZZY for typo-tolerant\
+    \ search, SEARCH for semantic similarity, or SQL for complex queries.\", \"properties\"\
+    : {\"id\": {\"anyOf\": [{\"format\": \"uuid\", \"type\": \"string\"}, {\"type\"\
+    : \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Unique\
+    \ identifier (UUID or string, generated per model type). Generated automatically\
+    \ if not provided.\", \"title\": \"Id\"}, \"created_at\": {\"description\": \"\
+    Entity creation timestamp\", \"format\": \"date-time\", \"title\": \"Created At\"\
+    , \"type\": \"string\"}, \"updated_at\": {\"description\": \"Last update timestamp\"\
+    , \"format\": \"date-time\", \"title\": \"Updated At\", \"type\": \"string\"},\
+    \ \"deleted_at\": {\"anyOf\": [{\"format\": \"date-time\", \"type\": \"string\"\
+    }, {\"type\": \"null\"}], \"default\": null, \"description\": \"Soft deletion\
+    \ timestamp\", \"title\": \"Deleted At\"}, \"tenant_id\": {\"anyOf\": [{\"type\"\
+    : \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Tenant\
+    \ identifier for multi-tenancy isolation\", \"title\": \"Tenant Id\"}, \"user_id\"\
+    : {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null,\
+    \ \"description\": \"Owner user identifier (tenant-scoped). This is a VARCHAR(256),\
+    \ not a UUID, to allow flexibility for external identity providers. Typically\
+    \ generated as a hash of the user''s email address. In future, other strong unique\
+    \ claims (e.g., OAuth sub, verified phone) could also be used for generation.\"\
+    , \"title\": \"User Id\"}, \"graph_edges\": {\"description\": \"Knowledge graph\
+    \ edges stored as InlineEdge dicts\", \"items\": {\"additionalProperties\": true,\
+    \ \"type\": \"object\"}, \"title\": \"Graph Edges\", \"type\": \"array\"}, \"\
+    metadata\": {\"additionalProperties\": true, \"description\": \"Flexible metadata\
+    \ storage\", \"title\": \"Metadata\", \"type\": \"object\"}, \"tags\": {\"description\"\
+    : \"Entity tags\", \"items\": {\"type\": \"string\"}, \"title\": \"Tags\", \"\
+    type\": \"array\"}, \"name\": {\"description\": \"Human-readable schema name (used\
+    \ as identifier)\", \"title\": \"Name\", \"type\": \"string\"}, \"content\": {\"\
+    default\": \"\", \"description\": \"Markdown documentation and instructions for\
+    \ the schema\", \"title\": \"Content\", \"type\": \"string\"}, \"spec\": {\"additionalProperties\"\
+    : true, \"description\": \"JsonSchema specification defining the agent structure\
+    \ and capabilities\", \"title\": \"Spec\", \"type\": \"object\"}, \"category\"\
+    : {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null,\
+    \ \"description\": \"Schema category distinguishing schema types. Values: ''agent''\
+    \ (AI agents), ''evaluator'' (LLM-as-a-Judge evaluators). Maps directly from json_schema_extra.kind\
+    \ field during ingestion.\", \"title\": \"Category\"}, \"provider_configs\": {\"\
+    description\": \"Optional provider configurations for multi-provider testing.\
+    \ Each dict has ''provider_name'' and ''model_name''. Example: [{''provider_name'':\
+    \ ''anthropic'', ''model_name'': ''claude-sonnet-4-5''}]\", \"items\": {\"additionalProperties\"\
+    : true, \"type\": \"object\"}, \"title\": \"Provider Configs\", \"type\": \"array\"\
+    }, \"embedding_fields\": {\"description\": \"JSON paths in extracted_data to embed\
+    \ for semantic search. Example: [''summary'', ''candidate_name'', ''skills'']\
+    \ for CV extraction. Values will be concatenated and embedded using configured\
+    \ embedding provider.\", \"items\": {\"type\": \"string\"}, \"title\": \"Embedding\
+    \ Fields\", \"type\": \"array\"}}, \"required\": [\"name\", \"spec\"], \"json_schema_extra\"\
+    : {\"table_name\": \"schemas\", \"entity_key_field\": \"id\", \"embedding_fields\"\
+    : [\"content\"], \"fully_qualified_name\": \"rem.models.entities.schema.Schema\"\
+    , \"tools\": [\"search_rem\"], \"default_search_table\": \"schemas\", \"has_embeddings\"\
+    : true}}'::jsonb,\n    'entity',\n    '{\"table_name\": \"schemas\", \"entity_key_field\"\
+    : \"id\", \"embedding_fields\": [\"content\"], \"fqn\": \"rem.models.entities.schema.Schema\"\
+    }'::jsonb\n)\nON CONFLICT (id) DO UPDATE SET\n    name = EXCLUDED.name,\n    content\
+    \ = EXCLUDED.content,\n    spec = EXCLUDED.spec,\n    category = EXCLUDED.category,\n\
+    \    metadata = EXCLUDED.metadata,\n    updated_at = CURRENT_TIMESTAMP;\n\n--\
+    \ Schema entry for Session (sessions)\nINSERT INTO schemas (id, tenant_id, name,\
+    \ content, spec, category, metadata)\nVALUES (\n    '5893fbca-2d8e-5402-ac41-7bac2c0c472a'::uuid,\n\
+    \    'system',\n    'Session',\n    '# Session\n\n\n    Conversation session container.\n\
+    \n    Groups messages together and supports different modes for normal conversations\n\
+    \    and evaluation/experimentation scenarios.\n\n    For evaluation sessions,\
+    \ stores:\n    - original_trace_id: Reference to the original session being evaluated\n\
+    \    - settings_overrides: Model, temperature, prompt overrides\n    - prompt:\
+    \ Custom prompt being tested\n\n    Default sessions are lightweight - just a\
+    \ session_id on messages.\n    Special sessions store additional metadata for\
+    \ experiments.\n    \n\n## Overview\n\nThe `Session` entity is stored in the `sessions`\
+    \ table. Each record is uniquely\nidentified by its `name` field for lookups and\
+    \ graph traversal.\n\n## Search Capabilities\n\nThis schema includes the `search_rem`\
+    \ tool which supports:\n- **LOOKUP**: O(1) exact match by name (e.g., `LOOKUP\
+    \ \"entity-name\"`)\n- **FUZZY**: Typo-tolerant search (e.g., `FUZZY \"partial\"\
+    \ THRESHOLD 0.3`)\n- **SEARCH**: Semantic vector search on description (e.g.,\
+    \ `SEARCH \"concept\" FROM sessions LIMIT 10`)\n- **SQL**: Complex queries (e.g.,\
+    \ `SELECT * FROM sessions WHERE ...`)\n\n## Table Info\n\n| Property | Value |\n\
+    |----------|-------|\n| Table | `sessions` |\n| Entity Key | `name` |\n| Embedding\
+    \ Fields | `description` |\n| Tools | `search_rem` |\n\n## Fields\n\n### `id`\n\
+    - **Type**: `typing.Union[uuid.UUID, str, NoneType]`\n- **Optional**\n- Unique\
+    \ identifier (UUID or string, generated per model type). Generated automatically\
+    \ if not provided.\n\n### `created_at`\n- **Type**: `<class ''datetime.datetime''>`\n\
+    - **Optional**\n- Entity creation timestamp\n\n### `updated_at`\n- **Type**: `<class\
+    \ ''datetime.datetime''>`\n- **Optional**\n- Last update timestamp\n\n### `deleted_at`\n\
+    - **Type**: `typing.Optional[datetime.datetime]`\n- **Optional**\n- Soft deletion\
+    \ timestamp\n\n### `tenant_id`\n- **Type**: `typing.Optional[str]`\n- **Optional**\n\
+    - Tenant identifier for multi-tenancy isolation\n\n### `user_id`\n- **Type**:\
+    \ `typing.Optional[str]`\n- **Optional**\n- Owner user identifier (tenant-scoped).\
+    \ This is a VARCHAR(256), not a UUID, to allow flexibility for external identity\
+    \ providers. Typically generated as a hash of the user''s email address. In future,\
+    \ other strong unique claims (e.g., OAuth sub, verified phone) could also be used\
+    \ for generation.\n\n### `graph_edges`\n- **Type**: `list[dict]`\n- **Optional**\n\
+    - Knowledge graph edges stored as InlineEdge dicts\n\n### `metadata`\n- **Type**:\
+    \ `<class ''dict''>`\n- **Optional**\n- Flexible metadata storage\n\n### `tags`\n\
+    - **Type**: `list[str]`\n- **Optional**\n- Entity tags\n\n### `name`\n- **Type**:\
+    \ `<class ''str''>`\n- **Required**\n- Session name/identifier\n\n### `mode`\n\
+    - **Type**: `<enum ''SessionMode''>`\n- **Optional**\n- Session mode: ''normal''\
+    \ or ''evaluation''\n\n### `description`\n- **Type**: `str | None`\n- **Optional**\n\
+    - Optional session description\n\n### `original_trace_id`\n- **Type**: `str |\
+    \ None`\n- **Optional**\n- For evaluation mode: ID of the original session/trace\
+    \ being evaluated\n\n### `settings_overrides`\n- **Type**: `dict | None`\n- **Optional**\n\
+    - Settings overrides (model, temperature, max_tokens, system_prompt)\n\n### `prompt`\n\
+    - **Type**: `str | None`\n- **Optional**\n- Custom prompt for this session (can\
+    \ override agent prompt)\n\n### `agent_schema_uri`\n- **Type**: `str | None`\n\
+    - **Optional**\n- Agent schema used for this session\n\n### `message_count`\n\
+    - **Type**: `<class ''int''>`\n- **Optional**\n- Number of messages in this session\n\
+    \n### `total_tokens`\n- **Type**: `int | None`\n- **Optional**\n- Total tokens\
+    \ used in this session\n\n',\n    '{\"type\": \"object\", \"description\": \"\\\
+    n    Conversation session container.\\n\\n    Groups messages together and supports\
+    \ different modes for normal conversations\\n    and evaluation/experimentation\
+    \ scenarios.\\n\\n    For evaluation sessions, stores:\\n    - original_trace_id:\
+    \ Reference to the original session being evaluated\\n    - settings_overrides:\
+    \ Model, temperature, prompt overrides\\n    - prompt: Custom prompt being tested\\\
+    n\\n    Default sessions are lightweight - just a session_id on messages.\\n \
+    \   Special sessions store additional metadata for experiments.\\n    \\n\\nThis\
+    \ agent can search the `sessions` table using the `search_rem` tool. Use REM query\
+    \ syntax: LOOKUP for exact match, FUZZY for typo-tolerant search, SEARCH for semantic\
+    \ similarity, or SQL for complex queries.\", \"properties\": {\"id\": {\"anyOf\"\
+    : [{\"format\": \"uuid\", \"type\": \"string\"}, {\"type\": \"string\"}, {\"type\"\
+    : \"null\"}], \"default\": null, \"description\": \"Unique identifier (UUID or\
+    \ string, generated per model type). Generated automatically if not provided.\"\
+    , \"title\": \"Id\"}, \"created_at\": {\"description\": \"Entity creation timestamp\"\
+    , \"format\": \"date-time\", \"title\": \"Created At\", \"type\": \"string\"},\
+    \ \"updated_at\": {\"description\": \"Last update timestamp\", \"format\": \"\
+    date-time\", \"title\": \"Updated At\", \"type\": \"string\"}, \"deleted_at\"\
+    : {\"anyOf\": [{\"format\": \"date-time\", \"type\": \"string\"}, {\"type\": \"\
+    null\"}], \"default\": null, \"description\": \"Soft deletion timestamp\", \"\
+    title\": \"Deleted At\"}, \"tenant_id\": {\"anyOf\": [{\"type\": \"string\"},\
+    \ {\"type\": \"null\"}], \"default\": null, \"description\": \"Tenant identifier\
+    \ for multi-tenancy isolation\", \"title\": \"Tenant Id\"}, \"user_id\": {\"anyOf\"\
+    : [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\"\
+    : \"Owner user identifier (tenant-scoped). This is a VARCHAR(256), not a UUID,\
+    \ to allow flexibility for external identity providers. Typically generated as\
+    \ a hash of the user''s email address. In future, other strong unique claims (e.g.,\
+    \ OAuth sub, verified phone) could also be used for generation.\", \"title\":\
+    \ \"User Id\"}, \"graph_edges\": {\"description\": \"Knowledge graph edges stored\
+    \ as InlineEdge dicts\", \"items\": {\"additionalProperties\": true, \"type\"\
+    : \"object\"}, \"title\": \"Graph Edges\", \"type\": \"array\"}, \"metadata\"\
+    : {\"additionalProperties\": true, \"description\": \"Flexible metadata storage\"\
+    , \"title\": \"Metadata\", \"type\": \"object\"}, \"tags\": {\"description\":\
+    \ \"Entity tags\", \"items\": {\"type\": \"string\"}, \"title\": \"Tags\", \"\
+    type\": \"array\"}, \"name\": {\"description\": \"Session name/identifier\", \"\
+    entity_key\": true, \"title\": \"Name\", \"type\": \"string\"}, \"mode\": {\"\
+    $ref\": \"#/$defs/SessionMode\", \"default\": \"normal\", \"description\": \"\
+    Session mode: ''normal'' or ''evaluation''\"}, \"description\": {\"anyOf\": [{\"\
+    type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\"\
+    : \"Optional session description\", \"title\": \"Description\"}, \"original_trace_id\"\
+    : {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null,\
+    \ \"description\": \"For evaluation mode: ID of the original session/trace being\
+    \ evaluated\", \"title\": \"Original Trace Id\"}, \"settings_overrides\": {\"\
+    anyOf\": [{\"additionalProperties\": true, \"type\": \"object\"}, {\"type\": \"\
+    null\"}], \"default\": null, \"description\": \"Settings overrides (model, temperature,\
+    \ max_tokens, system_prompt)\", \"title\": \"Settings Overrides\"}, \"prompt\"\
+    : {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null,\
+    \ \"description\": \"Custom prompt for this session (can override agent prompt)\"\
+    , \"title\": \"Prompt\"}, \"agent_schema_uri\": {\"anyOf\": [{\"type\": \"string\"\
+    }, {\"type\": \"null\"}], \"default\": null, \"description\": \"Agent schema used\
+    \ for this session\", \"title\": \"Agent Schema Uri\"}, \"message_count\": {\"\
+    default\": 0, \"description\": \"Number of messages in this session\", \"title\"\
+    : \"Message Count\", \"type\": \"integer\"}, \"total_tokens\": {\"anyOf\": [{\"\
+    type\": \"integer\"}, {\"type\": \"null\"}], \"default\": null, \"description\"\
+    : \"Total tokens used in this session\", \"title\": \"Total Tokens\"}}, \"required\"\
+    : [\"name\"], \"json_schema_extra\": {\"table_name\": \"sessions\", \"entity_key_field\"\
+    : \"name\", \"embedding_fields\": [\"description\"], \"fully_qualified_name\"\
+    : \"rem.models.entities.session.Session\", \"tools\": [\"search_rem\"], \"default_search_table\"\
+    : \"sessions\", \"has_embeddings\": true}}'::jsonb,\n    'entity',\n    '{\"table_name\"\
+    : \"sessions\", \"entity_key_field\": \"name\", \"embedding_fields\": [\"description\"\
+    ], \"fqn\": \"rem.models.entities.session.Session\"}'::jsonb\n)\nON CONFLICT (id)\
+    \ DO UPDATE SET\n    name = EXCLUDED.name,\n    content = EXCLUDED.content,\n\
+    \    spec = EXCLUDED.spec,\n    category = EXCLUDED.category,\n    metadata =\
+    \ EXCLUDED.metadata,\n    updated_at = CURRENT_TIMESTAMP;\n\n-- Schema entry for\
+    \ SharedSession (shared_sessions)\nINSERT INTO schemas (id, tenant_id, name, content,\
+    \ spec, category, metadata)\nVALUES (\n    'be5c5711-6c45-5fc4-9cd1-e076599261c7'::uuid,\n\
+    \    'system',\n    'SharedSession',\n    '# SharedSession\n\n\n    Session sharing\
+    \ record between users.\n\n    Links a session (identified by session_id from\
+    \ Message records) to a\n    recipient user, enabling collaborative access to\
+    \ conversation history.\n    \n\n## Overview\n\nThe `SharedSession` entity is\
+    \ stored in the `shared_sessions` table. Each record is uniquely\nidentified by\
+    \ its `id` field for lookups and graph traversal.\n\n## Search Capabilities\n\n\
+    This schema includes the `search_rem` tool which supports:\n- **LOOKUP**: O(1)\
+    \ exact match by id (e.g., `LOOKUP \"entity-name\"`)\n- **FUZZY**: Typo-tolerant\
+    \ search (e.g., `FUZZY \"partial\" THRESHOLD 0.3`)\n- **SEARCH**: Semantic vector\
+    \ search on content (e.g., `SEARCH \"concept\" FROM shared_sessions LIMIT 10`)\n\
+    - **SQL**: Complex queries (e.g., `SELECT * FROM shared_sessions WHERE ...`)\n\
+    \n## Table Info\n\n| Property | Value |\n|----------|-------|\n| Table | `shared_sessions`\
+    \ |\n| Entity Key | `id` |\n| Embedding Fields | None |\n| Tools | `search_rem`\
+    \ |\n\n## Fields\n\n### `id`\n- **Type**: `typing.Union[uuid.UUID, str, NoneType]`\n\
+    - **Optional**\n- Unique identifier (UUID or string, generated per model type).\
+    \ Generated automatically if not provided.\n\n### `created_at`\n- **Type**: `<class\
+    \ ''datetime.datetime''>`\n- **Optional**\n- Entity creation timestamp\n\n###\
+    \ `updated_at`\n- **Type**: `<class ''datetime.datetime''>`\n- **Optional**\n\
+    - Last update timestamp\n\n### `deleted_at`\n- **Type**: `typing.Optional[datetime.datetime]`\n\
+    - **Optional**\n- Soft deletion timestamp\n\n### `tenant_id`\n- **Type**: `typing.Optional[str]`\n\
+    - **Optional**\n- Tenant identifier for multi-tenancy isolation\n\n### `user_id`\n\
+    - **Type**: `typing.Optional[str]`\n- **Optional**\n- Owner user identifier (tenant-scoped).\
+    \ This is a VARCHAR(256), not a UUID, to allow flexibility for external identity\
+    \ providers. Typically generated as a hash of the user''s email address. In future,\
+    \ other strong unique claims (e.g., OAuth sub, verified phone) could also be used\
+    \ for generation.\n\n### `graph_edges`\n- **Type**: `list[dict]`\n- **Optional**\n\
+    - Knowledge graph edges stored as InlineEdge dicts\n\n### `metadata`\n- **Type**:\
+    \ `<class ''dict''>`\n- **Optional**\n- Flexible metadata storage\n\n### `tags`\n\
+    - **Type**: `list[str]`\n- **Optional**\n- Entity tags\n\n### `session_id`\n-\
+    \ **Type**: `<class ''str''>`\n- **Required**\n- The session being shared (matches\
+    \ Message.session_id)\n\n### `owner_user_id`\n- **Type**: `<class ''str''>`\n\
+    - **Required**\n- User ID of the session owner (the sharer)\n\n### `shared_with_user_id`\n\
+    - **Type**: `<class ''str''>`\n- **Required**\n- User ID of the recipient (who\
+    \ can now view the session)\n\n',\n    '{\"type\": \"object\", \"description\"\
+    : \"\\n    Session sharing record between users.\\n\\n    Links a session (identified\
+    \ by session_id from Message records) to a\\n    recipient user, enabling collaborative\
+    \ access to conversation history.\\n    \\n\\nThis agent can search the `shared_sessions`\
+    \ table using the `search_rem` tool. Use REM query syntax: LOOKUP for exact match,\
+    \ FUZZY for typo-tolerant search, SEARCH for semantic similarity, or SQL for complex\
+    \ queries.\", \"properties\": {\"id\": {\"anyOf\": [{\"format\": \"uuid\", \"\
+    type\": \"string\"}, {\"type\": \"string\"}, {\"type\": \"null\"}], \"default\"\
+    : null, \"description\": \"Unique identifier (UUID or string, generated per model\
+    \ type). Generated automatically if not provided.\", \"title\": \"Id\"}, \"created_at\"\
+    : {\"description\": \"Entity creation timestamp\", \"format\": \"date-time\",\
+    \ \"title\": \"Created At\", \"type\": \"string\"}, \"updated_at\": {\"description\"\
+    : \"Last update timestamp\", \"format\": \"date-time\", \"title\": \"Updated At\"\
+    , \"type\": \"string\"}, \"deleted_at\": {\"anyOf\": [{\"format\": \"date-time\"\
+    , \"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\"\
+    : \"Soft deletion timestamp\", \"title\": \"Deleted At\"}, \"tenant_id\": {\"\
+    anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null, \"\
+    description\": \"Tenant identifier for multi-tenancy isolation\", \"title\": \"\
+    Tenant Id\"}, \"user_id\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"\
+    null\"}], \"default\": null, \"description\": \"Owner user identifier (tenant-scoped).\
+    \ This is a VARCHAR(256), not a UUID, to allow flexibility for external identity\
+    \ providers. Typically generated as a hash of the user''s email address. In future,\
+    \ other strong unique claims (e.g., OAuth sub, verified phone) could also be used\
+    \ for generation.\", \"title\": \"User Id\"}, \"graph_edges\": {\"description\"\
+    : \"Knowledge graph edges stored as InlineEdge dicts\", \"items\": {\"additionalProperties\"\
+    : true, \"type\": \"object\"}, \"title\": \"Graph Edges\", \"type\": \"array\"\
+    }, \"metadata\": {\"additionalProperties\": true, \"description\": \"Flexible\
+    \ metadata storage\", \"title\": \"Metadata\", \"type\": \"object\"}, \"tags\"\
+    : {\"description\": \"Entity tags\", \"items\": {\"type\": \"string\"}, \"title\"\
+    : \"Tags\", \"type\": \"array\"}, \"session_id\": {\"description\": \"The session\
+    \ being shared (matches Message.session_id)\", \"title\": \"Session Id\", \"type\"\
+    : \"string\"}, \"owner_user_id\": {\"description\": \"User ID of the session owner\
+    \ (the sharer)\", \"title\": \"Owner User Id\", \"type\": \"string\"}, \"shared_with_user_id\"\
+    : {\"description\": \"User ID of the recipient (who can now view the session)\"\
+    , \"title\": \"Shared With User Id\", \"type\": \"string\"}}, \"required\": [\"\
+    session_id\", \"owner_user_id\", \"shared_with_user_id\"], \"json_schema_extra\"\
+    : {\"table_name\": \"shared_sessions\", \"entity_key_field\": \"id\", \"embedding_fields\"\
+    : [], \"fully_qualified_name\": \"rem.models.entities.shared_session.SharedSession\"\
+    , \"tools\": [\"search_rem\"], \"default_search_table\": \"shared_sessions\",\
+    \ \"has_embeddings\": false}}'::jsonb,\n    'entity',\n    '{\"table_name\": \"\
+    shared_sessions\", \"entity_key_field\": \"id\", \"embedding_fields\": [], \"\
+    fqn\": \"rem.models.entities.shared_session.SharedSession\"}'::jsonb\n)\nON CONFLICT\
+    \ (id) DO UPDATE SET\n    name = EXCLUDED.name,\n    content = EXCLUDED.content,\n\
+    \    spec = EXCLUDED.spec,\n    category = EXCLUDED.category,\n    metadata =\
+    \ EXCLUDED.metadata,\n    updated_at = CURRENT_TIMESTAMP;\n\n-- Schema entry for\
+    \ User (users)\nINSERT INTO schemas (id, tenant_id, name, content, spec, category,\
+    \ metadata)\nVALUES (\n    '1ad3d95e-32e9-54d6-ad7d-e39b9ed5018b'::uuid,\n   \
+    \ 'system',\n    'User',\n    '# User\n\n\n    User entity.\n\n    Represents\
+    \ people in the REM system, either as active users\n    or entities extracted\
+    \ from content. Tenant isolation is provided\n    via CoreModel.tenant_id field.\n\
+    \n    Enhanced by dreaming worker:\n    - summary: Generated from activity analysis\n\
+    \    - interests: Extracted from resources and sessions\n    - activity_level:\
+    \ Computed from recent engagement\n    - preferred_topics: Extracted from moment/resource\
+    \ topics\n    \n\n## Overview\n\nThe `User` entity is stored in the `users` table.\
+    \ Each record is uniquely\nidentified by its `name` field for lookups and graph\
+    \ traversal.\n\n## Search Capabilities\n\nThis schema includes the `search_rem`\
+    \ tool which supports:\n- **LOOKUP**: O(1) exact match by name (e.g., `LOOKUP\
+    \ \"entity-name\"`)\n- **FUZZY**: Typo-tolerant search (e.g., `FUZZY \"partial\"\
+    \ THRESHOLD 0.3`)\n- **SEARCH**: Semantic vector search on summary (e.g., `SEARCH\
+    \ \"concept\" FROM users LIMIT 10`)\n- **SQL**: Complex queries (e.g., `SELECT\
+    \ * FROM users WHERE ...`)\n\n## Table Info\n\n| Property | Value |\n|----------|-------|\n\
+    | Table | `users` |\n| Entity Key | `name` |\n| Embedding Fields | `summary` |\n\
+    | Tools | `search_rem` |\n\n## Fields\n\n### `id`\n- **Type**: `typing.Union[uuid.UUID,\
+    \ str, NoneType]`\n- **Optional**\n- Unique identifier (UUID or string, generated\
+    \ per model type). Generated automatically if not provided.\n\n### `created_at`\n\
+    - **Type**: `<class ''datetime.datetime''>`\n- **Optional**\n- Entity creation\
+    \ timestamp\n\n### `updated_at`\n- **Type**: `<class ''datetime.datetime''>`\n\
+    - **Optional**\n- Last update timestamp\n\n### `deleted_at`\n- **Type**: `typing.Optional[datetime.datetime]`\n\
+    - **Optional**\n- Soft deletion timestamp\n\n### `tenant_id`\n- **Type**: `typing.Optional[str]`\n\
+    - **Optional**\n- Tenant identifier for multi-tenancy isolation\n\n### `user_id`\n\
+    - **Type**: `typing.Optional[str]`\n- **Optional**\n- Owner user identifier (tenant-scoped).\
+    \ This is a VARCHAR(256), not a UUID, to allow flexibility for external identity\
+    \ providers. Typically generated as a hash of the user''s email address. In future,\
+    \ other strong unique claims (e.g., OAuth sub, verified phone) could also be used\
+    \ for generation.\n\n### `graph_edges`\n- **Type**: `list[dict]`\n- **Optional**\n\
+    - Knowledge graph edges stored as InlineEdge dicts\n\n### `metadata`\n- **Type**:\
+    \ `<class ''dict''>`\n- **Optional**\n- Flexible metadata storage\n\n### `tags`\n\
+    - **Type**: `list[str]`\n- **Optional**\n- Entity tags\n\n### `name`\n- **Type**:\
+    \ `<class ''str''>`\n- **Required**\n- User name (human-readable, used as graph\
+    \ label)\n\n### `email`\n- **Type**: `typing.Optional[str]`\n- **Optional**\n\
+    - User email address\n\n### `role`\n- **Type**: `typing.Optional[str]`\n- **Optional**\n\
+    - User role (employee, contractor, external, etc.)\n\n### `tier`\n- **Type**:\
+    \ `<enum ''UserTier''>`\n- **Optional**\n- User subscription tier (free, basic,\
+    \ pro) for feature gating\n\n### `anonymous_ids`\n- **Type**: `list[str]`\n- **Optional**\n\
+    - Linked anonymous session IDs used for merging history\n\n### `sec_policy`\n\
+    - **Type**: `<class ''dict''>`\n- **Optional**\n- Security policy configuration\
+    \ (JSON, extensible for custom policies)\n\n### `summary`\n- **Type**: `typing.Optional[str]`\n\
+    - **Optional**\n- LLM-generated user profile summary (updated by dreaming worker)\n\
+    \n### `interests`\n- **Type**: `list[str]`\n- **Optional**\n- User interests extracted\
+    \ from activity\n\n### `preferred_topics`\n- **Type**: `list[str]`\n- **Optional**\n\
+    - Frequently discussed topics in kebab-case\n\n### `activity_level`\n- **Type**:\
+    \ `typing.Optional[str]`\n- **Optional**\n- Activity level: active, moderate,\
+    \ inactive\n\n### `last_active_at`\n- **Type**: `typing.Optional[datetime.datetime]`\n\
+    - **Optional**\n- Last activity timestamp\n\n',\n    '{\"type\": \"object\", \"\
+    description\": \"\\n    User entity.\\n\\n    Represents people in the REM system,\
+    \ either as active users\\n    or entities extracted from content. Tenant isolation\
+    \ is provided\\n    via CoreModel.tenant_id field.\\n\\n    Enhanced by dreaming\
+    \ worker:\\n    - summary: Generated from activity analysis\\n    - interests:\
+    \ Extracted from resources and sessions\\n    - activity_level: Computed from\
+    \ recent engagement\\n    - preferred_topics: Extracted from moment/resource topics\\\
+    n    \\n\\nThis agent can search the `users` table using the `search_rem` tool.\
+    \ Use REM query syntax: LOOKUP for exact match, FUZZY for typo-tolerant search,\
+    \ SEARCH for semantic similarity, or SQL for complex queries.\", \"properties\"\
+    : {\"id\": {\"anyOf\": [{\"format\": \"uuid\", \"type\": \"string\"}, {\"type\"\
+    : \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Unique\
+    \ identifier (UUID or string, generated per model type). Generated automatically\
+    \ if not provided.\", \"title\": \"Id\"}, \"created_at\": {\"description\": \"\
+    Entity creation timestamp\", \"format\": \"date-time\", \"title\": \"Created At\"\
+    , \"type\": \"string\"}, \"updated_at\": {\"description\": \"Last update timestamp\"\
+    , \"format\": \"date-time\", \"title\": \"Updated At\", \"type\": \"string\"},\
+    \ \"deleted_at\": {\"anyOf\": [{\"format\": \"date-time\", \"type\": \"string\"\
+    }, {\"type\": \"null\"}], \"default\": null, \"description\": \"Soft deletion\
+    \ timestamp\", \"title\": \"Deleted At\"}, \"tenant_id\": {\"anyOf\": [{\"type\"\
+    : \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Tenant\
+    \ identifier for multi-tenancy isolation\", \"title\": \"Tenant Id\"}, \"user_id\"\
+    : {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null,\
+    \ \"description\": \"Owner user identifier (tenant-scoped). This is a VARCHAR(256),\
+    \ not a UUID, to allow flexibility for external identity providers. Typically\
+    \ generated as a hash of the user''s email address. In future, other strong unique\
+    \ claims (e.g., OAuth sub, verified phone) could also be used for generation.\"\
+    , \"title\": \"User Id\"}, \"graph_edges\": {\"description\": \"Knowledge graph\
+    \ edges stored as InlineEdge dicts\", \"items\": {\"additionalProperties\": true,\
+    \ \"type\": \"object\"}, \"title\": \"Graph Edges\", \"type\": \"array\"}, \"\
+    metadata\": {\"additionalProperties\": true, \"description\": \"Flexible metadata\
+    \ storage\", \"title\": \"Metadata\", \"type\": \"object\"}, \"tags\": {\"description\"\
+    : \"Entity tags\", \"items\": {\"type\": \"string\"}, \"title\": \"Tags\", \"\
+    type\": \"array\"}, \"name\": {\"description\": \"User name (human-readable, used\
+    \ as graph label)\", \"entity_key\": true, \"title\": \"Name\", \"type\": \"string\"\
+    }, \"email\": {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\"\
+    : null, \"description\": \"User email address\", \"title\": \"Email\"}, \"role\"\
+    : {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null,\
+    \ \"description\": \"User role (employee, contractor, external, etc.)\", \"title\"\
+    : \"Role\"}, \"tier\": {\"$ref\": \"#/$defs/UserTier\", \"default\": \"free\"\
+    , \"description\": \"User subscription tier (free, basic, pro) for feature gating\"\
+    }, \"anonymous_ids\": {\"description\": \"Linked anonymous session IDs used for\
+    \ merging history\", \"items\": {\"type\": \"string\"}, \"title\": \"Anonymous\
+    \ Ids\", \"type\": \"array\"}, \"sec_policy\": {\"additionalProperties\": true,\
+    \ \"description\": \"Security policy configuration (JSON, extensible for custom\
+    \ policies)\", \"title\": \"Sec Policy\", \"type\": \"object\"}, \"summary\":\
+    \ {\"anyOf\": [{\"type\": \"string\"}, {\"type\": \"null\"}], \"default\": null,\
+    \ \"description\": \"LLM-generated user profile summary (updated by dreaming worker)\"\
+    , \"title\": \"Summary\"}, \"interests\": {\"description\": \"User interests extracted\
+    \ from activity\", \"items\": {\"type\": \"string\"}, \"title\": \"Interests\"\
+    , \"type\": \"array\"}, \"preferred_topics\": {\"description\": \"Frequently discussed\
+    \ topics in kebab-case\", \"items\": {\"type\": \"string\"}, \"title\": \"Preferred\
+    \ Topics\", \"type\": \"array\"}, \"activity_level\": {\"anyOf\": [{\"type\":\
+    \ \"string\"}, {\"type\": \"null\"}], \"default\": null, \"description\": \"Activity\
+    \ level: active, moderate, inactive\", \"title\": \"Activity Level\"}, \"last_active_at\"\
+    : {\"anyOf\": [{\"format\": \"date-time\", \"type\": \"string\"}, {\"type\": \"\
+    null\"}], \"default\": null, \"description\": \"Last activity timestamp\", \"\
+    title\": \"Last Active At\"}}, \"required\": [\"name\"], \"json_schema_extra\"\
+    : {\"table_name\": \"users\", \"entity_key_field\": \"name\", \"embedding_fields\"\
+    : [\"summary\"], \"fully_qualified_name\": \"rem.models.entities.user.User\",\
+    \ \"tools\": [\"search_rem\"], \"default_search_table\": \"users\", \"has_embeddings\"\
+    : true}}'::jsonb,\n    'entity',\n    '{\"table_name\": \"users\", \"entity_key_field\"\
+    : \"name\", \"embedding_fields\": [\"summary\"], \"fqn\": \"rem.models.entities.user.User\"\
+    }'::jsonb\n)\nON CONFLICT (id) DO UPDATE SET\n    name = EXCLUDED.name,\n    content\
+    \ = EXCLUDED.content,\n    spec = EXCLUDED.spec,\n    category = EXCLUDED.category,\n\
+    \    metadata = EXCLUDED.metadata,\n    updated_at = CURRENT_TIMESTAMP;\n\n--\
+    \ ============================================================================\n\
     -- RECORD MIGRATION\n-- ============================================================================\n\
     \nINSERT INTO rem_migrations (name, type, version)\nVALUES ('install_models.sql',\
     \ 'models', '1.0.0')\nON CONFLICT (name) DO UPDATE\nSET applied_at = CURRENT_TIMESTAMP,\n\
@@ -1041,4 +2512,243 @@ data:
     \       RAISE NOTICE '  pg_net';\n        RAISE NOTICE '';\n        RAISE NOTICE\
     \ 'To enable pg_net, use the custom image: percolationlabs/rem-pg:18';\n    END\
     \ IF;\n    RAISE NOTICE '============================================================';\n\
+    END $$;\n"
+  004_cache_system.sql: "-- REM Cache System\n-- Description: Self-healing cache for\
+    \ UNLOGGED tables (kv_store)\n-- Version: 1.0.0\n-- Date: 2025-11-29\n--\n-- This\
+    \ migration adds:\n--   1. cache_system_state table for debouncing and API secret\
+    \ storage\n--   2. maybe_trigger_kv_rebuild() function for async rebuild triggering\n\
+    --   3. Updated rem_lookup/fuzzy/traverse with self-healing on empty cache\n--\n\
+    -- Self-Healing Flow:\n--   Query returns 0 results \u2192 Check if kv_store empty\
+    \ \u2192 Trigger async rebuild\n--   Priority: pg_net (if available) \u2192 dblink\
+    \ (always available)\n\n-- ============================================================================\n\
+    -- REQUIRED EXTENSION\n-- ============================================================================\n\
+    -- pgcrypto is needed for gen_random_bytes() to generate API secrets\nCREATE EXTENSION\
+    \ IF NOT EXISTS pgcrypto;\n\n-- ============================================================================\n\
+    -- CACHE SYSTEM STATE TABLE\n-- ============================================================================\n\
+    -- Stores:\n--   - Last rebuild trigger timestamp (for debouncing)\n--   - API\
+    \ secret for internal endpoint authentication\n--   - Rebuild statistics\n\nCREATE\
+    \ TABLE IF NOT EXISTS cache_system_state (\n    id INTEGER PRIMARY KEY DEFAULT\
+    \ 1 CHECK (id = 1),  -- Single row table\n    api_secret TEXT NOT NULL,      \
+    \                    -- Secret for internal API auth\n    last_triggered_at TIMESTAMPTZ,\
+    \                     -- Debounce: last trigger time\n    last_rebuild_at TIMESTAMPTZ,\
+    \                       -- Last successful rebuild\n    triggered_by TEXT,   \
+    \                              -- What triggered last rebuild\n    trigger_count\
+    \ INTEGER DEFAULT 0,                   -- Total trigger count\n    rebuild_count\
+    \ INTEGER DEFAULT 0,                   -- Total successful rebuilds\n    created_at\
+    \ TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,\n    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP\n\
+    );\n\n-- Generate initial secret if table is empty\nINSERT INTO cache_system_state\
+    \ (id, api_secret)\nSELECT 1, encode(gen_random_bytes(32), 'hex')\nWHERE NOT EXISTS\
+    \ (SELECT 1 FROM cache_system_state WHERE id = 1);\n\nCOMMENT ON TABLE cache_system_state\
+    \ IS\n'Single-row table storing cache system state: API secret for internal auth\
+    \ and debounce tracking';\n\n-- ============================================================================\n\
+    -- HELPER: Check if extension exists\n-- ============================================================================\n\
+    \nCREATE OR REPLACE FUNCTION rem_extension_exists(p_extension TEXT)\nRETURNS BOOLEAN\
+    \ AS $$\nBEGIN\n    RETURN EXISTS (SELECT 1 FROM pg_extension WHERE extname =\
+    \ p_extension);\nEND;\n$$ LANGUAGE plpgsql STABLE;\n\n-- ============================================================================\n\
+    -- HELPER: Check if kv_store is empty for user\n-- ============================================================================\n\
+    \nCREATE OR REPLACE FUNCTION rem_kv_store_empty(p_user_id TEXT)\nRETURNS BOOLEAN\
+    \ AS $$\nBEGIN\n    -- Quick existence check - very fast with index\n    RETURN\
+    \ NOT EXISTS (\n        SELECT 1 FROM kv_store\n        WHERE user_id = p_user_id\n\
+    \        LIMIT 1\n    );\nEND;\n$$ LANGUAGE plpgsql STABLE;\n\n-- ============================================================================\n\
+    -- MAIN: Maybe trigger KV rebuild (async, non-blocking)\n-- ============================================================================\n\
+    -- Called when a query returns 0 results and kv_store appears empty.\n-- Uses\
+    \ pg_net (if available) to call API, falls back to dblink.\n-- Includes debouncing\
+    \ to prevent request storms.\n\nCREATE OR REPLACE FUNCTION maybe_trigger_kv_rebuild(\n\
+    \    p_user_id TEXT,\n    p_triggered_by TEXT DEFAULT 'query'\n)\nRETURNS VOID\
+    \ AS $$\nDECLARE\n    v_has_pgnet BOOLEAN;\n    v_has_dblink BOOLEAN;\n    v_last_trigger\
+    \ TIMESTAMPTZ;\n    v_api_secret TEXT;\n    v_debounce_seconds CONSTANT INTEGER\
+    \ := 30;\n    v_api_url TEXT := 'http://rem-api.siggy.svc.cluster.local:8000/api/admin/internal/rebuild-kv';\n\
+    \    v_request_id BIGINT;\nBEGIN\n    -- Quick check: is kv_store actually empty\
+    \ for this user?\n    IF NOT rem_kv_store_empty(p_user_id) THEN\n        RETURN;\
+    \  -- Cache has data, nothing to do\n    END IF;\n\n    -- Try to acquire advisory\
+    \ lock (non-blocking, transaction-scoped)\n    -- This prevents multiple concurrent\
+    \ triggers\n    IF NOT pg_try_advisory_xact_lock(2147483646) THEN\n        RETURN;\
+    \  -- Another session is handling it\n    END IF;\n\n    -- Check debounce: was\
+    \ rebuild triggered recently?\n    SELECT last_triggered_at, api_secret\n    INTO\
+    \ v_last_trigger, v_api_secret\n    FROM cache_system_state\n    WHERE id = 1;\n\
+    \n    IF v_last_trigger IS NOT NULL\n       AND v_last_trigger > (CURRENT_TIMESTAMP\
+    \ - (v_debounce_seconds || ' seconds')::INTERVAL) THEN\n        RETURN;  -- Triggered\
+    \ recently, skip\n    END IF;\n\n    -- Update state (so concurrent callers see\
+    \ it)\n    UPDATE cache_system_state\n    SET last_triggered_at = CURRENT_TIMESTAMP,\n\
+    \        triggered_by = p_triggered_by,\n        trigger_count = trigger_count\
+    \ + 1,\n        updated_at = CURRENT_TIMESTAMP\n    WHERE id = 1;\n\n    -- Check\
+    \ available extensions\n    v_has_pgnet := rem_extension_exists('pg_net');\n \
+    \   v_has_dblink := rem_extension_exists('dblink');\n\n    -- Priority 1: pg_net\
+    \ (async HTTP to API - supports S3 restore)\n    IF v_has_pgnet THEN\n       \
+    \ BEGIN\n            SELECT net.http_post(\n                url := v_api_url,\n\
+    \                headers := jsonb_build_object(\n                    'Content-Type',\
+    \ 'application/json',\n                    'X-Internal-Secret', v_api_secret\n\
+    \                ),\n                body := jsonb_build_object(\n           \
+    \         'user_id', p_user_id,\n                    'triggered_by', 'pg_net_'\
+    \ || p_triggered_by,\n                    'timestamp', CURRENT_TIMESTAMP\n   \
+    \             )\n            ) INTO v_request_id;\n\n            RAISE DEBUG 'kv_rebuild\
+    \ triggered via pg_net (request_id: %)', v_request_id;\n            RETURN;\n\
+    \        EXCEPTION WHEN OTHERS THEN\n            RAISE WARNING 'pg_net trigger\
+    \ failed: %, falling back to dblink', SQLERRM;\n        END;\n    END IF;\n\n\
+    \    -- Priority 2: dblink (async SQL - direct rebuild)\n    IF v_has_dblink THEN\n\
+    \        BEGIN\n            -- Connect to self (same database)\n            PERFORM\
+    \ dblink_connect(\n                'kv_rebuild_conn',\n                format('dbname=%s',\
+    \ current_database())\n            );\n\n            -- Send async query (returns\
+    \ immediately)\n            PERFORM dblink_send_query(\n                'kv_rebuild_conn',\n\
+    \                'SELECT rebuild_kv_store()'\n            );\n\n            --\
+    \ Don't disconnect - query continues in background\n            -- Connection\
+    \ auto-closes when session ends\n\n            RAISE DEBUG 'kv_rebuild triggered\
+    \ via dblink';\n            RETURN;\n        EXCEPTION WHEN OTHERS THEN\n    \
+    \        -- Clean up failed connection\n            BEGIN\n                PERFORM\
+    \ dblink_disconnect('kv_rebuild_conn');\n            EXCEPTION WHEN OTHERS THEN\n\
+    \                NULL;\n            END;\n            RAISE WARNING 'dblink trigger\
+    \ failed: %', SQLERRM;\n        END;\n    END IF;\n\n    -- No async method available\
+    \ - log warning but don't block query\n    RAISE WARNING 'No async rebuild method\
+    \ available (pg_net or dblink). Cache rebuild skipped.';\n\nEXCEPTION WHEN OTHERS\
+    \ THEN\n    -- Never fail the calling query\n    RAISE WARNING 'maybe_trigger_kv_rebuild\
+    \ failed: %', SQLERRM;\nEND;\n$$ LANGUAGE plpgsql;\n\nCOMMENT ON FUNCTION maybe_trigger_kv_rebuild\
+    \ IS\n'Async trigger for kv_store rebuild. Uses pg_net (API) or dblink (SQL).\
+    \ Includes debouncing.';\n\n-- ============================================================================\n\
+    -- UPDATED: rem_lookup with self-healing\n-- ============================================================================\n\
+    \nCREATE OR REPLACE FUNCTION rem_lookup(\n    p_entity_key VARCHAR(255),\n   \
+    \ p_tenant_id VARCHAR(100),\n    p_user_id VARCHAR(100)\n)\nRETURNS TABLE(\n \
+    \   entity_type VARCHAR(100),\n    data JSONB\n) AS $$\nDECLARE\n    entity_table\
+    \ VARCHAR(100);\n    query_sql TEXT;\n    effective_user_id VARCHAR(100);\n  \
+    \  v_result_count INTEGER := 0;\nBEGIN\n    effective_user_id := COALESCE(p_user_id,\
+    \ p_tenant_id);\n\n    -- First lookup in KV store to get entity_type (table name)\n\
+    \    SELECT kv.entity_type INTO entity_table\n    FROM kv_store kv\n    WHERE\
+    \ (kv.user_id = effective_user_id OR kv.user_id IS NULL)\n    AND kv.entity_key\
+    \ = p_entity_key\n    LIMIT 1;\n\n    -- If not found, check if cache is empty\
+    \ and maybe trigger rebuild\n    IF entity_table IS NULL THEN\n        -- SELF-HEALING:\
+    \ Check if this is because cache is empty\n        IF rem_kv_store_empty(effective_user_id)\
+    \ THEN\n            PERFORM maybe_trigger_kv_rebuild(effective_user_id, 'rem_lookup');\n\
+    \        END IF;\n        RETURN;\n    END IF;\n\n    -- Fetch raw record from\
+    \ underlying table as JSONB\n    query_sql := format('\n        SELECT\n     \
+    \       %L::VARCHAR(100) AS entity_type,\n            row_to_json(t)::jsonb AS\
+    \ data\n        FROM %I t\n        WHERE (t.user_id = $1 OR t.user_id IS NULL)\n\
+    \        AND t.name = $2\n        AND t.deleted_at IS NULL\n    ', entity_table,\
+    \ entity_table);\n\n    RETURN QUERY EXECUTE query_sql USING effective_user_id,\
+    \ p_entity_key;\nEND;\n$$ LANGUAGE plpgsql STABLE;\n\n-- ============================================================================\n\
+    -- UPDATED: rem_fuzzy with self-healing\n-- ============================================================================\n\
+    \nCREATE OR REPLACE FUNCTION rem_fuzzy(\n    p_query TEXT,\n    p_tenant_id VARCHAR(100),\n\
+    \    p_threshold REAL DEFAULT 0.3,\n    p_limit INTEGER DEFAULT 10,\n    p_user_id\
+    \ VARCHAR(100) DEFAULT NULL\n)\nRETURNS TABLE(\n    entity_type VARCHAR(100),\n\
+    \    similarity_score REAL,\n    data JSONB\n) AS $$\nDECLARE\n    kv_matches\
+    \ RECORD;\n    entities_by_table JSONB := '{}'::jsonb;\n    table_keys JSONB;\n\
+    \    effective_user_id VARCHAR(100);\n    v_found_any BOOLEAN := FALSE;\nBEGIN\n\
+    \    effective_user_id := COALESCE(p_user_id, p_tenant_id);\n\n    -- Find matching\
+    \ keys in KV store\n    FOR kv_matches IN\n        SELECT\n            kv.entity_key,\n\
+    \            kv.entity_type,\n            similarity(kv.entity_key, p_query) AS\
+    \ sim_score\n        FROM kv_store kv\n        WHERE (kv.user_id = effective_user_id\
+    \ OR kv.user_id IS NULL)\n        AND kv.entity_key % p_query\n        AND similarity(kv.entity_key,\
+    \ p_query) >= p_threshold\n        ORDER BY sim_score DESC\n        LIMIT p_limit\n\
+    \    LOOP\n        v_found_any := TRUE;\n        -- Build JSONB mapping {table:\
+    \ [keys]}\n        IF entities_by_table ? kv_matches.entity_type THEN\n      \
+    \      table_keys := entities_by_table->kv_matches.entity_type;\n            entities_by_table\
+    \ := jsonb_set(\n                entities_by_table,\n                ARRAY[kv_matches.entity_type],\n\
+    \                table_keys || jsonb_build_array(kv_matches.entity_key)\n    \
+    \        );\n        ELSE\n            entities_by_table := jsonb_set(\n     \
+    \           entities_by_table,\n                ARRAY[kv_matches.entity_type],\n\
+    \                jsonb_build_array(kv_matches.entity_key)\n            );\n  \
+    \      END IF;\n    END LOOP;\n\n    -- SELF-HEALING: If no matches and cache\
+    \ is empty, trigger rebuild\n    IF NOT v_found_any AND rem_kv_store_empty(effective_user_id)\
+    \ THEN\n        PERFORM maybe_trigger_kv_rebuild(effective_user_id, 'rem_fuzzy');\n\
+    \    END IF;\n\n    -- Fetch full records\n    RETURN QUERY\n    SELECT\n    \
+    \    f.entity_type::VARCHAR(100),\n        similarity(f.entity_key, p_query) AS\
+    \ similarity_score,\n        f.entity_record AS data\n    FROM rem_fetch(entities_by_table,\
+    \ effective_user_id) f\n    ORDER BY similarity_score DESC;\nEND;\n$$ LANGUAGE\
+    \ plpgsql STABLE;\n\n-- ============================================================================\n\
+    -- UPDATED: rem_traverse with self-healing\n-- ============================================================================\n\
+    \nCREATE OR REPLACE FUNCTION rem_traverse(\n    p_entity_key VARCHAR(255),\n \
+    \   p_tenant_id VARCHAR(100),\n    p_user_id VARCHAR(100),\n    p_max_depth INTEGER\
+    \ DEFAULT 1,\n    p_rel_type VARCHAR(100) DEFAULT NULL,\n    p_keys_only BOOLEAN\
+    \ DEFAULT FALSE\n)\nRETURNS TABLE(\n    depth INTEGER,\n    entity_key VARCHAR(255),\n\
+    \    entity_type VARCHAR(100),\n    entity_id UUID,\n    rel_type VARCHAR(100),\n\
+    \    rel_weight REAL,\n    path TEXT[],\n    entity_record JSONB\n) AS $$\nDECLARE\n\
+    \    graph_keys RECORD;\n    entities_by_table JSONB := '{}'::jsonb;\n    table_keys\
+    \ JSONB;\n    effective_user_id VARCHAR(100);\n    v_found_start BOOLEAN := FALSE;\n\
+    BEGIN\n    effective_user_id := COALESCE(p_user_id, p_tenant_id);\n\n    -- Check\
+    \ if start entity exists in kv_store\n    SELECT TRUE INTO v_found_start\n   \
+    \ FROM kv_store kv\n    WHERE (kv.user_id = effective_user_id OR kv.user_id IS\
+    \ NULL)\n    AND kv.entity_key = p_entity_key\n    LIMIT 1;\n\n    -- SELF-HEALING:\
+    \ If start not found and cache is empty, trigger rebuild\n    IF NOT COALESCE(v_found_start,\
+    \ FALSE) THEN\n        IF rem_kv_store_empty(effective_user_id) THEN\n       \
+    \     PERFORM maybe_trigger_kv_rebuild(effective_user_id, 'rem_traverse');\n \
+    \       END IF;\n        RETURN;\n    END IF;\n\n    -- Original traverse logic\n\
+    \    FOR graph_keys IN\n        WITH RECURSIVE graph_traversal AS (\n        \
+    \    SELECT\n                0 AS depth,\n                kv.entity_key,\n   \
+    \             kv.entity_type,\n                kv.entity_id,\n               \
+    \ NULL::VARCHAR(100) AS rel_type,\n                NULL::REAL AS rel_weight,\n\
+    \                ARRAY[kv.entity_key]::TEXT[] AS path\n            FROM kv_store\
+    \ kv\n            WHERE (kv.user_id = effective_user_id OR kv.user_id IS NULL)\n\
+    \            AND kv.entity_key = p_entity_key\n\n            UNION ALL\n\n   \
+    \         SELECT\n                gt.depth + 1,\n                target_kv.entity_key,\n\
+    \                target_kv.entity_type,\n                target_kv.entity_id,\n\
+    \                (edge->>'rel_type')::VARCHAR(100) AS rel_type,\n            \
+    \    COALESCE((edge->>'weight')::REAL, 1.0) AS rel_weight,\n                gt.path\
+    \ || target_kv.entity_key AS path\n            FROM graph_traversal gt\n     \
+    \       JOIN kv_store source_kv ON source_kv.entity_key = gt.entity_key\n    \
+    \            AND (source_kv.user_id = effective_user_id OR source_kv.user_id IS\
+    \ NULL)\n            CROSS JOIN LATERAL jsonb_array_elements(COALESCE(source_kv.graph_edges,\
+    \ '[]'::jsonb)) AS edge\n            JOIN kv_store target_kv ON target_kv.entity_key\
+    \ = (edge->>'dst')::VARCHAR(255)\n                AND (target_kv.user_id = effective_user_id\
+    \ OR target_kv.user_id IS NULL)\n            WHERE gt.depth < p_max_depth\n  \
+    \          AND (p_rel_type IS NULL OR (edge->>'rel_type')::VARCHAR(100) = p_rel_type)\n\
+    \            AND NOT (target_kv.entity_key = ANY(gt.path))\n        )\n      \
+    \  SELECT DISTINCT ON (gt.entity_key)\n            gt.depth,\n            gt.entity_key,\n\
+    \            gt.entity_type,\n            gt.entity_id,\n            gt.rel_type,\n\
+    \            gt.rel_weight,\n            gt.path\n        FROM graph_traversal\
+    \ gt\n        WHERE gt.depth > 0\n        ORDER BY gt.entity_key, gt.depth\n \
+    \   LOOP\n        IF p_keys_only THEN\n            depth := graph_keys.depth;\n\
+    \            entity_key := graph_keys.entity_key;\n            entity_type :=\
+    \ graph_keys.entity_type;\n            entity_id := graph_keys.entity_id;\n  \
+    \          rel_type := graph_keys.rel_type;\n            rel_weight := graph_keys.rel_weight;\n\
+    \            path := graph_keys.path;\n            entity_record := NULL;\n  \
+    \          RETURN NEXT;\n        ELSE\n            IF entities_by_table ? graph_keys.entity_type\
+    \ THEN\n                table_keys := entities_by_table->graph_keys.entity_type;\n\
+    \                entities_by_table := jsonb_set(\n                    entities_by_table,\n\
+    \                    ARRAY[graph_keys.entity_type],\n                    table_keys\
+    \ || jsonb_build_array(graph_keys.entity_key)\n                );\n          \
+    \  ELSE\n                entities_by_table := jsonb_set(\n                   \
+    \ entities_by_table,\n                    ARRAY[graph_keys.entity_type],\n   \
+    \                 jsonb_build_array(graph_keys.entity_key)\n                );\n\
+    \            END IF;\n        END IF;\n    END LOOP;\n\n    IF NOT p_keys_only\
+    \ THEN\n        RETURN QUERY\n        SELECT\n            g.depth,\n         \
+    \   g.entity_key,\n            g.entity_type,\n            g.entity_id,\n    \
+    \        g.rel_type,\n            g.rel_weight,\n            g.path,\n       \
+    \     f.entity_record\n        FROM (\n            SELECT * FROM rem_traverse(p_entity_key,\
+    \ p_tenant_id, effective_user_id, p_max_depth, p_rel_type, TRUE)\n        ) g\n\
+    \        LEFT JOIN rem_fetch(entities_by_table, effective_user_id) f\n       \
+    \     ON g.entity_key = f.entity_key;\n    END IF;\nEND;\n$$ LANGUAGE plpgsql\
+    \ STABLE;\n\n-- ============================================================================\n\
+    -- HELPER: Get API secret for validation\n-- ============================================================================\n\
+    \nCREATE OR REPLACE FUNCTION rem_get_cache_api_secret()\nRETURNS TEXT AS $$\n\
+    DECLARE\n    v_secret TEXT;\nBEGIN\n    SELECT api_secret INTO v_secret FROM cache_system_state\
+    \ WHERE id = 1;\n    RETURN v_secret;\nEND;\n$$ LANGUAGE plpgsql STABLE SECURITY\
+    \ DEFINER;\n\n-- Only allow rem user to execute\nREVOKE ALL ON FUNCTION rem_get_cache_api_secret()\
+    \ FROM PUBLIC;\n\n-- ============================================================================\n\
+    -- HELPER: Record successful rebuild\n-- ============================================================================\n\
+    \nCREATE OR REPLACE FUNCTION rem_record_cache_rebuild(p_triggered_by TEXT DEFAULT\
+    \ 'api')\nRETURNS VOID AS $$\nBEGIN\n    UPDATE cache_system_state\n    SET last_rebuild_at\
+    \ = CURRENT_TIMESTAMP,\n        rebuild_count = rebuild_count + 1,\n        updated_at\
+    \ = CURRENT_TIMESTAMP\n    WHERE id = 1;\nEND;\n$$ LANGUAGE plpgsql;\n\n-- ============================================================================\n\
+    -- RECORD INSTALLATION\n-- ============================================================================\n\
+    \nDO $$\nBEGIN\n    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name\
+    \ = 'rem_migrations') THEN\n        INSERT INTO rem_migrations (name, type, version)\n\
+    \        VALUES ('004_cache_system.sql', 'install', '1.0.0')\n        ON CONFLICT\
+    \ (name) DO UPDATE\n        SET applied_at = CURRENT_TIMESTAMP,\n            applied_by\
+    \ = CURRENT_USER;\n    END IF;\nEND $$;\n\n-- ============================================================================\n\
+    -- COMPLETION\n-- ============================================================================\n\
+    \nDO $$\nDECLARE\n    v_has_pgnet BOOLEAN;\n    v_has_dblink BOOLEAN;\nBEGIN\n\
+    \    v_has_pgnet := rem_extension_exists('pg_net');\n    v_has_dblink := rem_extension_exists('dblink');\n\
+    \n    RAISE NOTICE '============================================================';\n\
+    \    RAISE NOTICE 'Cache System Installation Complete';\n    RAISE NOTICE '============================================================';\n\
+    \    RAISE NOTICE '';\n    RAISE NOTICE 'Tables:';\n    RAISE NOTICE '  cache_system_state\
+    \ - Debounce tracking and API secret';\n    RAISE NOTICE '';\n    RAISE NOTICE\
+    \ 'Functions:';\n    RAISE NOTICE '  maybe_trigger_kv_rebuild() - Async rebuild\
+    \ trigger';\n    RAISE NOTICE '  rem_lookup() - Updated with self-healing';\n\
+    \    RAISE NOTICE '  rem_fuzzy() - Updated with self-healing';\n    RAISE NOTICE\
+    \ '  rem_traverse() - Updated with self-healing';\n    RAISE NOTICE '';\n    RAISE\
+    \ NOTICE 'Async Methods Available:';\n    IF v_has_pgnet THEN\n        RAISE NOTICE\
+    \ '  [x] pg_net - HTTP POST to API (preferred)';\n    ELSE\n        RAISE NOTICE\
+    \ '  [ ] pg_net - Not installed';\n    END IF;\n    IF v_has_dblink THEN\n   \
+    \     RAISE NOTICE '  [x] dblink - Async SQL (fallback)';\n    ELSE\n        RAISE\
+    \ NOTICE '  [ ] dblink - Not installed';\n    END IF;\n    RAISE NOTICE '';\n\
+    \    RAISE NOTICE 'Self-Healing: Queries will auto-trigger rebuild on empty cache';\n\
+    \    RAISE NOTICE '============================================================';\n\
     END $$;\n"

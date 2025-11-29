@@ -22,8 +22,8 @@ ERRORS=0
 WARNINGS=0
 
 check_pass() { echo -e "${GREEN}[PASS]${NC} $1"; }
-check_fail() { echo -e "${RED}[FAIL]${NC} $1"; ((ERRORS++)); }
-check_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; ((WARNINGS++)); }
+check_fail() { echo -e "${RED}[FAIL]${NC} $1"; ((ERRORS++)) || true; }
+check_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; ((WARNINGS++)) || true; }
 
 echo "=============================================="
 echo "ArgoCD Bootstrap Pre-flight Validation"
@@ -57,7 +57,7 @@ fi
 if command -v rem &>/dev/null; then
     check_pass "rem CLI installed ($(rem --version 2>/dev/null || echo 'version unknown'))"
 else
-    check_fail "rem CLI not installed (install with: pip install remdb)"
+    check_warn "rem CLI not installed (install with: pip install remdb) - needed to regenerate ConfigMaps"
 fi
 
 echo ""
