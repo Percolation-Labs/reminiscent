@@ -15,46 +15,38 @@ Currently, the application cluster includes ArgoCD for self-management. The mana
 
 ## Quick Start
 
-### Using rem CLI (Recommended)
+### Using CDK (Recommended)
 
-The `rem` CLI is the primary entry point for cluster deployment:
+CDK deploys everything: EKS cluster, ArgoCD, SSM parameters, and all addons.
 
 ```bash
-# 1. Install rem CLI
-pip install remdb
-
-# 2. Initialize manifests (downloads if not present)
-rem cluster init --project-name myproject --git-repo https://github.com/YOUR_ORG/YOUR_REPO.git
-
-# 3. Set credentials
-export ANTHROPIC_API_KEY=sk-ant-...
-export OPENAI_API_KEY=sk-proj-...
-export GITHUB_PAT=ghp_...
-export GITHUB_USERNAME=your-username
-export GITHUB_REPO_URL=https://github.com/YOUR_ORG/YOUR_REPO.git
-
-# 4. Deploy infrastructure (CDK)
+# 1. Configure .env file
 cd manifests/infra/cdk-eks
+cp .env.example .env
+# Edit .env with your AWS account, API keys, etc.
+
+# Required in .env:
+#   AWS_ACCOUNT_ID=your-account-id
+#   AWS_PROFILE=rem
+#   ANTHROPIC_API_KEY=sk-ant-...
+#   OPENAI_API_KEY=sk-proj-...
+
+# 2. Deploy infrastructure (includes ArgoCD + SSM params)
 npm install
 npx cdk deploy --all --profile rem
 
-# 5. Configure kubectl
+# 3. Configure kubectl
 aws eks update-kubeconfig --name <cluster-name> --region us-east-1 --profile rem
 
-# 6. Install ArgoCD
-kubectl create namespace argocd
-kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
-kubectl wait --for=condition=available --timeout=300s deployment/argocd-server -n argocd
-
-# 7. Validate prerequisites
-rem cluster validate --pre-argocd
-
-# 8. Create SSM parameters
-rem cluster setup-ssm
-
-# 9. Deploy applications
+# 4. Deploy ArgoCD applications
 rem cluster apply
 ```
+
+**That's it!** CDK creates:
+- EKS cluster with Karpenter autoscaling
+- ArgoCD (optional, disable with `ENABLE_ARGOCD=false`)
+- SSM parameters for secrets (optional, disable with `ENABLE_SSM_PARAMETERS=false`)
+- All platform addons (ALB controller, External Secrets, etc.)
 
 ### Destroy and Recreate
 
@@ -126,10 +118,11 @@ manifests/
 | `rem cluster init` | Initialize config and download manifests |
 | `rem cluster validate` | Check prerequisites (tools, AWS, K8s, ArgoCD) |
 | `rem cluster validate --pre-argocd` | Check only pre-deployment prerequisites |
-| `rem cluster setup-ssm` | Create AWS SSM parameters from env vars |
 | `rem cluster generate` | Regenerate manifests from config |
 | `rem cluster apply` | Deploy ArgoCD applications |
 | `rem cluster apply --dry-run` | Preview deployment |
+
+**Note:** SSM parameters are now created by CDK automatically. The `rem cluster setup-ssm` command is still available for manual use if needed.
 
 ## Configuration
 

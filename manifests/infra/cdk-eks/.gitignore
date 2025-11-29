@@ -9,9 +9,8 @@ cdk.out
 
 # Build output
 dist/
-lib/
 
-# Environment
+# Environment (keep .env.example tracked, ignore actual .env)
 .env
 .env.local
 

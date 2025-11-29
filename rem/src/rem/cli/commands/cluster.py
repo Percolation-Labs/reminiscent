@@ -986,6 +986,50 @@ def apply(config: Path | None, dry_run: bool, skip_platform: bool):
     click.echo()
     click.echo("ArgoCD Application Deployment")
     click.echo("=" * 60)
+
+    # Pre-validation
+    click.echo("Pre-flight checks:")
+    errors = 0
+
+    # Check kubectl
+    result = subprocess.run(["which", "kubectl"], capture_output=True)
+    if result.returncode != 0:
+        click.secho("  ✗ kubectl not found", fg="red")
+        errors += 1
+    else:
+        click.secho("  ✓ kubectl available", fg="green")
+
+    # Check cluster access
+    result = subprocess.run(
+        ["kubectl", "cluster-info"],
+        capture_output=True,
+        timeout=10,
+    )
+    if result.returncode != 0:
+        click.secho("  ✗ Cannot connect to Kubernetes cluster", fg="red")
+        click.echo("    Run: aws eks update-kubeconfig --name <cluster> --profile rem")
+        errors += 1
+    else:
+        click.secho("  ✓ Kubernetes cluster accessible", fg="green")
+
+    # Check argocd namespace exists
+    result = subprocess.run(
+        ["kubectl", "get", "namespace", "argocd"],
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        click.secho("  ✗ argocd namespace not found", fg="red")
+        click.echo("    ArgoCD should be installed by CDK (ENABLE_ARGOCD=true)")
+        errors += 1
+    else:
+        click.secho("  ✓ argocd namespace exists", fg="green")
+
+    if errors > 0:
+        click.echo()
+        click.secho(f"Pre-flight failed with {errors} error(s)", fg="red")
+        raise click.Abort()
+
+    click.echo()
     click.echo(f"Project: {project_name}")
     click.echo(f"Namespace: {namespace}")
     click.echo(f"Repository: {github_repo_url}")
