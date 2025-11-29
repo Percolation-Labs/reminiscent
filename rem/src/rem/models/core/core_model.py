@@ -52,7 +52,13 @@ class CoreModel(BaseModel):
         default=None, description="Tenant identifier for multi-tenancy isolation"
     )
     user_id: Optional[str] = Field(
-        default=None, description="Owner user identifier (tenant-scoped)"
+        default=None,
+        description=(
+            "Owner user identifier (tenant-scoped). This is a VARCHAR(256), not a UUID, "
+            "to allow flexibility for external identity providers. Typically generated as "
+            "a hash of the user's email address. In future, other strong unique claims "
+            "(e.g., OAuth sub, verified phone) could also be used for generation."
+        ),
     )
     graph_edges: list[dict] = Field(
         default_factory=list,

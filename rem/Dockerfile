@@ -102,7 +102,8 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONFAULTHANDLER=1 \
-    PYTHONHASHSEED=random
+    PYTHONHASHSEED=random \
+    PYTHONWARNINGS="ignore::SyntaxWarning:pydub,ignore::DeprecationWarning:pydub,ignore::DeprecationWarning:audioop"
 
 # Switch to non-root user
 USER rem
@@ -118,7 +119,10 @@ EXPOSE 8000
 # Override with:
 #   - Worker: ["python", "-m", "rem.workers.sqs_file_processor"]
 #   - CLI: ["rem", "db", "migrate"]
-CMD ["hypercorn", "rem.api.main:app", "--bind", "0.0.0.0:8000"]
+# Disable hypercorn access logging - RequestLoggingMiddleware handles this
+# with health checks logged at DEBUG level to reduce noise
+# Use python -W flags to suppress pydub SyntaxWarnings (emitted at parse time before PYTHONWARNINGS applies)
+CMD ["python", "-W", "ignore::SyntaxWarning", "-W", "ignore::DeprecationWarning", "-m", "hypercorn", "rem.api.main:app", "--bind", "0.0.0.0:8000", "--access-logfile", "/dev/null"]
 
 # Health check (works for API, override for worker)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

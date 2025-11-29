@@ -14,6 +14,21 @@ from typing import Any
 
 from loguru import logger
 
+# Max length for entity keys (kv_store.entity_key is varchar(255))
+MAX_ENTITY_KEY_LENGTH = 255
+
+
+def truncate_key(key: str, max_length: int = MAX_ENTITY_KEY_LENGTH) -> str:
+    """Truncate a key to max length, preserving useful suffix if possible."""
+    if len(key) <= max_length:
+        return key
+    # Keep first part and add hash suffix for uniqueness
+    import hashlib
+    hash_suffix = hashlib.md5(key.encode()).hexdigest()[:8]
+    truncated = key[:max_length - 9] + "-" + hash_suffix
+    logger.warning(f"Truncated key from {len(key)} to {len(truncated)} chars: {key[:50]}...")
+    return truncated
+
 from rem.models.entities import Message
 from rem.services.postgres import PostgresService, Repository
 from rem.settings import settings
@@ -151,7 +166,8 @@ class SessionMessageStore:
             return f"msg-{message_index}"
 
         # Create entity key for REM LOOKUP: session-{session_id}-msg-{index}
-        entity_key = f"session-{session_id}-msg-{message_index}"
+        # Truncate to avoid exceeding kv_store.entity_key varchar(255) limit
+        entity_key = truncate_key(f"session-{session_id}-msg-{message_index}")
 
         # Create Message entity for assistant response
         msg = Message(

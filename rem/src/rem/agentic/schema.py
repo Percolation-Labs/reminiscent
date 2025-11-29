@@ -13,7 +13,7 @@ The schema protocol serves as:
 """
 
 from typing import Any, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class MCPToolReference(BaseModel):
@@ -23,11 +23,21 @@ class MCPToolReference(BaseModel):
     Tools are functions that agents can call during execution to
     interact with external systems, retrieve data, or perform actions.
 
-    Example:
+    Two usage patterns:
+    1. With mcp_servers config: Just declare name + description, tools loaded from MCP servers
+    2. Explicit MCP server: Specify mcp_server to load tool from specific server
+
+    Example (declarative with mcp_servers):
+        {
+            "name": "search_rem",
+            "description": "Execute REM queries for entity lookup and search"
+        }
+
+    Example (explicit server):
         {
             "name": "lookup_entity",
             "mcp_server": "rem",
-            "description": "Lookup entities by exact key with O(1) performance"
+            "description": "Lookup entities by exact key"
         }
     """
 
@@ -38,20 +48,20 @@ class MCPToolReference(BaseModel):
         )
     )
 
-    mcp_server: str = Field(
+    mcp_server: str | None = Field(
+        default=None,
         description=(
-            "MCP server identifier. Resolved via environment variable: "
-            "MCP_SERVER_{NAME} or MCP__{NAME}__URL. "
-            "Common values: 'rem' (REM knowledge graph), 'filesystem', 'web'."
+            "MCP server identifier (optional when using mcp_servers config). "
+            "If not specified, tool is expected from configured mcp_servers. "
+            "Resolved via environment variable: MCP_SERVER_{NAME} or MCP__{NAME}__URL."
         )
     )
 
     description: str | None = Field(
         default=None,
         description=(
-            "Optional description override. If provided, replaces the tool's "
-            "description from the MCP server in the agent's context. "
-            "Use this to provide agent-specific guidance on tool usage."
+            "Tool description for the agent. Explains what the tool does "
+            "and when to use it. This is visible to the LLM."
         ),
     )
 
@@ -63,29 +73,90 @@ class MCPResourceReference(BaseModel):
     Resources are data sources that can be read by agents, such as
     knowledge graph entities, files, or API endpoints.
 
-    Example:
+    Two formats supported:
+    1. uri: Exact URI or URI with query params
+    2. uri_pattern: Regex pattern for flexible matching
+
+    Example (exact URI):
+        {
+            "uri": "rem://schemas",
+            "name": "Agent Schemas",
+            "description": "List all available agent schemas"
+        }
+
+    Example (pattern):
         {
             "uri_pattern": "rem://resources/.*",
             "mcp_server": "rem"
         }
     """
 
-    uri_pattern: str = Field(
+    # Support both exact URI and pattern
+    uri: str | None = Field(
+        default=None,
         description=(
-            "Regex pattern matching resource URIs. "
-            "Examples: "
-            "'rem://resources/.*' (all resources), "
-            "'rem://moments/.*' (all moments), "
-            "'file:///data/.*' (local files). "
-            "Supports full regex syntax for flexible matching."
+            "Exact resource URI or URI with query parameters. "
+            "Examples: 'rem://schemas', 'rem://resources?category=drug.*'"
         )
     )
 
-    mcp_server: str = Field(
+    uri_pattern: str | None = Field(
+        default=None,
         description=(
-            "MCP server identifier that provides these resources. "
-            "Resolved via environment variable MCP_SERVER_{NAME}. "
-            "The server must expose resources matching the uri_pattern."
+            "Regex pattern matching resource URIs. "
+            "Examples: 'rem://resources/.*' (all resources). "
+            "Use uri for exact URIs, uri_pattern for regex matching."
+        )
+    )
+
+    name: str | None = Field(
+        default=None,
+        description="Human-readable name for the resource."
+    )
+
+    description: str | None = Field(
+        default=None,
+        description="Description of what the resource provides."
+    )
+
+    mcp_server: str | None = Field(
+        default=None,
+        description=(
+            "MCP server identifier (optional when using mcp_servers config). "
+            "Resolved via environment variable MCP_SERVER_{NAME}."
+        )
+    )
+
+
+class MCPServerConfig(BaseModel):
+    """
+    MCP server configuration for in-process tool loading.
+
+    Example:
+        {
+            "type": "local",
+            "module": "rem.mcp_server",
+            "id": "rem-local"
+        }
+    """
+
+    type: Literal["local"] = Field(
+        default="local",
+        description="Server type. Currently only 'local' (in-process) is supported.",
+    )
+
+    module: str = Field(
+        description=(
+            "Python module path containing the MCP server. "
+            "The module must export an 'mcp' object that supports get_tools(). "
+            "Example: 'rem.mcp_server'"
+        )
+    )
+
+    id: str = Field(
+        description=(
+            "Server identifier for logging and debugging. "
+            "Example: 'rem-local'"
         )
     )
 
@@ -127,6 +198,37 @@ class AgentSchemaMetadata(BaseModel):
             "Format: 'MAJOR.MINOR.PATCH' (e.g., '1.0.0', '2.1.3'). "
             "Increment MAJOR for breaking changes, MINOR for new features, "
             "PATCH for bug fixes. Used for schema evolution and compatibility."
+        ),
+    )
+
+    # System prompt override (takes precedence over description when present)
+    system_prompt: str | None = Field(
+        default=None,
+        description=(
+            "Custom system prompt that overrides or extends the schema description. "
+            "When present, this is combined with the main schema.description field "
+            "to form the complete system prompt. Use this for detailed instructions "
+            "that you don't want in the public schema description."
+        ),
+    )
+
+    # Structured output toggle
+    structured_output: bool = Field(
+        default=True,
+        description=(
+            "Whether to enforce structured JSON output. "
+            "When False, the agent produces free-form text and schema properties "
+            "are converted to prompt guidance instead. Default: True (JSON output)."
+        ),
+    )
+
+    # MCP server configurations (for dynamic tool loading)
+    mcp_servers: list[MCPServerConfig] = Field(
+        default_factory=list,
+        description=(
+            "MCP server configurations for dynamic tool loading. "
+            "Servers are loaded in-process at agent creation time. "
+            "All tools from configured servers become available to the agent."
         ),
     )
 
@@ -394,3 +496,238 @@ def create_agent_schema(
         json_schema_extra=metadata.model_dump(),
         **kwargs,
     )
+
+
+# =============================================================================
+# YAML and Database Serialization
+# =============================================================================
+
+
+def schema_to_dict(schema: AgentSchema, exclude_none: bool = True) -> dict[str, Any]:
+    """
+    Serialize AgentSchema to a dictionary suitable for YAML or database storage.
+
+    This produces the canonical format used in:
+    - YAML files (schemas/agents/*.yaml)
+    - Database spec column (schemas table)
+    - API responses
+
+    Args:
+        schema: AgentSchema instance to serialize
+        exclude_none: If True, omit None values from output
+
+    Returns:
+        Dictionary representation of the schema
+
+    Example:
+        >>> schema = AgentSchema(
+        ...     description="System prompt...",
+        ...     properties={"answer": {"type": "string"}},
+        ...     json_schema_extra={"name": "my-agent", "structured_output": False}
+        ... )
+        >>> d = schema_to_dict(schema)
+        >>> d["json_schema_extra"]["name"]
+        "my-agent"
+    """
+    return schema.model_dump(exclude_none=exclude_none)
+
+
+def schema_from_dict(data: dict[str, Any]) -> AgentSchema:
+    """
+    Deserialize a dictionary to AgentSchema.
+
+    This handles:
+    - YAML files loaded with yaml.safe_load()
+    - Database spec column (JSON)
+    - API request bodies
+
+    Args:
+        data: Dictionary containing schema data
+
+    Returns:
+        Validated AgentSchema instance
+
+    Raises:
+        ValidationError: If data doesn't match schema structure
+
+    Example:
+        >>> data = {"type": "object", "description": "...", "properties": {}, "json_schema_extra": {"name": "test"}}
+        >>> schema = schema_from_dict(data)
+        >>> schema.json_schema_extra["name"]
+        "test"
+    """
+    return AgentSchema.model_validate(data)
+
+
+def schema_to_yaml(schema: AgentSchema) -> str:
+    """
+    Serialize AgentSchema to YAML string.
+
+    The output format matches the canonical schema file format:
+    ```yaml
+    type: object
+    description: |
+      System prompt here...
+    properties:
+      answer:
+        type: string
+    json_schema_extra:
+      name: my-agent
+      system_prompt: |
+        Extended prompt here...
+    ```
+
+    Args:
+        schema: AgentSchema instance to serialize
+
+    Returns:
+        YAML string representation
+
+    Example:
+        >>> schema = create_agent_schema(
+        ...     description="You are a test agent",
+        ...     properties={"answer": {"type": "string"}},
+        ...     required=["answer"],
+        ...     name="test-agent"
+        ... )
+        >>> yaml_str = schema_to_yaml(schema)
+        >>> "test-agent" in yaml_str
+        True
+    """
+    import yaml
+
+    return yaml.dump(
+        schema_to_dict(schema),
+        default_flow_style=False,
+        allow_unicode=True,
+        sort_keys=False,
+    )
+
+
+def schema_from_yaml(yaml_content: str) -> AgentSchema:
+    """
+    Deserialize YAML string to AgentSchema.
+
+    Args:
+        yaml_content: YAML string containing schema definition
+
+    Returns:
+        Validated AgentSchema instance
+
+    Raises:
+        yaml.YAMLError: If YAML parsing fails
+        ValidationError: If schema structure is invalid
+
+    Example:
+        >>> yaml_str = '''
+        ... type: object
+        ... description: Test agent
+        ... properties:
+        ...   answer:
+        ...     type: string
+        ... json_schema_extra:
+        ...   name: test
+        ... '''
+        >>> schema = schema_from_yaml(yaml_str)
+        >>> schema.json_schema_extra["name"]
+        "test"
+    """
+    import yaml
+
+    data = yaml.safe_load(yaml_content)
+    return schema_from_dict(data)
+
+
+def schema_from_yaml_file(file_path: str) -> AgentSchema:
+    """
+    Load AgentSchema from a YAML file.
+
+    Args:
+        file_path: Path to YAML file
+
+    Returns:
+        Validated AgentSchema instance
+
+    Raises:
+        FileNotFoundError: If file doesn't exist
+        yaml.YAMLError: If YAML parsing fails
+        ValidationError: If schema structure is invalid
+
+    Example:
+        >>> schema = schema_from_yaml_file("schemas/agents/rem.yaml")
+        >>> schema.json_schema_extra["name"]
+        "rem"
+    """
+    with open(file_path, "r") as f:
+        return schema_from_yaml(f.read())
+
+
+def get_system_prompt(schema: AgentSchema | dict[str, Any]) -> str:
+    """
+    Extract the complete system prompt from a schema.
+
+    Combines:
+    1. schema.description (base system prompt / public description)
+    2. json_schema_extra.system_prompt (extended instructions if present)
+
+    Args:
+        schema: AgentSchema instance or raw dict
+
+    Returns:
+        Complete system prompt string
+
+    Example:
+        >>> schema = AgentSchema(
+        ...     description="Base description",
+        ...     properties={},
+        ...     json_schema_extra={"name": "test", "system_prompt": "Extended instructions"}
+        ... )
+        >>> prompt = get_system_prompt(schema)
+        >>> "Base description" in prompt and "Extended instructions" in prompt
+        True
+    """
+    if isinstance(schema, dict):
+        base = schema.get("description", "")
+        extra = schema.get("json_schema_extra", {})
+        custom = extra.get("system_prompt") if isinstance(extra, dict) else None
+    else:
+        base = schema.description
+        extra = schema.json_schema_extra
+        if isinstance(extra, dict):
+            custom = extra.get("system_prompt")
+        elif isinstance(extra, AgentSchemaMetadata):
+            custom = extra.system_prompt
+        else:
+            custom = None
+
+    if custom:
+        return f"{base}\n\n{custom}" if base else custom
+    return base
+
+
+def get_metadata(schema: AgentSchema | dict[str, Any]) -> AgentSchemaMetadata:
+    """
+    Extract and validate metadata from a schema.
+
+    Args:
+        schema: AgentSchema instance or raw dict
+
+    Returns:
+        Validated AgentSchemaMetadata instance
+
+    Example:
+        >>> schema = {"json_schema_extra": {"name": "test", "system_prompt": "hello"}}
+        >>> meta = get_metadata(schema)
+        >>> meta.name
+        "test"
+        >>> meta.system_prompt
+        "hello"
+    """
+    if isinstance(schema, dict):
+        extra = schema.get("json_schema_extra", {})
+    else:
+        extra = schema.json_schema_extra
+
+    if isinstance(extra, AgentSchemaMetadata):
+        return extra
+    return AgentSchemaMetadata.model_validate(extra)

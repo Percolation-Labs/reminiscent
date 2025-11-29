@@ -181,7 +181,7 @@ Parameters:
 - table_name (required): Table to search (resources, moments, etc.)
 - field_name (optional): Field to search (defaults to "content")
 - provider (optional): Embedding provider (default: from LLM__EMBEDDING_PROVIDER setting)
-- min_similarity (optional): Minimum similarity 0.0-1.0 (default: 0.7)
+- min_similarity (optional): Minimum similarity 0.0-1.0 (default: 0.3)
 - limit (optional): Max results (default: 10)
 - user_id (optional): User scoping
 

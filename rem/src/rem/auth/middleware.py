@@ -7,6 +7,7 @@ MCP endpoints are always protected unless explicitly disabled.
 
 Design Pattern:
 - Check session for user on protected paths
+- Check Bearer token for dev token (non-production only)
 - MCP paths always require authentication (protected service)
 - If allow_anonymous=True: Allow unauthenticated requests (marked as ANONYMOUS tier)
 - If allow_anonymous=False: Return 401 for API calls, redirect browsers to login
@@ -18,6 +19,11 @@ Access Modes (configured in settings.auth):
 - enabled=false: Middleware not loaded, all requests pass through
 - mcp_requires_auth=true (default): MCP always requires login regardless of allow_anonymous
 - mcp_requires_auth=false: MCP follows normal allow_anonymous rules (dev only)
+
+Dev Token Support (non-production only):
+- GET /api/auth/dev/token returns a Bearer token for test-user
+- Include as: Authorization: Bearer dev_<signature>
+- Only works when ENVIRONMENT != "production"
 
 Usage:
     from rem.auth.middleware import AuthMiddleware
@@ -35,6 +41,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse
 from loguru import logger
+
+from ..settings import settings
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -74,6 +82,42 @@ class AuthMiddleware(BaseHTTPMiddleware):
         self.mcp_requires_auth = mcp_requires_auth
         self.mcp_path = mcp_path
 
+    def _check_dev_token(self, request: Request) -> dict | None:
+        """
+        Check for valid dev token in Authorization header (non-production only).
+
+        Returns:
+            Test user dict if valid dev token, None otherwise
+        """
+        if settings.environment == "production":
+            return None
+
+        auth_header = request.headers.get("authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return None
+
+        token = auth_header[7:]  # Strip "Bearer "
+
+        # Only check dev tokens (start with "dev_")
+        if not token.startswith("dev_"):
+            return None
+
+        # Verify dev token
+        from ..api.routers.dev import verify_dev_token
+        if verify_dev_token(token):
+            logger.debug(f"Dev token authenticated as test-user")
+            return {
+                "id": "test-user",
+                "email": "test@rem.local",
+                "name": "Test User",
+                "provider": "dev",
+                "tenant_id": "default",
+                "tier": "pro",  # Give test user pro tier for full access
+                "roles": ["admin"],
+            }
+
+        return None
+
     async def dispatch(self, request: Request, call_next):
         """
         Check authentication for protected paths.
@@ -96,6 +140,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         # Skip auth check for excluded paths
         if not is_protected or is_excluded:
+            return await call_next(request)
+
+        # Check for dev token (non-production only)
+        dev_user = self._check_dev_token(request)
+        if dev_user:
+            request.state.user = dev_user
+            request.state.is_anonymous = False
             return await call_next(request)
 
         # Check for valid session

@@ -69,7 +69,7 @@ def get_global_embedding_worker(postgres_service: Any = None) -> "EmbeddingWorke
         if postgres_service is None:
             raise RuntimeError("Must provide postgres_service on first call to get_global_embedding_worker")
         _global_worker = EmbeddingWorker(postgres_service=postgres_service)
-        logger.info("Created global EmbeddingWorker singleton")
+        logger.debug("Created global EmbeddingWorker singleton")
 
     return _global_worker
 
@@ -117,7 +117,7 @@ class EmbeddingWorker:
                 "No OpenAI API key provided - embeddings will use zero vectors"
             )
 
-        logger.info(
+        logger.debug(
             f"Initialized EmbeddingWorker: {num_workers} workers, "
             f"batch_size={batch_size}, timeout={batch_timeout}s"
         )
@@ -125,17 +125,17 @@ class EmbeddingWorker:
     async def start(self) -> None:
         """Start worker pool."""
         if self.running:
-            logger.warning("EmbeddingWorker already running")
+            logger.debug("EmbeddingWorker already running")
             return
 
         self.running = True
-        logger.info(f"Starting {self.num_workers} embedding workers")
+        logger.debug(f"Starting {self.num_workers} embedding workers")
 
         for i in range(self.num_workers):
             worker = asyncio.create_task(self._worker_loop(i))
             self.workers.append(worker)
 
-        logger.info("EmbeddingWorker started")
+        logger.debug("EmbeddingWorker started")
 
     async def stop(self) -> None:
         """Stop worker pool gracefully - processes remaining queue before stopping."""
@@ -143,7 +143,7 @@ class EmbeddingWorker:
             return
 
         queue_size = self.task_queue.qsize()
-        logger.info(f"Stopping EmbeddingWorker (processing {queue_size} queued tasks first)")
+        logger.debug(f"Stopping EmbeddingWorker (processing {queue_size} queued tasks first)")
 
         # Wait for queue to drain (with timeout)
         max_wait = 30  # 30 seconds max
@@ -171,7 +171,7 @@ class EmbeddingWorker:
         await asyncio.gather(*self.workers, return_exceptions=True)
 
         self.workers.clear()
-        logger.info("EmbeddingWorker stopped")
+        logger.debug("EmbeddingWorker stopped")
 
     async def queue_task(self, task: EmbeddingTask) -> None:
         """
@@ -195,7 +195,7 @@ class EmbeddingWorker:
         Args:
             worker_id: Unique worker identifier
         """
-        logger.info(f"Worker {worker_id} started")
+        logger.debug(f"Worker {worker_id} started")
 
         while self.running:
             try:
@@ -205,7 +205,7 @@ class EmbeddingWorker:
                 if not batch:
                     continue
 
-                logger.info(f"Worker {worker_id} processing batch of {len(batch)} tasks")
+                logger.debug(f"Worker {worker_id} processing batch of {len(batch)} tasks")
 
                 # Generate embeddings for batch
                 await self._process_batch(batch)
@@ -213,14 +213,14 @@ class EmbeddingWorker:
                 logger.debug(f"Worker {worker_id} completed batch")
 
             except asyncio.CancelledError:
-                logger.info(f"Worker {worker_id} cancelled")
+                logger.debug(f"Worker {worker_id} cancelled")
                 break
             except Exception as e:
                 logger.error(f"Worker {worker_id} error: {e}", exc_info=True)
                 # Continue processing (don't crash worker on error)
                 await asyncio.sleep(1)
 
-        logger.info(f"Worker {worker_id} stopped")
+        logger.debug(f"Worker {worker_id} stopped")
 
     async def _collect_batch(self) -> list[EmbeddingTask]:
         """
@@ -284,10 +284,10 @@ class EmbeddingWorker:
             )
 
             # Upsert to database
-            logger.info(f"Upserting {len(embeddings)} embeddings to database...")
+            logger.debug(f"Upserting {len(embeddings)} embeddings to database...")
             await self._upsert_embeddings(batch, embeddings)
 
-            logger.info(
+            logger.debug(
                 f"Successfully generated and stored {len(embeddings)} embeddings "
                 f"(provider={provider}, model={model})"
             )
@@ -315,7 +315,7 @@ class EmbeddingWorker:
         """
         if provider == "openai" and self.openai_api_key:
             try:
-                logger.info(
+                logger.debug(
                     f"Generating OpenAI embeddings for {len(texts)} texts using {model}"
                 )
 
@@ -336,7 +336,7 @@ class EmbeddingWorker:
                     data = response.json()
                     embeddings = [item["embedding"] for item in data["data"]]
 
-                    logger.info(
+                    logger.debug(
                         f"Successfully generated {len(embeddings)} embeddings from OpenAI"
                     )
                     return embeddings
@@ -409,7 +409,7 @@ class EmbeddingWorker:
                     ),
                 )
 
-                logger.info(
+                logger.debug(
                     f"Upserted embedding: {task.table_name}.{task.entity_id}.{task.field_name}"
                 )
 

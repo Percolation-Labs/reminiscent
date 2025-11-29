@@ -162,10 +162,10 @@ async def search_rem_tool(
             return {"status": "error", "error": f"Unknown query_type: {query_type}"}
 
         # Execute query
-        logger.info(f"Executing REM query: {query_type} for user {user_id}")
+        logger.debug(f"Executing REM query: {query_type} for user {user_id}")
         result = await rem_service.execute_query(query)
 
-        logger.info(f"Query completed: {query_type}")
+        logger.debug(f"Query completed: {query_type}")
         return {
             "status": "success",
             "query_type": query_type,
@@ -212,7 +212,7 @@ async def ingest_file_tool(
             is_local_server=is_local_server,
         )
 
-        logger.info(
+        logger.debug(
             f"File ingestion complete: {result['file_name']} "
             f"(status: {result['processing_status']}, "
             f"resources: {result['resources_created']})"

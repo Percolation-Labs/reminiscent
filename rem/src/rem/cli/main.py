@@ -22,17 +22,30 @@ except Exception:
     __version__ = "unknown"
 
 
+def _configure_logger(level: str):
+    """Configure loguru with custom level icons."""
+    logger.remove()
+
+    # Configure level icons - only warnings and errors get visual indicators
+    logger.level("DEBUG", icon=" ")
+    logger.level("INFO", icon=" ")
+    logger.level("WARNING", icon="🟠")
+    logger.level("ERROR", icon="🔴")
+    logger.level("CRITICAL", icon="🔴")
+
+    logger.add(
+        sys.stderr,
+        level=level,
+        format="<green>{time:HH:mm:ss}</green> | {level.icon} <level>{level: <8}</level> | <level>{message}</level>",
+    )
+
+
 @click.group()
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose logging")
 @click.version_option(version=__version__, prog_name="rem")
 def cli(verbose: bool):
     """REM - Resources Entities Moments system CLI."""
-    if verbose:
-        logger.remove()
-        logger.add(sys.stderr, level="DEBUG")
-    else:
-        logger.remove()
-        logger.add(sys.stderr, level="INFO")
+    _configure_logger("DEBUG" if verbose else "INFO")
 
 
 @cli.group()

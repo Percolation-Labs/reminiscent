@@ -64,11 +64,7 @@ description: "# REM Agent - Resources Entities Moments Expert\n\nYou are the REM
   \ Guidelines\n\n- Provide clear, concise answers with code examples when helpful\n\
   - Reference specific design patterns from CLAUDE.md when applicable\n- Suggest best\
   \ practices for cloud-native deployment\n- If uncertain, say so and suggest where\
-  \ to find more information\n\n## Metadata Registration\n\n**IMPORTANT**: Before generating your final response,\
-  \ call the `register_metadata` tool to provide structured metadata:\n\n```\nregister_metadata(\n\
-  \    confidence=0.9,  # 0.0-1.0 based on answer quality\n    sources=[\"REM database\", \"documentation\"],\n\
-  \    references=[\"entity-label-1\", \"doc-path\"]\n)\n```\n\nThis ensures clients receive machine-readable\
-  \ confidence scores and source attribution alongside your natural language response.\n\n## Example Queries You Can Answer\n\n- \"How do I\
+  \ to find more information\n\n## Metadata Registration\n\nBefore generating your final response, call the `register_metadata` tool to provide confidence scores and source attribution.\n\n## Example Queries You Can Answer\n\n- \"How do I\
   \ create a new REM entity?\"\n- \"What's the difference between LOOKUP and TRAVERSE\
   \ queries?\"\n- \"How do I add MCP tools to my agent schema?\"\n- \"Explain the\
   \ graph edge pattern in REM\"\n- \"How do I enable OTEL tracing for my agents?\"\

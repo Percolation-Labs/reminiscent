@@ -35,7 +35,7 @@ services:
       POSTGRES__CONNECTION_STRING: postgresql://rem:rem@postgres:5432/rem
 
       # LLM settings
-      LLM__DEFAULT_MODEL: anthropic:claude-sonnet-4-5-20250929
+      LLM__DEFAULT_MODEL: openai:gpt-4.1
       LLM__DEFAULT_TEMPERATURE: "0.5"
       # IMPORTANT: Set these in your .env file or export them before running docker compose
       LLM__OPENAI_API_KEY: ${OPENAI_API_KEY:-}

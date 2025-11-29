@@ -70,7 +70,7 @@ from ....agentic.providers.pydantic_ai import create_agent
 from ....services.audio.transcriber import AudioTranscriber
 from ....services.session import SessionMessageStore, reload_session
 from ....settings import settings
-from ....utils.schema_loader import load_agent_schema
+from ....utils.schema_loader import load_agent_schema, load_agent_schema_async
 from .json_utils import extract_json_resilient
 from .models import (
     ChatCompletionChoice,
@@ -79,7 +79,7 @@ from .models import (
     ChatCompletionUsage,
     ChatMessage,
 )
-from .streaming import stream_openai_response, stream_simulator_response
+from .streaming import stream_openai_response, stream_openai_response_with_save, stream_simulator_response
 
 router = APIRouter(prefix="/api/v1", tags=["chat"])
 
@@ -133,6 +133,11 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
     temp_context = AgentContext.from_headers(dict(request.headers))
     schema_name = temp_context.agent_schema_uri or DEFAULT_AGENT_SCHEMA
 
+    # Resolve model: use body.model if provided, otherwise settings default
+    if body.model is None:
+        body.model = settings.llm.default_model
+        logger.debug(f"No model specified, using default: {body.model}")
+
     # Special handling for simulator schema - no LLM, just generates demo SSE events
     # Check BEFORE loading schema since simulator doesn't need a schema file
     # Still builds full context and saves messages like a real agent
@@ -182,14 +187,18 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
                 "timestamp": datetime.utcnow().isoformat(),
             }
 
-            store = SessionMessageStore(user_id=context.user_id or settings.test.effective_user_id)
-            await store.store_session_messages(
-                session_id=context.session_id,
-                messages=[user_message, assistant_message],
-                user_id=context.user_id,
-                compress=True,
-            )
-            logger.info(f"Saved simulator conversation to session {context.session_id}")
+            try:
+                store = SessionMessageStore(user_id=context.user_id or settings.test.effective_user_id)
+                await store.store_session_messages(
+                    session_id=context.session_id,
+                    messages=[user_message, assistant_message],
+                    user_id=context.user_id,
+                    compress=True,
+                )
+                logger.info(f"Saved simulator conversation to session {context.session_id}")
+            except Exception as e:
+                # Log error but don't fail the request - session storage is non-critical
+                logger.error(f"Failed to save session messages: {e}", exc_info=True)
 
         if body.stream:
             return StreamingResponse(
@@ -224,8 +233,14 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
             )
 
     # Load schema using centralized utility
+    # Enable database fallback to load dynamic agents stored in schemas table
+    # Use async version since we're in an async context (FastAPI endpoint)
+    user_id = temp_context.user_id or settings.test.effective_user_id
     try:
-        agent_schema = load_agent_schema(schema_name)
+        agent_schema = await load_agent_schema_async(
+            schema_name,
+            user_id=user_id,
+        )
     except FileNotFoundError:
         # Fallback to default if specified schema not found
         logger.warning(f"Schema '{schema_name}' not found, falling back to '{DEFAULT_AGENT_SCHEMA}'")
@@ -241,7 +256,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
                 detail=f"Agent schema '{schema_name}' not found and default schema unavailable",
             )
 
-    logger.info(f"Using agent schema: {schema_name}, model: {body.model}")
+    logger.debug(f"Using agent schema: {schema_name}, model: {body.model}")
 
     # Check for audio input
     is_audio = request.headers.get("x-chat-is-audio", "").lower() == "true"
@@ -302,8 +317,35 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
 
     # Streaming mode
     if body.stream:
+        # Save user message before streaming starts
+        if settings.postgres.enabled and context.session_id:
+            user_message = {
+                "role": "user",
+                "content": body.messages[-1].content if body.messages else "",
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+            try:
+                store = SessionMessageStore(user_id=context.user_id or settings.test.effective_user_id)
+                await store.store_session_messages(
+                    session_id=context.session_id,
+                    messages=[user_message],
+                    user_id=context.user_id,
+                    compress=False,  # User messages are typically short
+                )
+                logger.debug(f"Saved user message to session {context.session_id}")
+            except Exception as e:
+                logger.error(f"Failed to save user message: {e}", exc_info=True)
+
         return StreamingResponse(
-            stream_openai_response(agent, prompt, body.model, request_id),
+            stream_openai_response_with_save(
+                agent=agent,
+                prompt=prompt,
+                model=body.model,
+                request_id=request_id,
+                agent_schema=schema_name,
+                session_id=context.session_id,
+                user_id=context.user_id,
+            ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
         )
@@ -340,17 +382,21 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
             "timestamp": datetime.utcnow().isoformat(),
         }
 
-        # Store messages with compression
-        store = SessionMessageStore(user_id=context.user_id or settings.test.effective_user_id)
+        try:
+            # Store messages with compression
+            store = SessionMessageStore(user_id=context.user_id or settings.test.effective_user_id)
 
-        await store.store_session_messages(
-            session_id=context.session_id,
-            messages=[user_message, assistant_message],
-            user_id=context.user_id,
-            compress=True,
-        )
+            await store.store_session_messages(
+                session_id=context.session_id,
+                messages=[user_message, assistant_message],
+                user_id=context.user_id,
+                compress=True,
+            )
 
-        logger.info(f"Saved conversation to session {context.session_id}")
+            logger.info(f"Saved conversation to session {context.session_id}")
+        except Exception as e:
+            # Log error but don't fail the request - session storage is non-critical
+            logger.error(f"Failed to save session messages: {e}", exc_info=True)
 
     return ChatCompletionResponse(
         id=request_id,

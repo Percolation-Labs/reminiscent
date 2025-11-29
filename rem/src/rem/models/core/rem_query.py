@@ -112,7 +112,7 @@ class SearchParameters(BaseModel):
     table_name: str = Field(..., description="Table to search (resources, moments, etc.)")
     limit: int = Field(default=10, gt=0, description="Maximum results")
     min_similarity: float = Field(
-        default=0.7, ge=0.0, le=1.0, description="Minimum similarity score"
+        default=0.3, ge=0.0, le=1.0, description="Minimum similarity score (0.3 recommended for general queries)"
     )
 
 
@@ -198,7 +198,10 @@ class RemQuery(BaseModel):
         | SQLParameters
         | TraverseParameters
     ) = Field(..., description="Query parameters")
-    user_id: str = Field(..., description="User identifier for isolation")
+    user_id: Optional[str] = Field(
+        default=None,
+        description="User identifier (UUID5 hash of email). None = anonymous (shared/public data only)"
+    )
 
 
 class TraverseStage(BaseModel):

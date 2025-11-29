@@ -59,8 +59,16 @@ Running:
     hypercorn rem.api.main:app --bind 0.0.0.0:8000
 """
 
+import importlib.metadata
 import secrets
+import sys
 import time
+
+# Get package version for API responses
+try:
+    __version__ = importlib.metadata.version("remdb")
+except importlib.metadata.PackageNotFoundError:
+    __version__ = "0.0.0-dev"
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -73,6 +81,23 @@ from starlette.middleware.sessions import SessionMiddleware
 from .mcp_router.server import create_mcp_server
 from ..settings import settings
 
+# Configure loguru based on settings
+# Remove default handler and add one with configured level
+logger.remove()
+
+# Configure level icons - only warnings and errors get visual indicators
+logger.level("DEBUG", icon=" ")
+logger.level("INFO", icon=" ")
+logger.level("WARNING", icon="🟠")
+logger.level("ERROR", icon="🔴")
+logger.level("CRITICAL", icon="🔴")
+
+logger.add(
+    sys.stderr,
+    level=settings.api.log_level.upper(),
+    format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | {level.icon} <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
+)
+
 
 class RequestLoggingMiddleware(BaseHTTPMiddleware):
     """
@@ -82,26 +107,64 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
     - Logs request method, path, client, user-agent
     - Logs response status, content-type, duration
     - Essential for debugging OAuth flow and MCP sessions
+    - Health checks and 404s logged at DEBUG level to reduce noise
+    - Scanner/exploit attempts (common vulnerability probes) logged at DEBUG
     """
+
+    # Paths to log at DEBUG level (health checks, probes)
+    DEBUG_PATHS = {"/health", "/healthz", "/ready", "/readyz", "/livez"}
+
+    # Path patterns that indicate vulnerability scanners (log at DEBUG)
+    SCANNER_PATTERNS = (
+        "/vendor/",      # PHP composer exploits
+        "/.git/",        # Git config exposure
+        "/.env",         # Environment file exposure
+        "/wp-",          # WordPress exploits
+        "/phpunit/",     # PHPUnit RCE
+        "/eval-stdin",   # PHP eval exploits
+        "/console/",     # Console exposure
+        "/actuator/",    # Spring Boot actuator
+        "/debug/",       # Debug endpoints
+        "/admin/",       # Admin panel probes (when we don't have one)
+    )
+
+    def _should_log_at_debug(self, path: str, status_code: int) -> bool:
+        """Determine if request should be logged at DEBUG level."""
+        # Health checks
+        if path in self.DEBUG_PATHS:
+            return True
+        # 404 responses (not found - includes scanner probes)
+        if status_code == 404:
+            return True
+        # Known scanner patterns
+        if any(pattern in path for pattern in self.SCANNER_PATTERNS):
+            return True
+        return False
 
     async def dispatch(self, request: Request, call_next):
         start_time = time.time()
+        path = request.url.path
 
-        # Log incoming request
+        # Log incoming request (preliminary - may adjust after response)
         client_host = request.client.host if request.client else "unknown"
-        logger.info(
-            f"→ REQUEST: {request.method} {request.url.path} | "
-            f"Client: {client_host} | "
-            f"User-Agent: {request.headers.get('user-agent', 'unknown')[:100]}"
-        )
+        user_agent = request.headers.get('user-agent', 'unknown')[:100]
 
         # Process request
         response = await call_next(request)
 
-        # Log response
+        # Determine log level based on path AND response status
         duration_ms = (time.time() - start_time) * 1000
-        logger.info(
-            f"← RESPONSE: {request.method} {request.url.path} | "
+        use_debug = self._should_log_at_debug(path, response.status_code)
+        log_fn = logger.debug if use_debug else logger.info
+
+        # Log request and response together
+        log_fn(
+            f"→ REQUEST: {request.method} {path} | "
+            f"Client: {client_host} | "
+            f"User-Agent: {user_agent}"
+        )
+        log_fn(
+            f"← RESPONSE: {request.method} {path} | "
             f"Status: {response.status_code} | "
             f"Duration: {duration_ms:.2f}ms"
         )
@@ -154,7 +217,8 @@ async def lifespan(app: FastAPI):
             "and history lookups are unavailable. Enable database with POSTGRES__ENABLED=true"
         )
     else:
-        logger.info(f"Database enabled: {settings.postgres.connection_string}")
+        # Log database host only - never log credentials
+        logger.info(f"Database enabled: {settings.postgres.host}:{settings.postgres.port}/{settings.postgres.database}")
 
     yield
 
@@ -216,7 +280,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title=f"{settings.app_name} API",
         description=f"{settings.app_name} - Resources Entities Moments system for agentic AI",
-        version="0.1.0",
+        version=__version__,
         lifespan=combined_lifespan,
         root_path=settings.root_path if settings.root_path else "",
         redirect_slashes=False,  # Don't redirect /mcp/ -> /mcp
@@ -233,17 +297,19 @@ def create_app() -> FastAPI:
     from .middleware.tracking import AnonymousTrackingMiddleware
     app.add_middleware(AnonymousTrackingMiddleware)
 
-    # Add authentication middleware (if enabled)
-    if settings.auth.enabled:
-        from ..auth.middleware import AuthMiddleware
+    # Add authentication middleware
+    # Always load middleware for dev token support, but allow anonymous when auth disabled
+    from ..auth.middleware import AuthMiddleware
 
-        app.add_middleware(
-            AuthMiddleware,
-            protected_paths=["/api/v1"],
-            excluded_paths=["/api/auth", "/api/v1/mcp/auth"],
-            allow_anonymous=settings.auth.allow_anonymous,
-            mcp_requires_auth=settings.auth.mcp_requires_auth,
-        )
+    app.add_middleware(
+        AuthMiddleware,
+        protected_paths=["/api/v1"],
+        excluded_paths=["/api/auth", "/api/dev", "/api/v1/mcp/auth"],
+        # Allow anonymous when auth is disabled, otherwise use setting
+        allow_anonymous=(not settings.auth.enabled) or settings.auth.allow_anonymous,
+        # MCP requires auth only when auth is fully enabled
+        mcp_requires_auth=settings.auth.enabled and settings.auth.mcp_requires_auth,
+    )
 
     # Add session middleware for OAuth state management
     # Must be added AFTER AuthMiddleware in code so it runs BEFORE (middleware runs in reverse)
@@ -288,7 +354,7 @@ def create_app() -> FastAPI:
         # TODO: If auth enabled and no user, return 401 with WWW-Authenticate
         return {
             "name": f"{settings.app_name} API",
-            "version": "0.1.0",
+            "version": __version__,
             "mcp_endpoint": "/api/v1/mcp",
             "docs": "/docs",
         }
@@ -297,7 +363,7 @@ def create_app() -> FastAPI:
     @app.get("/health")
     async def health():
         """Health check endpoint."""
-        return {"status": "healthy", "version": "0.1.0"}
+        return {"status": "healthy", "version": __version__}
 
     # Register API routers
     from .routers.chat import router as chat_router
@@ -305,18 +371,26 @@ def create_app() -> FastAPI:
     from .routers.messages import router as messages_router
     from .routers.feedback import router as feedback_router
     from .routers.admin import router as admin_router
+    from .routers.shared_sessions import router as shared_sessions_router
 
     app.include_router(chat_router)
     app.include_router(models_router)
     app.include_router(messages_router)
     app.include_router(feedback_router)
     app.include_router(admin_router)
+    app.include_router(shared_sessions_router)
 
     # Register auth router (if enabled)
     if settings.auth.enabled:
         from .routers.auth import router as auth_router
 
         app.include_router(auth_router)
+
+    # Register dev router (non-production only)
+    if settings.environment != "production":
+        from .routers.dev import router as dev_router
+
+        app.include_router(dev_router)
 
     # TODO: Register additional routers
     # from .routers.query import router as query_router

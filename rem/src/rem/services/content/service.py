@@ -278,6 +278,7 @@ class ContentService:
         category: str | None = None,
         tags: list[str] | None = None,
         is_local_server: bool = False,
+        resource_type: str | None = None,
     ) -> dict[str, Any]:
         """
         Complete file ingestion pipeline: read → store → parse → chunk → embed.
@@ -322,6 +323,9 @@ class ContentService:
             category: Optional category tag (document, code, audio, etc.)
             tags: Optional list of tags
             is_local_server: True if running as local/stdio MCP server
+            resource_type: Optional resource type (case-insensitive). Supports:
+                - "resource", "resources", "Resource" → Resource (default)
+                - "domain-resource", "domain_resource", "DomainResource" → DomainResource
 
         Returns:
             dict with:
@@ -418,6 +422,7 @@ class ContentService:
             processing_result = await self.process_and_save(
                 uri=storage_uri,
                 user_id=user_id,
+                resource_type=resource_type,
             )
             processing_status = processing_result.get("status", "completed")
             resources_created = processing_result.get("chunk_count", 0)
@@ -459,7 +464,12 @@ class ContentService:
             "message": f"File ingested and {processing_status}. Created {resources_created} resources.",
         }
 
-    async def process_and_save(self, uri: str, user_id: str | None = None) -> dict[str, Any]:
+    async def process_and_save(
+        self,
+        uri: str,
+        user_id: str | None = None,
+        resource_type: str | None = None,
+    ) -> dict[str, Any]:
         """
         Process file end-to-end: extract → markdown → chunk → save.
 
@@ -474,6 +484,8 @@ class ContentService:
         Args:
             uri: File URI (s3://bucket/key or local path)
             user_id: Optional user ID for multi-tenancy
+            resource_type: Optional resource type (case-insensitive). Defaults to "Resource".
+                Supports: resource, domain-resource, domain_resource, DomainResource, etc.
 
         Returns:
             dict with file metadata and chunk count
@@ -534,9 +546,26 @@ class ContentService:
             await self.file_repo.upsert(file)
             logger.info(f"Saved File: {filename}")
 
-        # Create Resource entities for each chunk
-        resources = [
-            Resource(
+        # Resolve resource model class from type parameter (case-insensitive)
+        from typing import cast, Type
+        from pydantic import BaseModel
+        from rem.utils.model_helpers import model_from_arbitrary_casing, get_table_name
+
+        resource_model: Type[BaseModel] = Resource  # Default
+        if resource_type:
+            try:
+                resource_model = model_from_arbitrary_casing(resource_type)
+                logger.info(f"Using resource model: {resource_model.__name__}")
+            except ValueError as e:
+                logger.warning(f"Invalid resource_type '{resource_type}', using default Resource: {e}")
+                resource_model = Resource
+
+        # Get table name for the resolved model
+        table_name = get_table_name(resource_model)
+
+        # Create resource entities for each chunk
+        resources: list[BaseModel] = [
+            resource_model(
                 name=f"{filename}#chunk-{i}",
                 uri=f"{uri}#chunk-{i}",
                 ordinal=i,
@@ -548,14 +577,35 @@ class ContentService:
             for i, chunk in enumerate(chunks)
         ]
 
-        if self.resource_repo:
-            await self.resource_repo.upsert(
-                resources,
-                embeddable_fields=["content"],
-                generate_embeddings=True,
-            )
-            logger.info(f"Saved {len(resources)} Resource chunks")
-            logger.info(f"Queued {len(resources)} embedding generation tasks for content field")
+        # Save resources to the appropriate table
+        if resources:
+            from rem.services.postgres import get_postgres_service
+
+            postgres = get_postgres_service()
+            if postgres:
+                await postgres.connect()
+                try:
+                    await postgres.batch_upsert(
+                        records=cast(list[BaseModel | dict], resources),
+                        model=resource_model,
+                        table_name=table_name,
+                        entity_key_field="name",
+                        embeddable_fields=["content"],
+                        generate_embeddings=True,
+                    )
+                    logger.info(f"Saved {len(resources)} {resource_model.__name__} chunks to {table_name}")
+                    logger.info(f"Queued {len(resources)} embedding generation tasks for content field")
+                finally:
+                    await postgres.disconnect()
+            elif self.resource_repo:
+                # Fallback to injected repo (only works for default Resource)
+                await self.resource_repo.upsert(
+                    resources,
+                    embeddable_fields=["content"],
+                    generate_embeddings=True,
+                )
+                logger.info(f"Saved {len(resources)} Resource chunks")
+                logger.info(f"Queued {len(resources)} embedding generation tasks for content field")
 
         return {
             "file": file.model_dump(),

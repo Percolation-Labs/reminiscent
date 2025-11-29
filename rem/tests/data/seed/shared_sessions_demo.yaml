@@ -1,0 +1,242 @@
+# Shared Sessions Demo Data
+#
+# Creates test users, sessions with messages, and shared session relationships.
+# Alice and Bob share their sessions with test-user.
+#
+# Usage:
+#   rem db load tests/data/seed/shared_sessions_demo.yaml
+#
+# This creates:
+#   - 3 users: test-user, alice-demo, bob-demo
+#   - Alice's sessions: caching discussion, microservices planning
+#   - Bob's session: SOLID principles
+#   - Shared sessions: Alice and Bob share with test-user
+#
+# Test with:
+#   TOKEN=$(curl -s http://localhost:8000/api/auth/dev/token | jq -r .token)
+#   curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/v1/shared-with-me
+
+# =============================================================================
+# USERS
+# =============================================================================
+
+- table: users
+  key_field: name
+  rows:
+    - name: "Test User"
+      user_id: "test-user"
+      email: "test@rem.local"
+      summary: "Default test user for API testing"
+      tags: ["test", "default"]
+
+    - name: "Alice Demo"
+      user_id: "alice-demo"
+      email: "alice@demo.local"
+      summary: "Demo user Alice - software engineer interested in Python and caching"
+      tags: ["demo"]
+
+    - name: "Bob Demo"
+      user_id: "bob-demo"
+      email: "bob@demo.local"
+      summary: "Demo user Bob - backend developer focused on architecture patterns"
+      tags: ["demo"]
+
+# =============================================================================
+# MESSAGES - Test User's Own Sessions
+# =============================================================================
+# Note: id field is omitted - UUIDs are auto-generated
+# session_id is used to group messages into conversations
+
+- table: messages
+  key_field: session_id
+  rows:
+    # Test User Session 1: REM system questions
+    - session_id: "test-user-session-rem"
+      user_id: "test-user"
+      tenant_id: "default"
+      content: "What is REM and how does it work?"
+      message_type: "human"
+      created_at: "2024-03-20T09:00:00Z"
+
+    - session_id: "test-user-session-rem"
+      user_id: "test-user"
+      tenant_id: "default"
+      content: |
+        REM (Resources Entities Moments) is a bio-inspired memory architecture for AI:
+
+        - **Resources**: Documents, files, and content
+        - **Entities**: People, concepts, and named things
+        - **Moments**: Time-indexed events and interactions
+
+        It uses PostgreSQL with pgvector for semantic search and graph traversal.
+      message_type: "ai"
+      model: "claude-3"
+      created_at: "2024-03-20T09:00:30Z"
+
+    - session_id: "test-user-session-rem"
+      user_id: "test-user"
+      tenant_id: "default"
+      content: "How do I query data in REM?"
+      message_type: "human"
+      created_at: "2024-03-20T09:01:00Z"
+
+    - session_id: "test-user-session-rem"
+      user_id: "test-user"
+      tenant_id: "default"
+      content: |
+        REM supports four query types:
+
+        1. **LOOKUP** - O(1) exact match by entity name
+        2. **FUZZY** - Typo-tolerant search with threshold
+        3. **SEARCH** - Semantic similarity using embeddings
+        4. **TRAVERSE** - Graph traversal from entity
+
+        Example: `SEARCH "memory architecture" LIMIT 5`
+      message_type: "ai"
+      model: "claude-3"
+      created_at: "2024-03-20T09:01:30Z"
+
+# =============================================================================
+# MESSAGES - Alice's Sessions
+# =============================================================================
+
+- table: messages
+  key_field: session_id
+  rows:
+    # Alice Session 1: Python caching discussion
+    - session_id: "alice-session-caching"
+      user_id: "alice-demo"
+      tenant_id: "default"
+      content: "What's the best way to implement caching in Python?"
+      message_type: "human"
+      created_at: "2024-03-01T10:00:00Z"
+
+    - session_id: "alice-session-caching"
+      user_id: "alice-demo"
+      tenant_id: "default"
+      content: |
+        There are several approaches to caching in Python:
+
+        1. **functools.lru_cache** - Built-in decorator for memoization
+        2. **Redis** - Distributed caching for multi-process apps
+        3. **Django cache framework** - If using Django
+        4. **cachetools** - More flexible caching strategies
+
+        For simple function memoization, lru_cache is the easiest choice.
+      message_type: "ai"
+      model: "claude-3"
+      created_at: "2024-03-01T10:00:30Z"
+
+    - session_id: "alice-session-caching"
+      user_id: "alice-demo"
+      tenant_id: "default"
+      content: "Can you show me an example with lru_cache?"
+      message_type: "human"
+      created_at: "2024-03-01T10:01:00Z"
+
+    - session_id: "alice-session-caching"
+      user_id: "alice-demo"
+      tenant_id: "default"
+      content: |
+        Here's a simple example:
+
+        ```python
+        from functools import lru_cache
+
+        @lru_cache(maxsize=128)
+        def fibonacci(n):
+            if n < 2:
+                return n
+            return fibonacci(n-1) + fibonacci(n-2)
+
+        # First call computes, subsequent calls use cache
+        print(fibonacci(100))  # Fast!
+        ```
+
+        The `maxsize` parameter limits cache entries. Use `maxsize=None` for unlimited.
+      message_type: "ai"
+      model: "claude-3"
+      created_at: "2024-03-01T10:01:30Z"
+
+    # Alice Session 2: Microservices planning
+    - session_id: "alice-session-microservices"
+      user_id: "alice-demo"
+      tenant_id: "default"
+      content: "Help me plan a microservices architecture"
+      message_type: "human"
+      created_at: "2024-03-15T14:00:00Z"
+
+    - session_id: "alice-session-microservices"
+      user_id: "alice-demo"
+      tenant_id: "default"
+      content: |
+        Here's a high-level approach:
+
+        1. **Service boundaries** - Define by business domain (DDD bounded contexts)
+        2. **Communication** - REST/gRPC for sync, message queues for async
+        3. **Data** - Each service owns its data (database per service)
+        4. **Observability** - Centralized logging, distributed tracing, metrics
+
+        Key patterns to consider:
+        - API Gateway for external traffic
+        - Service mesh for inter-service communication
+        - Circuit breakers for fault tolerance
+        - Event sourcing for audit trails
+      message_type: "ai"
+      model: "claude-3"
+      created_at: "2024-03-15T14:00:45Z"
+
+# =============================================================================
+# MESSAGES - Bob's Sessions
+# =============================================================================
+
+- table: messages
+  key_field: session_id
+  rows:
+    # Bob Session 1: SOLID principles
+    - session_id: "bob-session-solid"
+      user_id: "bob-demo"
+      tenant_id: "default"
+      content: "What are the SOLID principles?"
+      message_type: "human"
+      created_at: "2024-03-10T09:00:00Z"
+
+    - session_id: "bob-session-solid"
+      user_id: "bob-demo"
+      tenant_id: "default"
+      content: |
+        SOLID is an acronym for five design principles:
+
+        - **S**ingle Responsibility - A class should have one reason to change
+        - **O**pen/Closed - Open for extension, closed for modification
+        - **L**iskov Substitution - Subtypes must be substitutable for base types
+        - **I**nterface Segregation - Many specific interfaces over one general
+        - **D**ependency Inversion - Depend on abstractions, not concretions
+
+        These principles help create maintainable, extensible code.
+      message_type: "ai"
+      model: "claude-3"
+      created_at: "2024-03-10T09:01:00Z"
+
+# =============================================================================
+# SHARED SESSIONS
+# =============================================================================
+
+- table: shared_sessions
+  rows:
+    # Alice shares both sessions with test-user
+    - session_id: "alice-session-caching"
+      owner_user_id: "alice-demo"
+      shared_with_user_id: "test-user"
+      tenant_id: "default"
+
+    - session_id: "alice-session-microservices"
+      owner_user_id: "alice-demo"
+      shared_with_user_id: "test-user"
+      tenant_id: "default"
+
+    # Bob shares his session with test-user
+    - session_id: "bob-session-solid"
+      owner_user_id: "bob-demo"
+      shared_with_user_id: "test-user"
+      tenant_id: "default"

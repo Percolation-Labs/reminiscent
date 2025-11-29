@@ -15,7 +15,7 @@ File Format (~/.rem/config.yaml):
       pool_max_size: 20
 
     llm:
-      default_model: anthropic:claude-sonnet-4-5-20250929
+      default_model: openai:gpt-4.1
       openai_api_key: sk-...
       anthropic_api_key: sk-ant-...
 
@@ -216,7 +216,7 @@ def get_default_config() -> dict[str, Any]:
             "pool_max_size": 20,
         },
         "llm": {
-            "default_model": "anthropic:claude-sonnet-4-5-20250929",
+            "default_model": "openai:gpt-4.1",
             "default_temperature": 0.5,
             # API keys will be prompted for in wizard
             # "openai_api_key": "",

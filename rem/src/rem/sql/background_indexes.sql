@@ -41,6 +41,11 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_embeddings_ontology_configs_vector_h
 ON embeddings_ontology_configs
 USING hnsw (embedding vector_cosine_ops);
 
+-- HNSW vector index for embeddings_domain_resources
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_embeddings_domain_resources_vector_hnsw
+ON embeddings_domain_resources
+USING hnsw (embedding vector_cosine_ops);
+
 -- HNSW vector index for embeddings_schemas
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_embeddings_schemas_vector_hnsw
 ON embeddings_schemas

@@ -12,6 +12,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from rem.settings import settings
+
 
 # Request models
 class ChatMessage(BaseModel):
@@ -52,9 +54,11 @@ class ChatCompletionRequest(BaseModel):
     Note: Model is specified in body.model (standard OpenAI field), not headers.
     """
 
-    model: str = Field(
-        default="anthropic:claude-sonnet-4-5-20250929",
-        description="Model to use (standard OpenAI field)",
+    # TODO: default should come from settings.llm.default_model at request time
+    # Using None and resolving in endpoint to avoid import-time settings evaluation
+    model: str | None = Field(
+        default=None,
+        description="Model to use. Defaults to LLM__DEFAULT_MODEL from settings.",
     )
     messages: list[ChatMessage] = Field(description="Chat conversation history")
     temperature: float | None = Field(default=None, ge=0, le=2)

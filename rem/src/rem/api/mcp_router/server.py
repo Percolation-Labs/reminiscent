@@ -19,9 +19,17 @@ FastMCP Features:
 - Built-in auth that can be disabled for testing
 """
 
+import importlib.metadata
+
 from fastmcp import FastMCP
 
 from ...settings import settings
+
+# Get package version
+try:
+    __version__ = importlib.metadata.version("remdb")
+except importlib.metadata.PackageNotFoundError:
+    __version__ = "0.0.0-dev"
 
 
 def create_mcp_server(is_local: bool = False) -> FastMCP:
@@ -52,7 +60,7 @@ def create_mcp_server(is_local: bool = False) -> FastMCP:
     """
     mcp = FastMCP(
         name=f"REM MCP Server ({settings.team}/{settings.environment})",
-        version="0.1.0",
+        version=__version__,
         instructions=(
             "REM (Resource-Entity-Moment) MCP Server - Unified memory infrastructure for agentic systems.\n\n"
             "═══════════════════════════════════════════════════════════════════════════\n"

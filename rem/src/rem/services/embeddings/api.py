@@ -45,7 +45,7 @@ def generate_embedding(
             return [0.0] * DEFAULT_EMBEDDING_DIMS
 
         try:
-            logger.info(f"Generating OpenAI embedding for text using {model}")
+            logger.debug(f"Generating OpenAI embedding for text using {model}")
 
             response = requests.post(
                 "https://api.openai.com/v1/embeddings",
@@ -60,7 +60,7 @@ def generate_embedding(
 
             data = response.json()
             embedding = data["data"][0]["embedding"]
-            logger.info(f"Successfully generated embedding (dimension: {len(embedding)})")
+            logger.debug(f"Successfully generated embedding (dimension: {len(embedding)})")
             return cast(list[float], embedding)
 
         except Exception as e:
@@ -97,7 +97,7 @@ async def generate_embedding_async(
             return [0.0] * DEFAULT_EMBEDDING_DIMS
 
         try:
-            logger.info(f"Generating OpenAI embedding for text using {model}")
+            logger.debug(f"Generating OpenAI embedding for text using {model}")
 
             async with httpx.AsyncClient() as client:
                 response = await client.post(
@@ -113,7 +113,7 @@ async def generate_embedding_async(
 
                 data = response.json()
                 embedding = data["data"][0]["embedding"]
-                logger.info(
+                logger.debug(
                     f"Successfully generated embedding (dimension: {len(embedding)})"
                 )
                 return cast(list[float], embedding)

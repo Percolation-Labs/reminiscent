@@ -53,7 +53,7 @@ def init_services(postgres_service: PostgresService, rem_service: RemService):
     """
     _service_cache["postgres"] = postgres_service
     _service_cache["rem"] = rem_service
-    logger.info("MCP tools initialized with service instances")
+    logger.debug("MCP tools initialized with service instances")
 
 
 async def get_rem_service() -> RemService:
@@ -79,7 +79,7 @@ async def get_rem_service() -> RemService:
     _service_cache["postgres"] = postgres_service
     _service_cache["rem"] = rem_service
 
-    logger.info("MCP tools: lazy initialized services")
+    logger.debug("MCP tools: lazy initialized services")
     return rem_service
 
 
@@ -399,14 +399,14 @@ async def ask_rem_agent(
     )
 
     # Run agent (errors handled by decorator)
-    logger.info(f"Running ask_rem agent for query: {query[:100]}...")
+    logger.debug(f"Running ask_rem agent for query: {query[:100]}...")
     result = await agent_runtime.run(query)
 
     # Extract output
     from rem.agentic.serialization import serialize_agent_result
     query_output = serialize_agent_result(result.output)
 
-    logger.info("Agent execution completed successfully")
+    logger.debug("Agent execution completed successfully")
 
     return {
         "response": str(result.output),
@@ -422,6 +422,7 @@ async def ingest_into_rem(
     tags: list[str] | None = None,
     is_local_server: bool = False,
     user_id: str | None = None,
+    resource_type: str | None = None,
 ) -> dict[str, Any]:
     """
     Ingest file into REM, creating searchable resources and embeddings.
@@ -448,6 +449,11 @@ async def ingest_into_rem(
         tags: Optional tags for file
         is_local_server: True if running as local/stdio MCP server
         user_id: Optional user identifier (defaults to authenticated user or "default")
+        resource_type: Optional resource type for storing chunks (case-insensitive).
+            Supports flexible naming:
+            - "resource", "resources", "Resource" → Resource (default)
+            - "domain-resource", "domain_resource", "DomainResource",
+              "domain-resources" → DomainResource (curated internal knowledge)
 
     Returns:
         Dict with:
@@ -478,6 +484,13 @@ async def ingest_into_rem(
             file_uri="https://example.com/whitepaper.pdf",
             tags=["research", "whitepaper"]
         )
+
+        # Ingest as curated domain knowledge
+        ingest_into_rem(
+            file_uri="s3://bucket/internal/procedures.pdf",
+            resource_type="domain-resource",
+            category="procedures"
+        )
     """
     from ...services.content import ContentService
 
@@ -493,9 +506,10 @@ async def ingest_into_rem(
         category=category,
         tags=tags,
         is_local_server=is_local_server,
+        resource_type=resource_type,
     )
 
-    logger.info(
+    logger.debug(
         f"MCP ingestion complete: {result['file_name']} "
         f"(status: {result['processing_status']}, "
         f"resources: {result['resources_created']})"
@@ -550,7 +564,7 @@ async def read_resource(uri: str) -> dict[str, Any]:
         # Check system status
         read_resource(uri="rem://status")
     """
-    logger.info(f"📖 Reading resource: {uri}")
+    logger.debug(f"Reading resource: {uri}")
 
     # Import here to avoid circular dependency
     from .resources import load_resource
@@ -558,7 +572,7 @@ async def read_resource(uri: str) -> dict[str, Any]:
     # Load resource using the existing resource handler (errors handled by decorator)
     result = await load_resource(uri)
 
-    logger.info(f"✓ Resource loaded successfully: {uri}")
+    logger.debug(f"Resource loaded successfully: {uri}")
 
     # If result is already a dict, return it
     if isinstance(result, dict):
@@ -589,6 +603,13 @@ async def register_metadata(
     references: list[str] | None = None,
     sources: list[str] | None = None,
     flags: list[str] | None = None,
+    # Risk assessment fields (used by mental health agents like Siggy)
+    risk_level: str | None = None,
+    risk_score: int | None = None,
+    risk_reasoning: str | None = None,
+    recommended_action: str | None = None,
+    # Generic extension - any additional key-value pairs
+    extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Register response metadata to be emitted as an SSE MetadataEvent.
@@ -613,13 +634,23 @@ async def register_metadata(
         sources: List of source descriptions (e.g., "REM database",
             "search results", "user context").
         flags: Optional flags for the response (e.g., "needs_review",
-            "uncertain", "incomplete").
+            "uncertain", "incomplete", "crisis_alert").
+
+        risk_level: Risk level indicator (e.g., "green", "orange", "red").
+            Used by mental health agents for C-SSRS style assessment.
+        risk_score: Numeric risk score (e.g., 0-6 for C-SSRS).
+        risk_reasoning: Brief explanation of risk assessment.
+        recommended_action: Suggested next steps based on assessment.
+
+        extra: Dict of arbitrary additional metadata. Use this for any
+            domain-specific fields not covered by the standard parameters.
+            Example: {"topics_detected": ["anxiety", "sleep"], "session_count": 5}
 
     Returns:
         Dict with:
         - status: "success"
         - _metadata_event: True (marker for streaming layer)
-        - confidence, references, sources, flags: The registered values
+        - All provided fields merged into response
 
     Examples:
         # High confidence answer with references
@@ -629,18 +660,41 @@ async def register_metadata(
             sources=["REM database lookup"]
         )
 
-        # Lower confidence with flags
+        # Mental health risk assessment (Siggy-style)
         register_metadata(
-            confidence=0.65,
-            flags=["needs_review", "incomplete_data"]
+            confidence=0.9,
+            risk_level="green",
+            risk_score=0,
+            risk_reasoning="No risk indicators detected in message",
+            sources=["mental_health_resources"]
+        )
+
+        # Orange risk with recommended action
+        register_metadata(
+            risk_level="orange",
+            risk_score=2,
+            risk_reasoning="Passive ideation detected - 'feeling hopeless'",
+            recommended_action="Schedule care team check-in within 24-48 hours",
+            flags=["care_team_alert"]
+        )
+
+        # Custom domain-specific metadata
+        register_metadata(
+            confidence=0.8,
+            extra={
+                "topics_detected": ["medication", "side_effects"],
+                "drug_mentioned": "sertraline",
+                "sentiment": "concerned"
+            }
         )
     """
-    logger.info(
-        f"📊 Registering metadata: confidence={confidence}, "
-        f"refs={len(references or [])}, sources={len(sources or [])}"
+    logger.debug(
+        f"Registering metadata: confidence={confidence}, "
+        f"risk_level={risk_level}, refs={len(references or [])}, "
+        f"sources={len(sources or [])}"
     )
 
-    return {
+    result = {
         "status": "success",
         "_metadata_event": True,  # Marker for streaming layer
         "confidence": confidence,
@@ -648,3 +702,19 @@ async def register_metadata(
         "sources": sources,
         "flags": flags,
     }
+
+    # Add risk assessment fields if provided
+    if risk_level is not None:
+        result["risk_level"] = risk_level
+    if risk_score is not None:
+        result["risk_score"] = risk_score
+    if risk_reasoning is not None:
+        result["risk_reasoning"] = risk_reasoning
+    if recommended_action is not None:
+        result["recommended_action"] = recommended_action
+
+    # Merge any extra fields
+    if extra:
+        result["extra"] = extra
+
+    return result

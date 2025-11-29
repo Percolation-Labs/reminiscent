@@ -158,9 +158,70 @@ The dreaming worker runs periodically to build user models:
 - User profile automatically loaded and injected into system message
 - Simpler for basic chatbots that always need context
 
+## Authentication
+
+### Production Authentication
+
+When `AUTH__ENABLED=true`, users authenticate via OAuth (Google or Microsoft). The OAuth flow:
+
+1. User visits `/api/auth/google/login` or `/api/auth/microsoft/login`
+2. User authenticates with provider
+3. Callback stores user in session cookie
+4. Subsequent requests use session cookie
+
+### Development Token (Non-Production Only)
+
+For local development and testing, you can use a dev token instead of OAuth. This endpoint is available at `/api/dev/token` whenever `ENVIRONMENT != "production"`, regardless of whether auth is enabled.
+
+**Get Token:**
+```bash
+curl http://localhost:8000/api/dev/token
+```
+
+**Response:**
+```json
+{
+  "token": "dev_89737a19376332bfd9a4a06db8b79fd1",
+  "type": "Bearer",
+  "user": {
+    "id": "test-user",
+    "email": "test@rem.local",
+    "name": "Test User"
+  },
+  "usage": "curl -H \"Authorization: Bearer dev_...\" http://localhost:8000/api/v1/...",
+  "warning": "This token is for development/testing only and will not work in production."
+}
+```
+
+**Use Token:**
+```bash
+# Get the token
+TOKEN=$(curl -s http://localhost:8000/api/dev/token | jq -r .token)
+
+# Use it in requests
+curl -H "Authorization: Bearer $TOKEN" \
+     -H "X-Tenant-Id: default" \
+     http://localhost:8000/api/v1/shared-with-me
+```
+
+**Security Notes:**
+- Only available when `ENVIRONMENT != "production"`
+- Token is HMAC-signed using session secret
+- Authenticates as `test-user` with `pro` tier and `admin` role
+- Token is deterministic per environment (same secret = same token)
+
+### Anonymous Access
+
+When `AUTH__ALLOW_ANONYMOUS=true` (default in development):
+- Requests without authentication are allowed
+- Anonymous users get rate-limited access
+- MCP endpoints still require auth unless `AUTH__MCP_REQUIRES_AUTH=false`
+
 ## Usage Examples
 
-**Note on Authentication**: By default, authentication is disabled (`AUTH__ENABLED=false`) for local development and testing. The examples below work without an `Authorization` header. If authentication is enabled in your environment, add: `-H "Authorization: Bearer your_jwt_token"` to cURL requests or `"Authorization": "Bearer your_jwt_token"` to Python headers.
+**Note on Authentication**: By default, authentication is disabled (`AUTH__ENABLED=false`) for local development and testing. The examples below work without an `Authorization` header. If authentication is enabled, use either:
+- **Dev token**: `-H "Authorization: Bearer $(curl -s http://localhost:8000/api/dev/token | jq -r .token)"`
+- **Session cookie**: Login via OAuth first, then use cookies
 
 ### cURL: Simple Chat
 
@@ -365,31 +426,35 @@ data: [DONE]
 
 ## Extended SSE Event Protocol
 
-Beyond OpenAI-compatible text streaming, REM supports custom SSE event types for rich UI interactions. These use named `event:` fields to distinguish from standard `data:` chunks.
+REM uses OpenAI-compatible format for text content streaming, plus custom named SSE events for rich UI interactions.
 
 ### Event Types
 
-| Event Type | Purpose | UI Display |
-|------------|---------|------------|
-| `text_delta` | Content chunks | Main response area (OpenAI-compatible) |
-| `reasoning` | Model thinking | Collapsible "thinking" section |
-| `progress` | Step indicators | Progress bar/stepper |
-| `tool_call` | Tool invocations | Tool status panel |
-| `action_request` | User input solicitation | Buttons, forms, modals |
-| `metadata` | System info | Hidden or badge display |
-| `error` | Error notification | Error toast/alert |
-| `done` | Stream completion | Cleanup signal |
+| Event Type | Format | Purpose | UI Display |
+|------------|--------|---------|------------|
+| (text content) | `data:` (OpenAI format) | Content chunks | Main response area |
+| `reasoning` | `event:` | Model thinking | Collapsible "thinking" section |
+| `progress` | `event:` | Step indicators | Progress bar/stepper |
+| `tool_call` | `event:` | Tool invocations | Tool status panel |
+| `action_request` | `event:` | User input solicitation | Buttons, forms, modals |
+| `metadata` | `event:` | System info | Hidden or badge display |
+| `error` | `event:` | Error notification | Error toast/alert |
+| `done` | `event:` | Stream completion | Cleanup signal |
 
 ### Event Format
 
-**OpenAI-compatible (text_delta):**
+**Text content (OpenAI-compatible `data:` format):**
 ```
-data: {"type": "text_delta", "content": "Hello "}
+data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1732748123,"model":"gpt-4","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello "},"finish_reason":null}]}
 
-data: {"type": "text_delta", "content": "world!"}
+data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1732748123,"model":"gpt-4","choices":[{"index":0,"delta":{"content":"world!"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1732748123,"model":"gpt-4","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
 ```
 
-**Named events (all others):**
+**Named events (use `event:` prefix):**
 ```
 event: reasoning
 data: {"type": "reasoning", "content": "Analyzing the request...", "step": 1}

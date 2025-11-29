@@ -14,6 +14,7 @@ from loguru import logger
 
 from ...settings import settings
 
+
 # Global flag to track if instrumentation is initialized
 _instrumentation_initialized = False
 
@@ -52,11 +53,93 @@ def setup_instrumentation() -> None:
 
     try:
         from opentelemetry import trace
-        from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        from opentelemetry.sdk.trace import TracerProvider, ReadableSpan
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter, SpanExportResult
         from opentelemetry.sdk.resources import Resource, SERVICE_NAME, DEPLOYMENT_ENVIRONMENT
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter as HTTPExporter
         from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter as GRPCExporter
+
+        class SanitizingSpanExporter(SpanExporter):
+            """
+            Wrapper exporter that sanitizes span attributes before export.
+
+            Removes None values that cause OTLP encoding failures like:
+            - llm.input_messages.3.message.content: None
+            """
+
+            def __init__(self, wrapped_exporter: SpanExporter):
+                self._wrapped = wrapped_exporter
+
+            def _sanitize_value(self, value):
+                """Recursively sanitize a value, replacing None with empty string."""
+                if value is None:
+                    return ""  # Replace None with empty string
+                if isinstance(value, dict):
+                    return {k: self._sanitize_value(v) for k, v in value.items()}
+                if isinstance(value, (list, tuple)):
+                    return [self._sanitize_value(v) for v in value]
+                return value
+
+            def export(self, spans: tuple[ReadableSpan, ...]) -> SpanExportResult:
+                # Create sanitized copies of spans
+                sanitized_spans = []
+                for span in spans:
+                    if span.attributes:
+                        # Sanitize all attribute values - replace None with empty string
+                        sanitized_attrs = {}
+                        for k, v in span.attributes.items():
+                            sanitized_attrs[k] = self._sanitize_value(v)
+                        sanitized_spans.append(_SanitizedSpan(span, sanitized_attrs))
+                    else:
+                        sanitized_spans.append(span)
+
+                return self._wrapped.export(tuple(sanitized_spans))
+
+            def shutdown(self) -> None:
+                self._wrapped.shutdown()
+
+            def force_flush(self, timeout_millis: int = 30000) -> bool:
+                return self._wrapped.force_flush(timeout_millis)
+
+        class _SanitizedSpan(ReadableSpan):
+            """ReadableSpan wrapper with sanitized attributes."""
+
+            def __init__(self, original: ReadableSpan, sanitized_attributes: dict):
+                self._original = original
+                self._sanitized_attributes = sanitized_attributes
+
+            @property
+            def name(self): return self._original.name
+            @property
+            def context(self): return self._original.context
+            @property
+            def parent(self): return self._original.parent
+            @property
+            def resource(self): return self._original.resource
+            @property
+            def instrumentation_scope(self): return self._original.instrumentation_scope
+            @property
+            def status(self): return self._original.status
+            @property
+            def start_time(self): return self._original.start_time
+            @property
+            def end_time(self): return self._original.end_time
+            @property
+            def links(self): return self._original.links
+            @property
+            def events(self): return self._original.events
+            @property
+            def kind(self): return self._original.kind
+            @property
+            def attributes(self): return self._sanitized_attributes
+            @property
+            def dropped_attributes(self): return self._original.dropped_attributes
+            @property
+            def dropped_events(self): return self._original.dropped_events
+            @property
+            def dropped_links(self): return self._original.dropped_links
+
+            def get_span_context(self): return self._original.get_span_context()
 
         # Create resource with service metadata
         resource = Resource(
@@ -72,15 +155,18 @@ def setup_instrumentation() -> None:
 
         # Configure OTLP exporter based on protocol
         if settings.otel.protocol == "grpc":
-            exporter = GRPCExporter(
+            base_exporter = GRPCExporter(
                 endpoint=settings.otel.collector_endpoint,
                 timeout=settings.otel.export_timeout,
             )
         else:  # http
-            exporter = HTTPExporter(
+            base_exporter = HTTPExporter(
                 endpoint=f"{settings.otel.collector_endpoint}/v1/traces",
                 timeout=settings.otel.export_timeout,
             )
+
+        # Wrap with sanitizing exporter to handle None values
+        exporter = SanitizingSpanExporter(base_exporter)
 
         # Add span processor
         tracer_provider.add_span_processor(BatchSpanProcessor(exporter))
@@ -95,6 +181,8 @@ def setup_instrumentation() -> None:
         # Add OpenInference span processor for Pydantic AI
         # This adds rich attributes (openinference.span.kind, input/output, etc.) to ALL traces
         # Phoenix receives these traces via the OTLP collector - no separate "Phoenix integration" needed
+        # Note: The OTEL exporter may log warnings about None values in tool call messages,
+        # but this is a known limitation in openinference-instrumentation-pydantic-ai
         try:
             from openinference.instrumentation.pydantic_ai import OpenInferenceSpanProcessor as PydanticAISpanProcessor
 

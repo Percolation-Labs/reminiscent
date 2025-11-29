@@ -335,3 +335,135 @@ class Repository(Generic[T]):
             row = await conn.fetchrow(sql, *params)
 
         return row[0] if row else 0
+
+    async def find_paginated(
+        self,
+        filters: dict[str, Any],
+        page: int = 1,
+        page_size: int = 50,
+        order_by: str = "created_at DESC",
+        partition_by: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Find records with page-based pagination using CTE with ROW_NUMBER().
+
+        Uses a CTE with ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ...) for
+        efficient pagination with total count in a single query.
+
+        Args:
+            filters: Dict of field -> value filters (AND-ed together)
+            page: Page number (1-indexed)
+            page_size: Number of records per page
+            order_by: ORDER BY clause for row numbering (default: "created_at DESC")
+            partition_by: Optional field to partition by (e.g., "user_id").
+                         If None, uses global row numbering.
+
+        Returns:
+            Dict containing:
+            - data: List of model instances for the page
+            - total: Total count of records matching filters
+            - page: Current page number
+            - page_size: Records per page
+            - total_pages: Total number of pages
+            - has_next: Whether there are more pages
+            - has_previous: Whether there are previous pages
+
+        Example:
+            result = await repo.find_paginated(
+                {"tenant_id": "acme", "user_id": "alice"},
+                page=2,
+                page_size=20,
+                order_by="created_at DESC",
+                partition_by="user_id"
+            )
+            # result = {
+            #     "data": [...],
+            #     "total": 150,
+            #     "page": 2,
+            #     "page_size": 20,
+            #     "total_pages": 8,
+            #     "has_next": True,
+            #     "has_previous": True
+            # }
+        """
+        if not settings.postgres.enabled or not self.db:
+            logger.debug(f"Postgres disabled, returning empty {self.model_class.__name__} pagination")
+            return {
+                "data": [],
+                "total": 0,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": 0,
+                "has_next": False,
+                "has_previous": False,
+            }
+
+        # Ensure connection
+        if not self.db.pool:
+            await self.db.connect()
+
+        # Type guard: ensure pool is not None after connect
+        if not self.db.pool:
+            raise RuntimeError("Failed to establish database connection")
+
+        # Build WHERE clause from filters
+        where_conditions = ["deleted_at IS NULL"]
+        params: list[Any] = []
+        param_idx = 1
+
+        for field, value in filters.items():
+            where_conditions.append(f"{field} = ${param_idx}")
+            params.append(value)
+            param_idx += 1
+
+        where_clause = " AND ".join(where_conditions)
+
+        # Build PARTITION BY clause
+        partition_clause = f"PARTITION BY {partition_by}" if partition_by else ""
+
+        # Build the CTE query with ROW_NUMBER() and COUNT() window functions
+        # This gives us pagination + total count in a single query
+        sql = f"""
+        WITH numbered AS (
+            SELECT *,
+                   ROW_NUMBER() OVER ({partition_clause} ORDER BY {order_by}) as _row_num,
+                   COUNT(*) OVER ({partition_clause}) as _total_count
+            FROM {self.table_name}
+            WHERE {where_clause}
+        )
+        SELECT * FROM numbered
+        WHERE _row_num > ${param_idx} AND _row_num <= ${param_idx + 1}
+        ORDER BY _row_num
+        """
+
+        # Calculate row range for the page
+        start_row = (page - 1) * page_size
+        end_row = page * page_size
+        params.extend([start_row, end_row])
+
+        async with self.db.pool.acquire() as conn:
+            rows = await conn.fetch(sql, *params)
+
+        # Extract total from first row (all rows have the same _total_count)
+        total = rows[0]["_total_count"] if rows else 0
+
+        # Remove internal columns and convert to models
+        data = []
+        for row in rows:
+            row_dict = dict(row)
+            row_dict.pop("_row_num", None)
+            row_dict.pop("_total_count", None)
+            data.append(self.model_class.model_validate(row_dict))
+
+        # Calculate pagination metadata
+        total_pages = (total + page_size - 1) // page_size if total > 0 else 0
+
+        return {
+            "data": data,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+            "has_next": page < total_pages,
+            "has_previous": page > 1,
+        }

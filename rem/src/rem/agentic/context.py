@@ -73,43 +73,47 @@ class AgentContext(BaseModel):
         user_id: str | None,
         source: str = "context",
         default: str | None = None,
-    ) -> str:
+    ) -> str | None:
         """
-        Get user_id or fallback to default with logging.
+        Get user_id or return None for anonymous access.
 
-        Centralized helper for consistent user_id fallback behavior across
-        API endpoints, MCP tools, CLI commands, and services.
+        User ID convention:
+        - user_id is a deterministic UUID5 hash of the user's email address
+        - Use rem.utils.user_id.email_to_user_id(email) to generate
+        - The JWT's `sub` claim is NOT directly used as user_id
+        - Authentication middleware extracts email from JWT and hashes it
+
+        When user_id is None, queries return data with user_id IS NULL
+        (shared/public data). This is intentional - no fake user IDs.
 
         Args:
-            user_id: User identifier (may be None)
+            user_id: User identifier (UUID5 hash of email, may be None for anonymous)
             source: Source of the call (for logging clarity)
-            default: Default value to use (default: settings.test.effective_user_id)
+            default: Explicit default (only for testing, not auto-generated)
 
         Returns:
-            user_id if provided, otherwise default from settings
+            user_id if provided, explicit default if provided, otherwise None
 
         Example:
-            # In MCP tool
+            # Generate user_id from email (done by auth middleware)
+            from rem.utils.user_id import email_to_user_id
+            user_id = email_to_user_id("alice@example.com")
+            # -> "2c5ea4c0-4067-5fef-942d-0a20124e06d8"
+
+            # In MCP tool - anonymous user sees shared data
             user_id = AgentContext.get_user_id_or_default(
                 user_id, source="ask_rem_agent"
             )
-
-            # In API endpoint
-            user_id = AgentContext.get_user_id_or_default(
-                temp_context.user_id, source="chat_completions"
-            )
-
-            # In CLI command
-            user_id = AgentContext.get_user_id_or_default(
-                args.user_id, source="rem ask"
-            )
+            # Returns None if not authenticated -> queries WHERE user_id IS NULL
         """
-        if user_id is None:
-            from rem.settings import settings
-            effective_default = default or settings.test.effective_user_id
-            logger.debug(f"No user_id provided from {source}, using '{effective_default}'")
-            return effective_default
-        return user_id
+        if user_id is not None:
+            return user_id
+        if default is not None:
+            logger.debug(f"Using explicit default user_id '{default}' from {source}")
+            return default
+        # No fake user IDs - return None for anonymous/unauthenticated
+        logger.debug(f"No user_id from {source}, using None (anonymous/shared data)")
+        return None
 
     @classmethod
     def from_headers(cls, headers: dict[str, str]) -> "AgentContext":

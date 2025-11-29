@@ -190,19 +190,19 @@ class PostgresService:
 
     async def connect(self) -> None:
         """Establish database connection pool."""
-        logger.info(f"Connecting to PostgreSQL with pool size {self.pool_size}")
+        logger.debug(f"Connecting to PostgreSQL with pool size {self.pool_size}")
         self.pool = await asyncpg.create_pool(
             self.connection_string,
             min_size=1,
             max_size=self.pool_size,
             init=self._init_connection,  # Configure JSONB codec on each connection
         )
-        logger.info("PostgreSQL connection pool established")
+        logger.debug("PostgreSQL connection pool established")
 
         # Start embedding worker if available
         if self.embedding_worker and hasattr(self.embedding_worker, "start"):
             await self.embedding_worker.start()
-            logger.info("Embedding worker started")
+            logger.debug("Embedding worker started")
 
     async def disconnect(self) -> None:
         """Close database connection pool."""
@@ -211,10 +211,10 @@ class PostgresService:
         # The worker will be stopped explicitly when the application shuts down
 
         if self.pool:
-            logger.info("Closing PostgreSQL connection pool")
+            logger.debug("Closing PostgreSQL connection pool")
             await self.pool.close()
             self.pool = None
-            logger.info("PostgreSQL connection pool closed")
+            logger.debug("PostgreSQL connection pool closed")
 
     async def execute(
         self,
@@ -631,7 +631,7 @@ class PostgresService:
         table_name: str,
         embedding: list[float],
         limit: int = 10,
-        min_similarity: float = 0.7,
+        min_similarity: float = 0.3,
         tenant_id: Optional[str] = None,
     ) -> list[dict[str, Any]]:
         """

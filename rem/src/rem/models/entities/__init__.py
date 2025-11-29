@@ -6,6 +6,7 @@ Core entity types for the REM system:
 - ImageResources: Image-specific resources with CLIP embeddings
 - Messages: Communication content
 - Sessions: Conversation sessions (normal or evaluation mode)
+- SharedSessions: Session sharing between users for collaboration
 - Feedback: User feedback on messages/sessions with trace integration
 - Users: User entities
 - Files: File metadata and tracking
@@ -21,6 +22,7 @@ All entities inherit from CoreModel and support:
 - Natural language labels for conversational queries
 """
 
+from .domain_resource import DomainResource
 from .feedback import Feedback, FeedbackCategory
 from .file import File
 from .image_resource import ImageResource
@@ -31,14 +33,25 @@ from .ontology_config import OntologyConfig
 from .resource import Resource
 from .schema import Schema
 from .session import Session, SessionMode
+from .shared_session import (
+    SharedSession,
+    SharedSessionCreate,
+    SharedWithMeResponse,
+    SharedWithMeSummary,
+)
 from .user import User, UserTier
 
 __all__ = [
     "Resource",
+    "DomainResource",
     "ImageResource",
     "Message",
     "Session",
     "SessionMode",
+    "SharedSession",
+    "SharedSessionCreate",
+    "SharedWithMeResponse",
+    "SharedWithMeSummary",
     "Feedback",
     "FeedbackCategory",
     "User",

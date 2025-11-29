@@ -411,7 +411,7 @@ async def _load_async(file_path: Path, user_id: str, dry_run: bool):
     """Async implementation of load command."""
     import yaml
     from ...models.core.inline_edge import InlineEdge
-    from ...models.entities import Resource, Moment, User
+    from ...models.entities import Resource, Moment, User, Message, SharedSession, Schema
     from ...services.postgres import get_postgres_service
 
     logger.info(f"Loading data from: {file_path}")
@@ -431,11 +431,17 @@ async def _load_async(file_path: Path, user_id: str, dry_run: bool):
         return
 
     # Map table names to model classes
+    # CoreModel subclasses use Repository.upsert()
     MODEL_MAP = {
         "users": User,
         "moments": Moment,
         "resources": Resource,
+        "messages": Message,
+        "schemas": Schema,
     }
+
+    # Non-CoreModel tables that need direct SQL insertion
+    DIRECT_INSERT_TABLES = {"shared_sessions"}
 
     # Connect to database
     pg = get_postgres_service()
@@ -453,6 +459,29 @@ async def _load_async(file_path: Path, user_id: str, dry_run: bool):
             key_field = table_def.get("key_field", "id")
             rows = table_def.get("rows", [])
 
+            # Handle direct insert tables (non-CoreModel)
+            if table_name in DIRECT_INSERT_TABLES:
+                for row_data in rows:
+                    # Add tenant_id if not present
+                    if "tenant_id" not in row_data:
+                        row_data["tenant_id"] = "default"
+
+                    if table_name == "shared_sessions":
+                        # Insert shared_session directly
+                        await pg.fetch(
+                            """INSERT INTO shared_sessions
+                               (session_id, owner_user_id, shared_with_user_id, tenant_id)
+                               VALUES ($1, $2, $3, $4)
+                               ON CONFLICT DO NOTHING""",
+                            row_data["session_id"],
+                            row_data["owner_user_id"],
+                            row_data["shared_with_user_id"],
+                            row_data["tenant_id"],
+                        )
+                        total_loaded += 1
+                        logger.success(f"Loaded shared_session: {row_data['owner_user_id']} -> {row_data['shared_with_user_id']}")
+                continue
+
             if table_name not in MODEL_MAP:
                 logger.warning(f"Unknown table: {table_name}, skipping")
                 continue
@@ -460,9 +489,12 @@ async def _load_async(file_path: Path, user_id: str, dry_run: bool):
             model_class = MODEL_MAP[table_name]  # Type is inferred from MODEL_MAP
 
             for row_data in rows:
-                # Add user_id and tenant_id (set to user_id for backward compat)
-                row_data["user_id"] = user_id
-                row_data["tenant_id"] = user_id
+                # Add user_id and tenant_id if not already present
+                # This allows seed files to specify explicit owners
+                if "user_id" not in row_data:
+                    row_data["user_id"] = user_id
+                if "tenant_id" not in row_data:
+                    row_data["tenant_id"] = row_data.get("user_id", user_id)
 
                 # Convert graph_edges to InlineEdge format if present
                 if "graph_edges" in row_data:

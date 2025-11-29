@@ -40,6 +40,7 @@ from pydantic_ai.messages import (
     PartDeltaEvent,
     PartEndEvent,
     PartStartEvent,
+    TextPart,
     TextPartDelta,
     ThinkingPart,
     ThinkingPartDelta,
@@ -70,6 +71,8 @@ async def stream_openai_response(
     message_id: str | None = None,
     in_reply_to: str | None = None,
     session_id: str | None = None,
+    # Agent info for metadata
+    agent_schema: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """
     Stream Pydantic AI agent responses with rich SSE events.
@@ -183,6 +186,35 @@ async def stream_openai_response(
                                     ))
 
                             # ============================================
+                            # TEXT CONTENT START (initial text chunk)
+                            # ============================================
+                            elif isinstance(event, PartStartEvent) and isinstance(
+                                event.part, TextPart
+                            ):
+                                # TextPart may contain initial content that needs to be emitted
+                                if event.part.content:
+                                    content = event.part.content
+                                    token_count += len(content.split())
+
+                                    content_chunk = ChatCompletionStreamResponse(
+                                        id=request_id,
+                                        created=created_at,
+                                        model=model,
+                                        choices=[
+                                            ChatCompletionStreamChoice(
+                                                index=0,
+                                                delta=ChatCompletionMessageDelta(
+                                                    role="assistant" if is_first_chunk else None,
+                                                    content=content,
+                                                ),
+                                                finish_reason=None,
+                                            )
+                                        ],
+                                    )
+                                    is_first_chunk = False
+                                    yield f"data: {content_chunk.model_dump_json()}\n\n"
+
+                            # ============================================
                             # TOOL CALL START EVENTS
                             # ============================================
                             elif isinstance(event, PartStartEvent) and isinstance(
@@ -203,7 +235,6 @@ async def stream_openai_response(
 
                                     if args_dict:
                                         # Emit the structured result as JSON content
-                                        import json
                                         result_json = json.dumps(args_dict, indent=2)
                                         content_chunk = ChatCompletionStreamResponse(
                                             id=request_id,
@@ -229,8 +260,6 @@ async def stream_openai_response(
                                 # Queue for completion matching (FIFO)
                                 pending_tool_completions.append((tool_name, tool_id))
 
-                                logger.info(f"🔧 {tool_name}")
-
                                 # Emit tool_call SSE event (started)
                                 # Try to get arguments as dict
                                 args_dict = None
@@ -239,6 +268,18 @@ async def stream_openai_response(
                                         args_dict = event.part.args.args_dict
                                     elif isinstance(event.part.args, dict):
                                         args_dict = event.part.args
+
+                                # Log tool call with key parameters
+                                if args_dict and tool_name == "search_rem":
+                                    query_type = args_dict.get("query_type", "?")
+                                    limit = args_dict.get("limit", 20)
+                                    table = args_dict.get("table", "")
+                                    query_text = args_dict.get("query_text", args_dict.get("entity_key", ""))
+                                    if query_text and len(query_text) > 50:
+                                        query_text = query_text[:50] + "..."
+                                    logger.info(f"🔧 {tool_name} {query_type.upper()} '{query_text}' table={table} limit={limit}")
+                                else:
+                                    logger.info(f"🔧 {tool_name}")
 
                                 yield format_sse_event(ToolCallEvent(
                                     tool_name=tool_name,
@@ -325,21 +366,43 @@ async def stream_openai_response(
                                     registered_sources = result_content.get("sources")
                                     registered_references = result_content.get("references")
                                     registered_flags = result_content.get("flags")
+                                    # Risk assessment fields
+                                    registered_risk_level = result_content.get("risk_level")
+                                    registered_risk_score = result_content.get("risk_score")
+                                    registered_risk_reasoning = result_content.get("risk_reasoning")
+                                    registered_recommended_action = result_content.get("recommended_action")
+                                    # Extra fields
+                                    registered_extra = result_content.get("extra")
 
                                     logger.info(
                                         f"📊 Metadata registered: confidence={registered_confidence}, "
-                                        f"sources={registered_sources}"
+                                        f"risk_level={registered_risk_level}, sources={registered_sources}"
                                     )
+
+                                    # Build extra dict with risk fields and any custom extras
+                                    extra_data = {}
+                                    if registered_risk_level is not None:
+                                        extra_data["risk_level"] = registered_risk_level
+                                    if registered_risk_score is not None:
+                                        extra_data["risk_score"] = registered_risk_score
+                                    if registered_risk_reasoning is not None:
+                                        extra_data["risk_reasoning"] = registered_risk_reasoning
+                                    if registered_recommended_action is not None:
+                                        extra_data["recommended_action"] = registered_recommended_action
+                                    if registered_extra:
+                                        extra_data.update(registered_extra)
 
                                     # Emit metadata event immediately
                                     yield format_sse_event(MetadataEvent(
                                         message_id=message_id,
                                         in_reply_to=in_reply_to,
                                         session_id=session_id,
+                                        agent_schema=agent_schema,
                                         confidence=registered_confidence,
                                         sources=registered_sources,
                                         model_version=model,
                                         flags=registered_flags,
+                                        extra=extra_data if extra_data else None,
                                         hidden=False,
                                     ))
 
@@ -347,6 +410,31 @@ async def stream_openai_response(
                                     # Normal tool completion - emit ToolCallEvent
                                     result_str = str(result_content)
                                     result_summary = result_str[:200] + "..." if len(result_str) > 200 else result_str
+
+                                    # Log result count for search_rem
+                                    if tool_name == "search_rem" and isinstance(result_content, dict):
+                                        results = result_content.get("results", {})
+                                        # Handle nested result structure: results may be a dict with 'results' list and 'count'
+                                        if isinstance(results, dict):
+                                            count = results.get("count", len(results.get("results", [])))
+                                            query_type = results.get("query_type", "?")
+                                            query_text = results.get("query_text", results.get("key", ""))
+                                            table = results.get("table_name", "")
+                                        elif isinstance(results, list):
+                                            count = len(results)
+                                            query_type = "?"
+                                            query_text = ""
+                                            table = ""
+                                        else:
+                                            count = "?"
+                                            query_type = "?"
+                                            query_text = ""
+                                            table = ""
+                                        status = result_content.get("status", "unknown")
+                                        # Truncate query text for logging
+                                        if query_text and len(str(query_text)) > 40:
+                                            query_text = str(query_text)[:40] + "..."
+                                        logger.info(f"  ↳ {tool_name} {query_type} '{query_text}' table={table} → {count} results")
 
                                     yield format_sse_event(ToolCallEvent(
                                         tool_name=tool_name,
@@ -366,40 +454,48 @@ async def stream_openai_response(
 
             # After iteration completes, check for structured result
             # This handles agents with result_type (structured output)
+            # Skip for plain text output - already streamed via TextPartDelta
             try:
                 result = agent_run.result
                 if result is not None and hasattr(result, 'output'):
                     output = result.output
-                    # Serialize the structured output
-                    if hasattr(output, 'model_dump'):
-                        # Pydantic model
-                        result_dict = output.model_dump()
-                    elif hasattr(output, '__dict__'):
-                        result_dict = output.__dict__
+
+                    # Skip plain string output - already streamed via TextPartDelta
+                    # Non-structured output agents (structured_output: false) return strings
+                    if isinstance(output, str):
+                        logger.debug("Plain text output already streamed via TextPartDelta, skipping final emission")
                     else:
-                        result_dict = {"result": str(output)}
+                        # Serialize the structured output (Pydantic models)
+                        if hasattr(output, 'model_dump'):
+                            # Pydantic model
+                            result_dict = output.model_dump()
+                        elif hasattr(output, '__dict__'):
+                            result_dict = output.__dict__
+                        else:
+                            # Fallback for unknown types
+                            result_dict = {"result": str(output)}
 
-                    result_json = json.dumps(result_dict, indent=2, default=str)
-                    token_count += len(result_json.split())
+                        result_json = json.dumps(result_dict, indent=2, default=str)
+                        token_count += len(result_json.split())
 
-                    # Emit structured result as content
-                    result_chunk = ChatCompletionStreamResponse(
-                        id=request_id,
-                        created=created_at,
-                        model=model,
-                        choices=[
-                            ChatCompletionStreamChoice(
-                                index=0,
-                                delta=ChatCompletionMessageDelta(
-                                    role="assistant" if is_first_chunk else None,
-                                    content=result_json,
-                                ),
-                                finish_reason=None,
-                            )
-                        ],
-                    )
-                    is_first_chunk = False
-                    yield f"data: {result_chunk.model_dump_json()}\n\n"
+                        # Emit structured result as content
+                        result_chunk = ChatCompletionStreamResponse(
+                            id=request_id,
+                            created=created_at,
+                            model=model,
+                            choices=[
+                                ChatCompletionStreamChoice(
+                                    index=0,
+                                    delta=ChatCompletionMessageDelta(
+                                        role="assistant" if is_first_chunk else None,
+                                        content=result_json,
+                                    ),
+                                    finish_reason=None,
+                                )
+                            ],
+                        )
+                        is_first_chunk = False
+                        yield f"data: {result_chunk.model_dump_json()}\n\n"
             except Exception as e:
                 logger.debug(f"No structured result available: {e}")
 
@@ -427,6 +523,7 @@ async def stream_openai_response(
                 message_id=message_id,
                 in_reply_to=in_reply_to,
                 session_id=session_id,
+                agent_schema=agent_schema,
                 confidence=1.0,  # Default to 100% confidence
                 model_version=model,
                 latency_ms=latency_ms,
@@ -528,13 +625,10 @@ async def stream_simulator_response(
             )
         ```
     """
-    from .sse_events import format_sse_event
     from rem.agentic.agents.sse_simulator import stream_simulator_events
 
-    if request_id is None:
-        request_id = f"sim-{uuid.uuid4().hex[:24]}"
-
-    async for event in stream_simulator_events(
+    # Simulator now yields SSE-formatted strings directly (OpenAI-compatible)
+    async for sse_string in stream_simulator_events(
         prompt=prompt,
         delay_ms=delay_ms,
         include_reasoning=include_reasoning,
@@ -546,8 +640,9 @@ async def stream_simulator_response(
         message_id=message_id,
         in_reply_to=in_reply_to,
         session_id=session_id,
+        model=model,
     ):
-        yield format_sse_event(event)
+        yield sse_string
 
 
 async def stream_minimal_simulator(
@@ -566,8 +661,88 @@ async def stream_minimal_simulator(
     Yields:
         SSE-formatted strings
     """
-    from .sse_events import format_sse_event
     from rem.agentic.agents.sse_simulator import stream_minimal_demo
 
-    async for event in stream_minimal_demo(content=content, delay_ms=delay_ms):
-        yield format_sse_event(event)
+    # Simulator now yields SSE-formatted strings directly (OpenAI-compatible)
+    async for sse_string in stream_minimal_demo(content=content, delay_ms=delay_ms):
+        yield sse_string
+
+
+async def stream_openai_response_with_save(
+    agent: Agent,
+    prompt: str,
+    model: str,
+    request_id: str | None = None,
+    agent_schema: str | None = None,
+    session_id: str | None = None,
+    user_id: str | None = None,
+) -> AsyncGenerator[str, None]:
+    """
+    Wrapper around stream_openai_response that saves the assistant response after streaming.
+
+    This accumulates all text content during streaming and saves it to the database
+    after the stream completes.
+
+    Args:
+        agent: Pydantic AI agent instance
+        prompt: User prompt
+        model: Model name
+        request_id: Optional request ID
+        agent_schema: Agent schema name
+        session_id: Session ID for message storage
+        user_id: User ID for message storage
+
+    Yields:
+        SSE-formatted strings
+    """
+    from ....utils.date_utils import utc_now, to_iso
+    from ....services.session import SessionMessageStore
+    from ....settings import settings
+
+    # Accumulate content during streaming
+    accumulated_content = []
+
+    async for chunk in stream_openai_response(
+        agent=agent,
+        prompt=prompt,
+        model=model,
+        request_id=request_id,
+        agent_schema=agent_schema,
+        session_id=session_id,
+    ):
+        yield chunk
+
+        # Extract text content from OpenAI-format chunks
+        # Format: data: {"choices": [{"delta": {"content": "..."}}]}
+        if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
+            try:
+                data_str = chunk[6:].strip()  # Remove "data: " prefix
+                if data_str:
+                    data = json.loads(data_str)
+                    if "choices" in data and data["choices"]:
+                        delta = data["choices"][0].get("delta", {})
+                        content = delta.get("content")
+                        if content:
+                            accumulated_content.append(content)
+            except (json.JSONDecodeError, KeyError, IndexError):
+                pass  # Skip non-JSON or malformed chunks
+
+    # After streaming completes, save the assistant response
+    if settings.postgres.enabled and session_id and accumulated_content:
+        full_content = "".join(accumulated_content)
+        assistant_message = {
+            "role": "assistant",
+            "content": full_content,
+            "timestamp": to_iso(utc_now()),
+        }
+        try:
+            store = SessionMessageStore(user_id=user_id or settings.test.effective_user_id)
+            await store.store_session_messages(
+                session_id=session_id,
+                messages=[assistant_message],
+                user_id=user_id,
+                compress=True,  # Compress long assistant responses
+            )
+            logger.debug(f"Saved assistant response to session {session_id} ({len(full_content)} chars)")
+        except Exception as e:
+            logger.error(f"Failed to save assistant response: {e}", exc_info=True)

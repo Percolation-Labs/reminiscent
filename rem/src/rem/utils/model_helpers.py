@@ -16,8 +16,12 @@ Embedding Field Detection:
 Table Name Inference:
 1. model_config.json_schema_extra.table_name
 2. CamelCase → snake_case + pluralization
+
+Model Resolution:
+- model_from_arbitrary_casing: Resolve model class from flexible input casing
 """
 
+import re
 from typing import Any, Type
 
 from loguru import logger
@@ -94,7 +98,9 @@ def get_table_name(model: Type[BaseModel]) -> str:
         if isinstance(model_config, dict):
             json_extra = model_config.get("json_schema_extra", {})
             if isinstance(json_extra, dict) and "table_name" in json_extra:
-                return json_extra["table_name"]
+                table_name = json_extra["table_name"]
+                if isinstance(table_name, str):
+                    return table_name
 
     # Infer from class name
     name = model.__name__
@@ -234,3 +240,152 @@ def get_model_metadata(model: Type[BaseModel]) -> dict[str, Any]:
         "entity_key_field": get_entity_key_field(model),
         "embeddable_fields": get_embeddable_fields(model),
     }
+
+
+def normalize_to_title_case(name: str) -> str:
+    """
+    Normalize arbitrary casing to TitleCase (PascalCase).
+
+    Handles various input formats:
+    - kebab-case: domain-resource → DomainResource
+    - snake_case: domain_resource → DomainResource
+    - lowercase: domainresource → Domainresource (single word)
+    - TitleCase: DomainResource → DomainResource (passthrough)
+    - Mixed: Domain-Resource, DOMAIN_RESOURCE → DomainResource
+
+    Args:
+        name: Input name in any casing format
+
+    Returns:
+        TitleCase (PascalCase) version of the name
+
+    Example:
+        >>> normalize_to_title_case("domain-resource")
+        'DomainResource'
+        >>> normalize_to_title_case("domain_resources")
+        'DomainResources'
+        >>> normalize_to_title_case("DomainResource")
+        'DomainResource'
+    """
+    # If already TitleCase (starts with uppercase, has no delimiters, and has
+    # at least one lowercase letter), return as-is
+    if (
+        name
+        and name[0].isupper()
+        and '-' not in name
+        and '_' not in name
+        and any(c.islower() for c in name)
+    ):
+        return name
+
+    # Split on common delimiters (hyphen, underscore)
+    parts = re.split(r'[-_]', name)
+
+    # Capitalize first letter of each part, lowercase the rest
+    normalized_parts = [part.capitalize() for part in parts if part]
+
+    return "".join(normalized_parts)
+
+
+def model_from_arbitrary_casing(
+    name: str,
+    registry: dict[str, Type[BaseModel]] | None = None,
+) -> Type[BaseModel]:
+    """
+    Resolve a model class from arbitrary casing input.
+
+    REM entity models use strict TitleCase (PascalCase) naming. This function
+    allows flexible input formats while maintaining consistency:
+
+    Input formats supported:
+    - kebab-case: domain-resource, domain-resources
+    - snake_case: domain_resource, domain_resources
+    - lowercase: resource, domainresource
+    - TitleCase: Resource, DomainResource
+
+    Args:
+        name: Model name in any supported casing format
+        registry: Optional dict mapping TitleCase names to model classes.
+                  If not provided, uses rem.models.entities module.
+
+    Returns:
+        The resolved Pydantic model class
+
+    Raises:
+        ValueError: If no model matches the normalized name
+
+    Example:
+        >>> model = model_from_arbitrary_casing("domain-resources")
+        >>> model.__name__
+        'DomainResource'
+        >>> model = model_from_arbitrary_casing("Resource")
+        >>> model.__name__
+        'Resource'
+    """
+    # Build default registry from entities module if not provided
+    if registry is None:
+        from rem.models.entities import (
+            DomainResource,
+            Feedback,
+            File,
+            ImageResource,
+            Message,
+            Moment,
+            Ontology,
+            OntologyConfig,
+            Resource,
+            Schema,
+            Session,
+            User,
+        )
+
+        registry = {
+            "Resource": Resource,
+            "Resources": Resource,  # Plural alias
+            "DomainResource": DomainResource,
+            "DomainResources": DomainResource,  # Plural alias
+            "ImageResource": ImageResource,
+            "ImageResources": ImageResource,
+            "File": File,
+            "Files": File,
+            "Message": Message,
+            "Messages": Message,
+            "Moment": Moment,
+            "Moments": Moment,
+            "Session": Session,
+            "Sessions": Session,
+            "Feedback": Feedback,
+            "User": User,
+            "Users": User,
+            "Schema": Schema,
+            "Schemas": Schema,
+            "Ontology": Ontology,
+            "Ontologies": Ontology,
+            "OntologyConfig": OntologyConfig,
+            "OntologyConfigs": OntologyConfig,
+        }
+
+    # Normalize input to TitleCase
+    normalized = normalize_to_title_case(name)
+
+    # Look up in registry
+    if normalized in registry:
+        logger.debug(f"Resolved model '{name}' → {registry[normalized].__name__}")
+        return registry[normalized]
+
+    # Try without trailing 's' (singular form)
+    if normalized.endswith("s") and normalized[:-1] in registry:
+        logger.debug(f"Resolved model '{name}' → {registry[normalized[:-1]].__name__} (singular)")
+        return registry[normalized[:-1]]
+
+    # Try with trailing 's' (plural form)
+    plural = normalized + "s"
+    if plural in registry:
+        logger.debug(f"Resolved model '{name}' → {registry[plural].__name__} (plural)")
+        return registry[plural]
+
+    available = sorted(set(m.__name__ for m in registry.values()))
+    raise ValueError(
+        f"Unknown model: '{name}' (normalized: '{normalized}'). "
+        f"Available models: {', '.join(available)}"
+    )

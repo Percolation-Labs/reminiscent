@@ -14,7 +14,7 @@ Convention:
 See CLAUDE.md Section 1 (Datetime Convention) for details.
 """
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Optional
 
 
@@ -30,7 +30,7 @@ def utc_now() -> datetime:
         >>> now.tzinfo is None
         True
     """
-    return datetime.utcnow()
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def to_iso(dt: datetime) -> str:

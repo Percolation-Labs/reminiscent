@@ -15,7 +15,7 @@ Example .env file:
     API__LOG_LEVEL=info
 
     # LLM
-    LLM__DEFAULT_MODEL=anthropic:claude-sonnet-4-5-20250929
+    LLM__DEFAULT_MODEL=openai:gpt-4.1
     LLM__DEFAULT_TEMPERATURE=0.5
     LLM__MAX_RETRIES=10
     LLM__OPENAI_API_KEY=sk-...
@@ -58,7 +58,7 @@ Example .env file:
 
 import os
 import hashlib
-from pydantic import Field, field_validator, FieldValidationInfo
+from pydantic import Field, field_validator, ValidationInfo
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from loguru import logger
 
@@ -86,7 +86,7 @@ class LLMSettings(BaseSettings):
     )
 
     default_model: str = Field(
-        default="anthropic:claude-sonnet-4-5-20250929",
+        default="openai:gpt-4.1",
         description="Default LLM model (format: provider:model-id)",
     )
 
@@ -414,7 +414,7 @@ class AuthSettings(BaseSettings):
 
     @field_validator("session_secret", mode="before")
     @classmethod
-    def generate_dev_secret(cls, v: str | None, info: FieldValidationInfo) -> str:
+    def generate_dev_secret(cls, v: str | None, info: ValidationInfo) -> str:
         # Only generate if not already set and not in production
         if not v and info.data.get("environment") != "production":
             # Deterministic secret for development

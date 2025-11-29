@@ -2,27 +2,42 @@
 SSE Event Types for Rich Streaming Responses.
 
 This module defines custom Server-Sent Events (SSE) event types that extend
-beyond simple text streaming. Events are used for:
+beyond simple text streaming.
 
-1. **text_delta**: Standard text content chunks (OpenAI-compatible data: events)
-2. **reasoning**: Model thinking/reasoning chunks (event: reasoning)
-3. **action_request**: UI action solicitation with JSON Schema (event: action_request)
-4. **metadata**: Hidden system metadata (event: metadata)
-5. **progress**: Progress indicators (event: progress)
-6. **tool_call**: Tool invocation events (event: tool_call)
-7. **error**: Error notifications (event: error)
-8. **done**: Stream completion marker
+## SSE Protocol
 
-SSE Protocol:
-- `data:` prefix for OpenAI-compatible text chunks
-- `event:` prefix for custom event types with semantic meaning
+Text content uses **OpenAI-compatible format** (plain `data:` prefix):
+```
+data: {"id":"chatcmpl-...","choices":[{"delta":{"content":"Hello"}}]}
+```
 
-Action Schema Design:
+Custom events use **named event format** (`event:` prefix):
+```
+event: reasoning
+data: {"type": "reasoning", "content": "Analyzing...", "step": 1}
+```
+
+## Event Types
+
+| Event | Format | Purpose |
+|-------|--------|---------|
+| (text) | `data:` (OpenAI) | Content chunks - main response |
+| reasoning | `event:` | Model thinking/chain-of-thought |
+| progress | `event:` | Step indicators |
+| tool_call | `event:` | Tool invocation start/complete |
+| metadata | `event:` | System metadata (confidence, sources) |
+| action_request | `event:` | UI solicitation (buttons, forms) |
+| error | `event:` | Error notifications |
+| done | `event:` | Stream completion marker |
+
+## Action Schema Design
+
 - Inspired by Microsoft Adaptive Cards (https://adaptivecards.io/)
 - JSON Schema-based UI element definitions
 - Cross-platform compatibility for React, mobile, etc.
 
-References:
+## References
+
 - MDN SSE: https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events
 - Adaptive Cards: https://adaptivecards.io/explorer/
 - Model Context Protocol: https://modelcontextprotocol.io/specification/2025-06-18
@@ -301,6 +316,12 @@ class MetadataEvent(BaseModel):
     session_id: str | None = Field(
         default=None,
         description="Session ID for this conversation"
+    )
+
+    # Agent info
+    agent_schema: str | None = Field(
+        default=None,
+        description="Name of the agent schema used for this response (e.g., 'rem', 'Siggy')"
     )
 
     # Quality indicators

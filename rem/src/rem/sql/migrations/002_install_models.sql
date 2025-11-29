@@ -1,7 +1,7 @@
 -- REM Model Schema (install_models.sql)
 -- Generated from Pydantic models
 -- Source: directory: src/rem/models/entities
--- Generated at: 2025-11-27T12:00:40.135678
+-- Generated at: 2025-11-28T08:13:28.661915
 --
 -- DO NOT EDIT MANUALLY - Regenerate with: rem db schema generate
 --
@@ -1128,6 +1128,111 @@ AFTER INSERT OR UPDATE OR DELETE ON ontology_configs
 FOR EACH ROW EXECUTE FUNCTION fn_ontology_configs_kv_store_upsert();
 
 -- ======================================================================
+-- DOMAIN_RESOURCES (Model: DomainResource)
+-- ======================================================================
+
+CREATE TABLE IF NOT EXISTS domain_resources (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id VARCHAR(100) NOT NULL,
+    user_id VARCHAR(256),
+    name VARCHAR(256),
+    uri VARCHAR(256),
+    ordinal INTEGER,
+    content TEXT,
+    timestamp TIMESTAMP,
+    category VARCHAR(256),
+    related_entities JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP,
+    graph_edges JSONB DEFAULT '[]'::jsonb,
+    metadata JSONB DEFAULT '{}'::jsonb,
+    tags TEXT[] DEFAULT ARRAY[]::TEXT[]
+);
+
+CREATE INDEX idx_domain_resources_tenant ON domain_resources (tenant_id);
+CREATE INDEX idx_domain_resources_user ON domain_resources (user_id);
+CREATE INDEX idx_domain_resources_graph_edges ON domain_resources USING GIN (graph_edges);
+CREATE INDEX idx_domain_resources_metadata ON domain_resources USING GIN (metadata);
+CREATE INDEX idx_domain_resources_tags ON domain_resources USING GIN (tags);
+
+-- Embeddings for domain_resources
+CREATE TABLE IF NOT EXISTS embeddings_domain_resources (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    entity_id UUID NOT NULL REFERENCES domain_resources(id) ON DELETE CASCADE,
+    field_name VARCHAR(100) NOT NULL,
+    provider VARCHAR(50) NOT NULL DEFAULT 'openai',
+    model VARCHAR(100) NOT NULL DEFAULT 'text-embedding-3-small',
+    embedding vector(1536) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    -- Unique: one embedding per entity per field per provider
+    UNIQUE (entity_id, field_name, provider)
+);
+
+-- Index for entity lookup (get all embeddings for entity)
+CREATE INDEX idx_embeddings_domain_resources_entity ON embeddings_domain_resources (entity_id);
+
+-- Index for field + provider lookup
+CREATE INDEX idx_embeddings_domain_resources_field_provider ON embeddings_domain_resources (field_name, provider);
+
+-- HNSW index for vector similarity search (created in background)
+-- Note: This will be created by background thread after data load
+-- CREATE INDEX idx_embeddings_domain_resources_vector_hnsw ON embeddings_domain_resources
+-- USING hnsw (embedding vector_cosine_ops);
+
+-- KV_STORE trigger for domain_resources
+-- Trigger function to maintain KV_STORE for domain_resources
+CREATE OR REPLACE FUNCTION fn_domain_resources_kv_store_upsert()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF (TG_OP = 'DELETE') THEN
+        -- Remove from KV_STORE on delete
+        DELETE FROM kv_store
+        WHERE entity_id = OLD.id;
+        RETURN OLD;
+    ELSIF (TG_OP = 'INSERT' OR TG_OP = 'UPDATE') THEN
+        -- Upsert to KV_STORE (O(1) lookup by entity_key)
+        INSERT INTO kv_store (
+            entity_key,
+            entity_type,
+            entity_id,
+            tenant_id,
+            user_id,
+            metadata,
+            graph_edges,
+            updated_at
+        ) VALUES (
+            NEW.name::VARCHAR,
+            'domain_resources',
+            NEW.id,
+            NEW.tenant_id,
+            NEW.user_id,
+            NEW.metadata,
+            COALESCE(NEW.graph_edges, '[]'::jsonb),
+            CURRENT_TIMESTAMP
+        )
+        ON CONFLICT (tenant_id, entity_key)
+        DO UPDATE SET
+            entity_id = EXCLUDED.entity_id,
+            user_id = EXCLUDED.user_id,
+            metadata = EXCLUDED.metadata,
+            graph_edges = EXCLUDED.graph_edges,
+            updated_at = CURRENT_TIMESTAMP;
+
+        RETURN NEW;
+    END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create trigger
+DROP TRIGGER IF EXISTS trg_domain_resources_kv_store ON domain_resources;
+CREATE TRIGGER trg_domain_resources_kv_store
+AFTER INSERT OR UPDATE OR DELETE ON domain_resources
+FOR EACH ROW EXECUTE FUNCTION fn_domain_resources_kv_store_upsert();
+
+-- ======================================================================
 -- SCHEMAS (Model: Schema)
 -- ======================================================================
 
@@ -1231,6 +1336,185 @@ CREATE TRIGGER trg_schemas_kv_store
 AFTER INSERT OR UPDATE OR DELETE ON schemas
 FOR EACH ROW EXECUTE FUNCTION fn_schemas_kv_store_upsert();
 
+-- ======================================================================
+-- SHARED_SESSIONS (Session sharing between users)
+-- ======================================================================
+-- Lightweight linking table for session sharing. NOT a CoreModel - no
+-- graph edges, metadata, or embeddings. Just tracks who shared what with whom.
+--
+-- See: src/rem/models/entities/shared_session.py for full documentation
+
+CREATE TABLE IF NOT EXISTS shared_sessions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    session_id VARCHAR(256) NOT NULL,
+    owner_user_id VARCHAR(256) NOT NULL,
+    shared_with_user_id VARCHAR(256) NOT NULL,
+    tenant_id VARCHAR(100) NOT NULL DEFAULT 'default',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP,
+
+    -- Prevent duplicate shares (same session, same recipient, active only)
+    CONSTRAINT uq_active_share UNIQUE NULLS NOT DISTINCT (
+        tenant_id, session_id, owner_user_id, shared_with_user_id, deleted_at
+    )
+);
+
+-- Index for finding shares by recipient (who is sharing WITH me)
+CREATE INDEX IF NOT EXISTS idx_shared_sessions_recipient
+ON shared_sessions (tenant_id, shared_with_user_id)
+WHERE deleted_at IS NULL;
+
+-- Index for finding shares by owner (what have I shared)
+CREATE INDEX IF NOT EXISTS idx_shared_sessions_owner
+ON shared_sessions (tenant_id, owner_user_id)
+WHERE deleted_at IS NULL;
+
+-- Index for finding shares by session
+CREATE INDEX IF NOT EXISTS idx_shared_sessions_session
+ON shared_sessions (tenant_id, session_id)
+WHERE deleted_at IS NULL;
+
+-- Aggregation function: Get users sharing with me
+CREATE OR REPLACE FUNCTION fn_get_shared_with_me(
+    p_tenant_id VARCHAR(100),
+    p_user_id VARCHAR(256),
+    p_limit INTEGER DEFAULT 50,
+    p_offset INTEGER DEFAULT 0
+)
+RETURNS TABLE (
+    user_id VARCHAR(256),
+    name VARCHAR(256),
+    email VARCHAR(256),
+    message_count BIGINT,
+    session_count BIGINT,
+    first_message_at TIMESTAMP,
+    last_message_at TIMESTAMP
+) AS $$
+BEGIN
+    RETURN QUERY
+    WITH shared_with_me AS (
+        SELECT DISTINCT
+            ss.session_id,
+            ss.owner_user_id
+        FROM shared_sessions ss
+        WHERE ss.tenant_id = p_tenant_id
+          AND ss.shared_with_user_id = p_user_id
+          AND ss.deleted_at IS NULL
+    ),
+    message_stats AS (
+        SELECT
+            swm.owner_user_id,
+            COUNT(DISTINCT m.id) AS msg_count,
+            COUNT(DISTINCT m.session_id) AS sess_count,
+            MIN(m.created_at) AS first_msg,
+            MAX(m.created_at) AS last_msg
+        FROM shared_with_me swm
+        LEFT JOIN messages m ON m.session_id = swm.session_id
+            AND m.tenant_id = p_tenant_id
+            AND m.deleted_at IS NULL
+        GROUP BY swm.owner_user_id
+    )
+    SELECT
+        ms.owner_user_id AS user_id,
+        u.name,
+        u.email,
+        COALESCE(ms.msg_count, 0) AS message_count,
+        COALESCE(ms.sess_count, 0) AS session_count,
+        ms.first_msg AS first_message_at,
+        ms.last_msg AS last_message_at
+    FROM message_stats ms
+    LEFT JOIN users u ON u.user_id = ms.owner_user_id
+        AND u.tenant_id = p_tenant_id
+        AND u.deleted_at IS NULL
+    ORDER BY ms.last_msg DESC NULLS LAST, ms.msg_count DESC
+    LIMIT p_limit
+    OFFSET p_offset;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Count function for pagination
+CREATE OR REPLACE FUNCTION fn_count_shared_with_me(
+    p_tenant_id VARCHAR(100),
+    p_user_id VARCHAR(256)
+)
+RETURNS BIGINT AS $$
+BEGIN
+    RETURN (
+        SELECT COUNT(DISTINCT owner_user_id)
+        FROM shared_sessions
+        WHERE tenant_id = p_tenant_id
+          AND shared_with_user_id = p_user_id
+          AND deleted_at IS NULL
+    );
+END;
+$$ LANGUAGE plpgsql;
+
+-- Get messages from sessions shared by a specific owner
+CREATE OR REPLACE FUNCTION fn_get_shared_messages(
+    p_tenant_id VARCHAR(100),
+    p_recipient_user_id VARCHAR(256),
+    p_owner_user_id VARCHAR(256),
+    p_limit INTEGER DEFAULT 50,
+    p_offset INTEGER DEFAULT 0
+)
+RETURNS TABLE (
+    id UUID,
+    content TEXT,
+    message_type VARCHAR(256),
+    session_id VARCHAR(256),
+    model VARCHAR(256),
+    token_count INTEGER,
+    created_at TIMESTAMP,
+    metadata JSONB
+) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        m.id,
+        m.content,
+        m.message_type,
+        m.session_id,
+        m.model,
+        m.token_count,
+        m.created_at,
+        m.metadata
+    FROM messages m
+    INNER JOIN shared_sessions ss ON ss.session_id = m.session_id
+        AND ss.tenant_id = m.tenant_id
+        AND ss.deleted_at IS NULL
+    WHERE m.tenant_id = p_tenant_id
+      AND ss.shared_with_user_id = p_recipient_user_id
+      AND ss.owner_user_id = p_owner_user_id
+      AND m.deleted_at IS NULL
+    ORDER BY m.created_at DESC
+    LIMIT p_limit
+    OFFSET p_offset;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Count shared messages for pagination
+CREATE OR REPLACE FUNCTION fn_count_shared_messages(
+    p_tenant_id VARCHAR(100),
+    p_recipient_user_id VARCHAR(256),
+    p_owner_user_id VARCHAR(256)
+)
+RETURNS BIGINT AS $$
+BEGIN
+    RETURN (
+        SELECT COUNT(m.id)
+        FROM messages m
+        INNER JOIN shared_sessions ss ON ss.session_id = m.session_id
+            AND ss.tenant_id = m.tenant_id
+            AND ss.deleted_at IS NULL
+        WHERE m.tenant_id = p_tenant_id
+          AND ss.shared_with_user_id = p_recipient_user_id
+          AND ss.owner_user_id = p_owner_user_id
+          AND m.deleted_at IS NULL
+    );
+END;
+$$ LANGUAGE plpgsql;
+
 -- ============================================================================
 -- RECORD MIGRATION
 -- ============================================================================
@@ -1244,8 +1528,9 @@ SET applied_at = CURRENT_TIMESTAMP,
 DO $$
 BEGIN
     RAISE NOTICE '============================================================';
-    RAISE NOTICE 'REM Model Schema Applied: 12 tables';
+    RAISE NOTICE 'REM Model Schema Applied: 14 tables';
     RAISE NOTICE '============================================================';
+    RAISE NOTICE '  ✓ domain_resources (1 embeddable fields)';
     RAISE NOTICE '  ✓ feedbacks';
     RAISE NOTICE '  ✓ files (1 embeddable fields)';
     RAISE NOTICE '  ✓ image_resources (1 embeddable fields)';
@@ -1257,6 +1542,7 @@ BEGIN
     RAISE NOTICE '  ✓ resources (1 embeddable fields)';
     RAISE NOTICE '  ✓ schemas (1 embeddable fields)';
     RAISE NOTICE '  ✓ sessions (1 embeddable fields)';
+    RAISE NOTICE '  ✓ shared_sessions (session sharing)';
     RAISE NOTICE '  ✓ users (1 embeddable fields)';
     RAISE NOTICE '';
     RAISE NOTICE 'Next: Run background indexes if needed';

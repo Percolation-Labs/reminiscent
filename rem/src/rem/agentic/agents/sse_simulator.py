@@ -28,12 +28,11 @@ This is useful for:
 """
 
 import asyncio
+import time
 import uuid
 from typing import AsyncGenerator
 
 from rem.api.routers.chat.sse_events import (
-    SSEEvent,
-    TextDeltaEvent,
     ReasoningEvent,
     ActionRequestEvent,
     MetadataEvent,
@@ -46,6 +45,12 @@ from rem.api.routers.chat.sse_events import (
     InputText,
     InputChoiceSet,
     ActionDisplayStyle,
+    format_sse_event,
+)
+from rem.api.routers.chat.models import (
+    ChatCompletionStreamResponse,
+    ChatCompletionStreamChoice,
+    ChatCompletionMessageDelta,
 )
 
 
@@ -128,12 +133,17 @@ async def stream_simulator_events(
     message_id: str | None = None,
     in_reply_to: str | None = None,
     session_id: str | None = None,
-) -> AsyncGenerator[SSEEvent, None]:
+    # Model info
+    model: str = "simulator-v1.0.0",
+) -> AsyncGenerator[str, None]:
     """
     Generate a sequence of SSE events simulating an AI response.
 
     This is a programmatic simulator - no LLM calls are made.
     Events are yielded in a realistic order with configurable delays.
+
+    Text content uses OpenAI-compatible format for consistency with real agents.
+    Other events (reasoning, progress, tool_call, metadata) use named SSE events.
 
     Args:
         prompt: User prompt (used to vary output slightly)
@@ -146,33 +156,37 @@ async def stream_simulator_events(
         message_id: Database ID of the assistant message being streamed
         in_reply_to: Database ID of the user message this responds to
         session_id: Session ID for conversation correlation
+        model: Model name for response metadata
 
     Yields:
-        SSE events in sequence
+        SSE-formatted strings ready for HTTP streaming
 
     Example:
         ```python
-        async for event in stream_simulator_events("demo"):
-            print(f"{event.type}: {event}")
+        async for sse_string in stream_simulator_events("demo"):
+            print(sse_string)
         ```
     """
     delay = delay_ms / 1000.0
+    request_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
+    created_at = int(time.time())
+    is_first_chunk = True
 
     # Phase 1: Reasoning events
     if include_reasoning:
         for i, step in enumerate(DEMO_REASONING_STEPS):
             await asyncio.sleep(delay)
-            yield ReasoningEvent(content=step + "\n", step=i + 1)
+            yield format_sse_event(ReasoningEvent(content=step + "\n", step=i + 1))
 
     # Phase 2: Progress - Starting
     if include_progress:
         await asyncio.sleep(delay)
-        yield ProgressEvent(
+        yield format_sse_event(ProgressEvent(
             step=1,
             total_steps=len(DEMO_PROGRESS_STEPS),
             label=DEMO_PROGRESS_STEPS[0],
             status="in_progress"
-        )
+        ))
 
     # Phase 3: Tool calls
     if include_tool_calls:
@@ -180,32 +194,32 @@ async def stream_simulator_events(
             tool_id = f"call_{uuid.uuid4().hex[:8]}"
 
             await asyncio.sleep(delay)
-            yield ToolCallEvent(
+            yield format_sse_event(ToolCallEvent(
                 tool_name=tool_name,
                 tool_id=tool_id,
                 status="started",
                 arguments=args
-            )
+            ))
 
             await asyncio.sleep(delay * 3)  # Simulate tool execution
-            yield ToolCallEvent(
+            yield format_sse_event(ToolCallEvent(
                 tool_name=tool_name,
                 tool_id=tool_id,
                 status="completed",
                 result=f"Retrieved data for {tool_name}"
-            )
+            ))
 
     # Phase 4: Progress - Generating
     if include_progress:
         await asyncio.sleep(delay)
-        yield ProgressEvent(
+        yield format_sse_event(ProgressEvent(
             step=2,
             total_steps=len(DEMO_PROGRESS_STEPS),
             label=DEMO_PROGRESS_STEPS[1],
             status="in_progress"
-        )
+        ))
 
-    # Phase 5: Stream text content word by word
+    # Phase 5: Stream text content in OpenAI format
     words = DEMO_MARKDOWN_CONTENT.split(" ")
     buffer = ""
     for i, word in enumerate(words):
@@ -213,23 +227,40 @@ async def stream_simulator_events(
         # Emit every few words to simulate realistic streaming
         if len(buffer) > 20 or i == len(words) - 1:
             await asyncio.sleep(delay)
-            yield TextDeltaEvent(content=buffer)
+            # OpenAI-compatible format
+            chunk = ChatCompletionStreamResponse(
+                id=request_id,
+                created=created_at,
+                model=model,
+                choices=[
+                    ChatCompletionStreamChoice(
+                        index=0,
+                        delta=ChatCompletionMessageDelta(
+                            role="assistant" if is_first_chunk else None,
+                            content=buffer,
+                        ),
+                        finish_reason=None,
+                    )
+                ],
+            )
+            is_first_chunk = False
+            yield f"data: {chunk.model_dump_json()}\n\n"
             buffer = ""
 
     # Phase 6: Progress - Formatting
     if include_progress:
         await asyncio.sleep(delay)
-        yield ProgressEvent(
+        yield format_sse_event(ProgressEvent(
             step=3,
             total_steps=len(DEMO_PROGRESS_STEPS),
             label=DEMO_PROGRESS_STEPS[2],
             status="in_progress"
-        )
+        ))
 
     # Phase 7: Metadata (includes message correlation IDs)
     if include_metadata:
         await asyncio.sleep(delay)
-        yield MetadataEvent(
+        yield format_sse_event(MetadataEvent(
             # Message correlation IDs
             message_id=message_id,
             in_reply_to=in_reply_to,
@@ -238,7 +269,7 @@ async def stream_simulator_events(
             confidence=0.95,
             sources=["rem/api/routers/chat/sse_events.py", "rem/agentic/agents/sse_simulator.py"],
             # Model info
-            model_version="simulator-v1.0.0",
+            model_version=model,
             # Performance metrics
             latency_ms=int(len(words) * delay_ms),
             token_count=len(words),
@@ -246,22 +277,22 @@ async def stream_simulator_events(
             flags=["demo_mode"],
             hidden=False,
             extra={"prompt_length": len(prompt)}
-        )
+        ))
 
     # Phase 8: Progress - Preparing actions
     if include_progress:
         await asyncio.sleep(delay)
-        yield ProgressEvent(
+        yield format_sse_event(ProgressEvent(
             step=4,
             total_steps=len(DEMO_PROGRESS_STEPS),
             label=DEMO_PROGRESS_STEPS[3],
             status="in_progress"
-        )
+        ))
 
     # Phase 9: Action solicitation
     if include_actions:
         await asyncio.sleep(delay)
-        yield ActionRequestEvent(
+        yield format_sse_event(ActionRequestEvent(
             card=ActionRequestCard(
                 id=f"feedback-{uuid.uuid4().hex[:8]}",
                 prompt="Was this SSE demonstration helpful?",
@@ -309,81 +340,161 @@ async def stream_simulator_events(
                 timeout_ms=60000,
                 fallback_text="Please provide feedback on this demo."
             )
-        )
+        ))
 
     # Phase 10: Mark all progress complete
     if include_progress:
         for i, label in enumerate(DEMO_PROGRESS_STEPS):
             await asyncio.sleep(delay / 2)
-            yield ProgressEvent(
+            yield format_sse_event(ProgressEvent(
                 step=i + 1,
                 total_steps=len(DEMO_PROGRESS_STEPS),
                 label=label,
                 status="completed"
-            )
+            ))
 
-    # Phase 11: Done
+    # Phase 11: Final chunk with finish_reason
+    final_chunk = ChatCompletionStreamResponse(
+        id=request_id,
+        created=created_at,
+        model=model,
+        choices=[
+            ChatCompletionStreamChoice(
+                index=0,
+                delta=ChatCompletionMessageDelta(),
+                finish_reason="stop",
+            )
+        ],
+    )
+    yield f"data: {final_chunk.model_dump_json()}\n\n"
+
+    # Phase 12: Done event
     await asyncio.sleep(delay)
-    yield DoneEvent(reason="stop")
+    yield format_sse_event(DoneEvent(reason="stop"))
+
+    # Phase 13: OpenAI termination marker
+    yield "data: [DONE]\n\n"
 
 
 async def stream_minimal_demo(
     content: str = "Hello from the simulator!",
     delay_ms: int = 30,
-) -> AsyncGenerator[SSEEvent, None]:
+    model: str = "simulator-v1.0.0",
+) -> AsyncGenerator[str, None]:
     """
     Generate a minimal SSE sequence with just text and done.
 
     Useful for simple testing without all event types.
+    Uses OpenAI-compatible format for text content.
 
     Args:
         content: Text content to stream
         delay_ms: Delay between chunks
+        model: Model name for response metadata
 
     Yields:
-        TextDeltaEvent chunks followed by DoneEvent
+        SSE-formatted strings
     """
     delay = delay_ms / 1000.0
+    request_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
+    created_at = int(time.time())
+    is_first_chunk = True
 
-    # Stream content word by word
+    # Stream content word by word in OpenAI format
     words = content.split(" ")
     for word in words:
         await asyncio.sleep(delay)
-        yield TextDeltaEvent(content=word + " ")
+        chunk = ChatCompletionStreamResponse(
+            id=request_id,
+            created=created_at,
+            model=model,
+            choices=[
+                ChatCompletionStreamChoice(
+                    index=0,
+                    delta=ChatCompletionMessageDelta(
+                        role="assistant" if is_first_chunk else None,
+                        content=word + " ",
+                    ),
+                    finish_reason=None,
+                )
+            ],
+        )
+        is_first_chunk = False
+        yield f"data: {chunk.model_dump_json()}\n\n"
+
+    # Final chunk with finish_reason
+    final_chunk = ChatCompletionStreamResponse(
+        id=request_id,
+        created=created_at,
+        model=model,
+        choices=[
+            ChatCompletionStreamChoice(
+                index=0,
+                delta=ChatCompletionMessageDelta(),
+                finish_reason="stop",
+            )
+        ],
+    )
+    yield f"data: {final_chunk.model_dump_json()}\n\n"
 
     await asyncio.sleep(delay)
-    yield DoneEvent(reason="stop")
+    yield format_sse_event(DoneEvent(reason="stop"))
+    yield "data: [DONE]\n\n"
 
 
 async def stream_error_demo(
     error_after_words: int = 10,
-) -> AsyncGenerator[SSEEvent, None]:
+    model: str = "simulator-v1.0.0",
+) -> AsyncGenerator[str, None]:
     """
     Generate an SSE sequence that ends with an error.
 
     Useful for testing error handling in the frontend.
+    Uses OpenAI-compatible format for text content.
 
     Args:
         error_after_words: Number of words before error
+        model: Model name for response metadata
 
     Yields:
-        Events including an error event
+        SSE-formatted strings including an error event
     """
     from rem.api.routers.chat.sse_events import ErrorEvent
+
+    request_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
+    created_at = int(time.time())
+    is_first_chunk = True
 
     content = "This is a demo that will encounter an error during streaming. Watch what happens when things go wrong..."
     words = content.split(" ")
 
     for i, word in enumerate(words[:error_after_words]):
         await asyncio.sleep(0.03)
-        yield TextDeltaEvent(content=word + " ")
+        chunk = ChatCompletionStreamResponse(
+            id=request_id,
+            created=created_at,
+            model=model,
+            choices=[
+                ChatCompletionStreamChoice(
+                    index=0,
+                    delta=ChatCompletionMessageDelta(
+                        role="assistant" if is_first_chunk else None,
+                        content=word + " ",
+                    ),
+                    finish_reason=None,
+                )
+            ],
+        )
+        is_first_chunk = False
+        yield f"data: {chunk.model_dump_json()}\n\n"
 
     await asyncio.sleep(0.1)
-    yield ErrorEvent(
+    yield format_sse_event(ErrorEvent(
         code="simulated_error",
         message="This is a simulated error for testing purposes",
         details={"words_sent": error_after_words, "demo": True},
         recoverable=True
-    )
+    ))
 
-    yield DoneEvent(reason="error")
+    yield format_sse_event(DoneEvent(reason="error"))
+    yield "data: [DONE]\n\n"

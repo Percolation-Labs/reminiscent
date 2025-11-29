@@ -65,7 +65,7 @@ async def reload_session(
             session_id=session_id, user_id=user_id, decompress=decompress_messages
         )
 
-        logger.info(
+        logger.debug(
             f"Reloaded {len(messages)} messages for session {session_id} "
             f"(decompressed={decompress_messages})"
         )

@@ -309,17 +309,26 @@ class RemService:
         )
 
         # Execute vector search via rem_search() PostgreSQL function
+        min_sim = params.min_similarity if params.min_similarity is not None else 0.3
+        limit = params.limit or 10
         query_params = get_search_params(
             query_embedding,
             table_name,
             field_name,
             tenant_id,
             provider,
-            params.min_similarity or 0.7,
-            params.limit or 10,
+            min_sim,
+            limit,
             tenant_id, # Use tenant_id (query.user_id) as user_id
         )
+        logger.debug(
+            f"SEARCH params: table={table_name}, field={field_name}, "
+            f"tenant_id={tenant_id}, provider={provider}, "
+            f"min_similarity={min_sim}, limit={limit}, "
+            f"embedding_dims={len(query_embedding)}"
+        )
         results = await self.db.execute(SEARCH_QUERY, query_params)
+        logger.debug(f"SEARCH results: {len(results)} rows")
 
         return {
             "query_type": "SEARCH",

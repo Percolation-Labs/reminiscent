@@ -85,12 +85,31 @@ class SessionUpdateRequest(BaseModel):
 
 
 class SessionListResponse(BaseModel):
-    """Response for session list endpoint."""
+    """Response for session list endpoint (deprecated, use SessionsQueryResponse)."""
 
     object: Literal["list"] = "list"
     data: list[Session]
     total: int
     has_more: bool
+
+
+class PaginationMetadata(BaseModel):
+    """Pagination metadata for paginated responses."""
+
+    total: int = Field(description="Total number of records matching filters")
+    page: int = Field(description="Current page number (1-indexed)")
+    page_size: int = Field(description="Number of records per page")
+    total_pages: int = Field(description="Total number of pages")
+    has_next: bool = Field(description="Whether there are more pages after this one")
+    has_previous: bool = Field(description="Whether there are pages before this one")
+
+
+class SessionsQueryResponse(BaseModel):
+    """Response for paginated sessions query."""
+
+    object: Literal["list"] = "list"
+    data: list[Session] = Field(description="List of sessions for the current page")
+    metadata: PaginationMetadata = Field(description="Pagination metadata")
 
 
 # =============================================================================
@@ -101,6 +120,7 @@ class SessionListResponse(BaseModel):
 @router.get("/messages", response_model=MessageListResponse, tags=["messages"])
 async def list_messages(
     request: Request,
+    mine: bool = Query(default=False, description="Only show my messages (uses JWT identity)"),
     user_id: str | None = Query(default=None, description="Filter by user ID (admin only for cross-user)"),
     session_id: str | None = Query(default=None, description="Filter by session ID"),
     start_date: str | None = Query(
@@ -122,8 +142,10 @@ async def list_messages(
     Access Control:
     - Regular users: Only see their own messages
     - Admin users: Can filter by any user_id or see all messages
+    - mine=true: Forces filter to current user (useful for admins to see only their own)
 
     Filters can be combined:
+    - mine: Only show messages owned by current JWT user (overrides user_id)
     - user_id: Filter by the user who created/owns the message (admin only for cross-user)
     - session_id: Filter by conversation session
     - start_date/end_date: Filter by creation time range (ISO 8601 format)
@@ -136,8 +158,15 @@ async def list_messages(
 
     repo = Repository(Message, table_name="messages")
 
+    # If mine=true, force filter to current user's ID from JWT
+    effective_user_id = user_id
+    if mine:
+        current_user = get_current_user(request)
+        if current_user:
+            effective_user_id = current_user.get("id")
+
     # Build user-scoped filters (admin can see all, regular users see only their own)
-    filters = await get_user_filter(request, x_user_id=user_id, x_tenant_id=x_tenant_id)
+    filters = await get_user_filter(request, x_user_id=effective_user_id, x_tenant_id=x_tenant_id)
 
     # Apply optional filters
     if session_id:
@@ -227,17 +256,17 @@ async def get_message(
 # =============================================================================
 
 
-@router.get("/sessions", response_model=SessionListResponse, tags=["sessions"])
+@router.get("/sessions", response_model=SessionsQueryResponse, tags=["sessions"])
 async def list_sessions(
     request: Request,
     user_id: str | None = Query(default=None, description="Filter by user ID (admin only for cross-user)"),
     mode: SessionMode | None = Query(default=None, description="Filter by session mode"),
-    limit: int = Query(default=50, ge=1, le=100, description="Max results to return"),
-    offset: int = Query(default=0, ge=0, description="Offset for pagination"),
+    page: int = Query(default=1, ge=1, description="Page number (1-indexed)"),
+    page_size: int = Query(default=50, ge=1, le=100, description="Number of results per page"),
     x_tenant_id: str = Header(alias="X-Tenant-Id", default="default"),
-) -> SessionListResponse:
+) -> SessionsQueryResponse:
     """
-    List sessions with optional filters.
+    List sessions with optional filters and page-based pagination.
 
     Access Control:
     - Regular users: Only see their own sessions
@@ -247,7 +276,11 @@ async def list_sessions(
     - user_id: Filter by session owner (admin only for cross-user)
     - mode: Filter by session mode (normal or evaluation)
 
-    Returns paginated results ordered by created_at descending.
+    Pagination:
+    - page: Page number (1-indexed, default: 1)
+    - page_size: Number of sessions per page (default: 50, max: 100)
+
+    Returns paginated results ordered by created_at descending with pagination metadata.
     """
     if not settings.postgres.enabled:
         raise HTTPException(status_code=503, detail="Database not enabled")
@@ -259,20 +292,26 @@ async def list_sessions(
     if mode:
         filters["mode"] = mode.value
 
-    sessions = await repo.find(
+    # Use CTE-based pagination with ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at DESC)
+    result = await repo.find_paginated(
         filters,
+        page=page,
+        page_size=page_size,
         order_by="created_at DESC",
-        limit=limit + 1,
-        offset=offset,
+        partition_by="user_id",
     )
 
-    has_more = len(sessions) > limit
-    if has_more:
-        sessions = sessions[:limit]
-
-    total = await repo.count(filters)
-
-    return SessionListResponse(data=sessions, total=total, has_more=has_more)
+    return SessionsQueryResponse(
+        data=result["data"],
+        metadata=PaginationMetadata(
+            total=result["total"],
+            page=result["page"],
+            page_size=result["page_size"],
+            total_pages=result["total_pages"],
+            has_next=result["has_next"],
+            has_previous=result["has_previous"],
+        ),
+    )
 
 
 @router.post("/sessions", response_model=Session, status_code=201, tags=["sessions"])

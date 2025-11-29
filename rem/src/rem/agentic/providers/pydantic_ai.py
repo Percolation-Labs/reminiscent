@@ -175,6 +175,23 @@ class AgentRuntime:
         return self.agent.iter(*args, **kwargs)
 
 
+def _get_builtin_tools() -> list:
+    """
+    Get built-in tools that are always available to agents.
+
+    Currently returns empty list - all tools come from MCP servers.
+    The register_metadata tool is available via the REM MCP server and
+    agents can opt-in by configuring mcp_servers in their schema.
+
+    Returns:
+        List of Pydantic AI tool functions (currently empty)
+    """
+    # NOTE: register_metadata is now an MCP tool, not a built-in.
+    # Agents that want it should configure mcp_servers to load from rem.mcp_server.
+    # This allows agents to choose which tools they need.
+    return []
+
+
 def _create_model_from_schema(agent_schema: dict[str, Any]) -> type[BaseModel]:
     """
     Create Pydantic model dynamically from JSON Schema.
@@ -530,18 +547,42 @@ async def create_agent(
     default_model = context.default_model if context else settings.llm.default_model
     model = get_valid_model_or_default(model_override, default_model)
 
-    # Extract schema fields
-    system_prompt = agent_schema.get("description", "") if agent_schema else ""
-    metadata = agent_schema.get("json_schema_extra", {}) if agent_schema else {}
-    mcp_server_configs = metadata.get("mcp_servers", [])
-    resource_configs = metadata.get("resources", [])
+    # Extract schema fields using typed helpers
+    from ..schema import get_system_prompt, get_metadata
+
+    if agent_schema:
+        system_prompt = get_system_prompt(agent_schema)
+        metadata = get_metadata(agent_schema)
+        mcp_server_configs = [s.model_dump() for s in metadata.mcp_servers] if hasattr(metadata, 'mcp_servers') else []
+        resource_configs = metadata.resources if hasattr(metadata, 'resources') else []
+
+        if metadata.system_prompt:
+            logger.debug("Using custom system_prompt from json_schema_extra")
+    else:
+        system_prompt = ""
+        metadata = None
+        mcp_server_configs = []
+        resource_configs = []
 
     # Extract temperature and max_iterations from schema metadata (with fallback to settings defaults)
-    temperature = metadata.get("override_temperature", settings.llm.default_temperature)
-    max_iterations = metadata.get("override_max_iterations", settings.llm.default_max_iterations)
+    if metadata:
+        temperature = metadata.override_temperature if metadata.override_temperature is not None else settings.llm.default_temperature
+        max_iterations = metadata.override_max_iterations if metadata.override_max_iterations is not None else settings.llm.default_max_iterations
+        use_structured_output = metadata.structured_output
+    else:
+        temperature = settings.llm.default_temperature
+        max_iterations = settings.llm.default_max_iterations
+        use_structured_output = True
+
+    # Build list of tools - start with built-in tools
+    tools = _get_builtin_tools()
+
+    # Get agent name from metadata for logging
+    agent_name = metadata.name if metadata and hasattr(metadata, 'name') else "unknown"
 
     logger.info(
-        f"Creating agent: model={model}, mcp_servers={len(mcp_server_configs)}, resources={len(resource_configs)}"
+        f"Creating agent '{agent_name}': model={model}, mcp_servers={len(mcp_server_configs)}, "
+        f"resources={len(resource_configs)}, builtin_tools={len(tools)}"
     )
 
     # Set agent resource attributes for OTEL (before creating agent)
@@ -550,8 +591,7 @@ async def create_agent(
 
         set_agent_resource_attributes(agent_schema=agent_schema)
 
-    # Build list of tools from MCP server (in-process, no subprocess)
-    tools = []
+    # Add tools from MCP server (in-process, no subprocess)
     if mcp_server_configs:
         for server_config in mcp_server_configs:
             server_type = server_config.get("type")
@@ -589,11 +629,8 @@ async def create_agent(
         # TODO: Convert resources to tools (MCP convenience syntax)
         pass
 
-    # Check if structured output is disabled for this schema
-    # When structured_output: false, properties become part of prompt instead of output_type
-    use_structured_output = metadata.get("structured_output", True)
-
     # Create dynamic result_type from schema if not provided
+    # Note: use_structured_output is set earlier from metadata.structured_output
     if result_type is None and agent_schema and "properties" in agent_schema:
         if use_structured_output:
             # Pre-process schema for Qwen compatibility (strips min/max, sets additionalProperties=False)
@@ -615,21 +652,30 @@ async def create_agent(
         wrapped_result_type = _create_schema_wrapper(
             result_type, strip_description=strip_model_description
         )
+        # Use InstrumentationSettings with version=3 to include agent name in span names
+        from pydantic_ai.models.instrumented import InstrumentationSettings
+        instrumentation = InstrumentationSettings(version=3) if settings.otel.enabled else False
+
         agent = Agent(
             model=model,
+            name=agent_name,  # Used for OTEL span names (version 3: "invoke_agent {name}")
             system_prompt=system_prompt,
             output_type=wrapped_result_type,
             tools=tools,
-            instrument=settings.otel.enabled,  # Conditional OTEL instrumentation
+            instrument=instrumentation,
             model_settings={"temperature": temperature},
             retries=settings.llm.max_retries,
         )
     else:
+        from pydantic_ai.models.instrumented import InstrumentationSettings
+        instrumentation = InstrumentationSettings(version=3) if settings.otel.enabled else False
+
         agent = Agent(
             model=model,
+            name=agent_name,  # Used for OTEL span names (version 3: "invoke_agent {name}")
             system_prompt=system_prompt,
             tools=tools,
-            instrument=settings.otel.enabled,
+            instrument=instrumentation,
             model_settings={"temperature": temperature},
             retries=settings.llm.max_retries,
         )
