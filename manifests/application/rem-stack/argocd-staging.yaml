@@ -26,8 +26,7 @@ spec:
 
   # Source: Git repository with Kustomize
   source:
-    # UPDATE THIS: Your Git repository URL
-    repoURL: https://github.com/anthropics/remstack.git
+    repoURL: https://github.com/Percolation-Labs/reminiscent.git
     targetRevision: main
     path: manifests/application/rem-stack/overlays/staging
 

@@ -26,6 +26,9 @@ jobs:
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rem
 
     steps:
       - name: Checkout
@@ -51,6 +54,9 @@ jobs:
   integration-tests:
     name: Integration Tests
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rem
 
     services:
       postgres:
@@ -108,6 +114,9 @@ jobs:
   type-check:
     name: Type Check
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rem
 
     steps:
       - name: Checkout
@@ -133,6 +142,9 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rem
 
     steps:
       - name: Checkout

@@ -11,9 +11,9 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/YOUR_ORG/remstack.git  # TODO: Update with actual repo
+    repoURL: https://github.com/Percolation-Labs/reminiscent.git
     path: manifests/platform/otel-collector
-    targetRevision: HEAD
+    targetRevision: main
   destination:
     server: https://kubernetes.default.svc
     namespace: observability

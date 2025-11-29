@@ -408,3 +408,83 @@ kubectl get secret rem-api-secrets -n rem -o yaml
 - [CDK Infrastructure](infra/cdk-eks/README.md) - AWS infrastructure
 - [Platform README](platform/README.md) - Platform operators
 - [Application README](application/README.md) - Application deployment
+
+---
+
+## Session Notes
+
+### 2025-11-29: ArgoCD Setup for Private Repo
+
+**Context**: Setting up ArgoCD to deploy rem-stack from private GitHub repo `Percolation-Labs/reminiscent`.
+
+**Issues Encountered**:
+
+1. **Manifest placeholder URLs not updated**
+   - Multiple files had `${GIT_REPO_URL}`, `YOUR_ORG/remstack.git`, or `anthropics/remstack.git` as placeholders
+   - Files updated:
+     - `manifests/platform/argocd/app-of-apps.yaml`
+     - `manifests/application/rem-stack/argocd-staging.yaml`
+     - `manifests/application/rem-stack/argocd-prod.yaml`
+     - `manifests/platform/argocd/applications/cluster-secret-stores.yaml`
+     - `manifests/platform/argocd/applications/otel-collector.yaml`
+     - `manifests/platform/argocd/applications/arize-phoenix.yaml`
+     - `manifests/application/rem-stack/components/api/argocd-application.yaml`
+
+2. **CI workflow missing working directory**
+   - `pyproject.toml` is in `rem/` subdirectory
+   - CI workflow ran commands from repo root, causing path errors
+   - **Fix**: Added `defaults: run: working-directory: rem` to all jobs in `.github/workflows/ci.yaml`
+
+3. **ArgoCD private repo access**
+   - Repo is private, requires credentials
+   - **Fix**: Created repository secret in ArgoCD namespace:
+     ```bash
+     kubectl create secret generic repo-reminiscent \
+       --namespace argocd \
+       --from-literal=url=https://github.com/Percolation-Labs/reminiscent.git \
+       --from-literal=username=<github-user> \
+       --from-literal=password=<github-pat> \
+       --from-literal=type=git
+     kubectl label secret repo-reminiscent -n argocd argocd.argoproj.io/secret-type=repository
+     ```
+
+4. **SSM Parameter username mismatch**
+   - Created `/rem/postgres/username` with value `rem`
+   - CNPG cluster spec defines `owner: remuser`
+   - **Fix**: Update parameter to `remuser`:
+     ```bash
+     aws ssm put-parameter --name /rem/postgres/username --value "remuser" --type String --overwrite
+     ```
+
+5. **Missing SSM parameters**
+   - External secrets failed with `SecretSyncedError`
+   - Required parameters not in AWS Parameter Store
+   - **Fix**: Create all required parameters:
+     ```bash
+     # Database
+     aws ssm put-parameter --name /rem/postgres/username --value "remuser" --type String
+     aws ssm put-parameter --name /rem/postgres/password --value "$(openssl rand -base64 24)" --type SecureString
+
+     # LLM API Keys
+     aws ssm put-parameter --name /rem/llm/anthropic-api-key --value "<key>" --type SecureString
+     aws ssm put-parameter --name /rem/llm/openai-api-key --value "<key>" --type SecureString
+
+     # Auth
+     aws ssm put-parameter --name /rem/auth/session-secret --value "$(openssl rand -base64 32)" --type SecureString
+     aws ssm put-parameter --name /rem/auth/google-client-id --value "placeholder" --type String
+     aws ssm put-parameter --name /rem/auth/google-client-secret --value "placeholder" --type SecureString
+
+     # Phoenix
+     aws ssm put-parameter --name /rem/phoenix/api-key --value "$(openssl rand -base64 32)" --type SecureString
+     aws ssm put-parameter --name /rem/phoenix/secret --value "$(openssl rand -base64 32)" --type SecureString
+     aws ssm put-parameter --name /rem/phoenix/admin-secret --value "$(openssl rand -base64 32)" --type SecureString
+     ```
+
+6. **Force refresh external secrets after parameter changes**
+   ```bash
+   for es in $(kubectl get externalsecrets -n rem -o name); do
+     kubectl annotate $es -n rem force-sync=$(date +%s) --overwrite
+   done
+   ```
+
+**Result**: ArgoCD successfully syncing from private repo. rem-api running. Phoenix has separate database migration issue (not ArgoCD-related).

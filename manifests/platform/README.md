@@ -4,14 +4,25 @@ Platform components deployed via ArgoCD using OCI Helm charts.
 
 ## Forking This Stack
 
-This stack is designed to be forkable. ArgoCD Applications use `${GIT_REPO_URL}` as a placeholder.
+This stack is designed to be forkable. ArgoCD Applications currently point to `https://github.com/Percolation-Labs/reminiscent.git`.
 
-**After forking**, replace `${GIT_REPO_URL}` with your repository URL:
+**After forking**, update the repository URL in all ArgoCD application files:
 
 ```bash
 # Replace in all ArgoCD application files
-find manifests/platform/argocd -name "*.yaml" -exec \
-  sed -i '' 's|\${GIT_REPO_URL}|https://github.com/YOUR_ORG/YOUR_REPO.git|g' {} \;
+find manifests -name "*.yaml" -exec \
+  sed -i '' 's|https://github.com/Percolation-Labs/reminiscent.git|https://github.com/YOUR_ORG/YOUR_REPO.git|g' {} \;
+```
+
+**For private repos**, create an ArgoCD repository secret:
+```bash
+kubectl create secret generic repo-your-repo \
+  --namespace argocd \
+  --from-literal=url=https://github.com/YOUR_ORG/YOUR_REPO.git \
+  --from-literal=username=<github-user> \
+  --from-literal=password=<github-pat> \
+  --from-literal=type=git
+kubectl label secret repo-your-repo -n argocd argocd.argoproj.io/secret-type=repository
 ```
 
 ## Components

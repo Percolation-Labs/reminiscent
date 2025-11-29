@@ -8,9 +8,9 @@ spec:
   project: default
 
   source:
-    repoURL: ${GIT_REPO_URL}
+    repoURL: https://github.com/Percolation-Labs/reminiscent.git
     targetRevision: main
-    path: manifests/application/rem-api
+    path: manifests/application/rem-stack/components/api
 
   destination:
     server: https://kubernetes.default.svc

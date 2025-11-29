@@ -33,8 +33,8 @@ spec:
 
   # Source: Git repository with Kustomize
   source:
-    repoURL: https://github.com/YOUR-ORG/remstack.git  # Change to your fork
-    targetRevision: main  # Git branch for production (e.g., main or production)
+    repoURL: https://github.com/Percolation-Labs/reminiscent.git
+    targetRevision: main
     path: manifests/application/rem-stack/overlays/prod
 
     # Kustomize build options
