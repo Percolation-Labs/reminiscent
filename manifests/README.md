@@ -1,201 +1,224 @@
 # REM Kubernetes Manifests
 
-Kubernetes deployment manifests for the REM platform, organized by layer.
+Kubernetes deployment manifests for the REM platform. These manifests are bundled with `remdb` releases and can be deployed using the `rem` CLI.
 
-## Quick Start Deployment
+## Overview
+
+REM uses a two-cluster architecture:
+
+| Cluster | Purpose | Status |
+|---------|---------|--------|
+| **Application Cluster** | Runs REM workloads (API, workers, PostgreSQL) | ✅ Ready |
+| **Management Cluster** | Runs ArgoCD, manages application clusters | 🚧 WIP |
+
+Currently, the application cluster includes ArgoCD for self-management. The management cluster pattern (hub-spoke) is planned for multi-cluster deployments.
+
+## Quick Start
+
+### Using rem CLI (Recommended)
+
+The `rem` CLI is the primary entry point for cluster deployment:
 
 ```bash
-# 1. Install remdb and initialize (auto-downloads manifests if not present)
+# 1. Install rem CLI
 pip install remdb
-rem cluster init --project-name myproject -y
 
-# Or specify a specific manifest version
-rem cluster init --project-name myproject --manifest-version v0.5.0 -y
+# 2. Initialize manifests (downloads if not present)
+rem cluster init --project-name myproject --git-repo https://github.com/YOUR_ORG/YOUR_REPO.git
 
-# 2. Deploy CDK infrastructure
+# 3. Set credentials
+export ANTHROPIC_API_KEY=sk-ant-...
+export OPENAI_API_KEY=sk-proj-...
+export GITHUB_PAT=ghp_...
+export GITHUB_USERNAME=your-username
+export GITHUB_REPO_URL=https://github.com/YOUR_ORG/YOUR_REPO.git
+
+# 4. Deploy infrastructure (CDK)
 cd manifests/infra/cdk-eks
-cdk deploy REMApplicationClusterA
+npm install
+npx cdk deploy --all --profile rem
 
-# 3. Setup SSM parameters
+# 5. Configure kubectl
+aws eks update-kubeconfig --name <cluster-name> --region us-east-1 --profile rem
+
+# 6. Install ArgoCD
+kubectl create namespace argocd
+kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+kubectl wait --for=condition=available --timeout=300s deployment/argocd-server -n argocd
+
+# 7. Validate prerequisites
+rem cluster validate --pre-argocd
+
+# 8. Create SSM parameters
 rem cluster setup-ssm
 
-# 4. Generate all manifests (includes SQL ConfigMap)
-rem cluster generate
-
-# 5. Validate prerequisites
-rem cluster validate
-
-# 6. Deploy via ArgoCD
-kubectl apply -f manifests/application/rem-stack/argocd-staging.yaml
+# 9. Deploy applications
+rem cluster apply
 ```
 
-**Note:** Manifests are versioned separately from the `remdb` package. Use `--manifest-version` to pin to a specific release.
+### Destroy and Recreate
 
-For detailed troubleshooting and deployment checklist, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+To tear down and rebuild the entire stack:
+
+```bash
+# 1. Delete ArgoCD applications first
+kubectl delete application --all -n argocd
+
+# 2. Destroy CDK stack
+cd manifests/infra/cdk-eks
+npx cdk destroy --all --profile rem
+
+# 3. Recreate (follow Quick Start steps 4-9)
+```
+
+## Manifest Distribution
+
+Manifests are versioned and distributed in two ways:
+
+### 1. Bundled with rem releases
+
+When you run `rem cluster init`, manifests are automatically downloaded from GitHub releases:
+
+```bash
+# Download latest manifests
+rem cluster init -y
+
+# Download specific version
+rem cluster init --manifest-version v0.5.0 -y
+```
+
+The tarball (`manifests.tar.gz`) is attached to each GitHub release.
+
+### 2. In this repository (for development)
+
+For testing and development, manifests live in this repo. Changes here are bundled into releases.
 
 ## Directory Structure
 
 ```
 manifests/
-├── cluster-config.yaml  # Deployment configuration (edit for your environment)
-├── infra/               # Infrastructure layer (EKS, VPC, IAM)
-│   └── cdk-eks/        # AWS CDK for EKS deployment
-├── platform/            # Platform services (ArgoCD, OTEL, PostgreSQL)
-│   ├── argocd/         # GitOps deployment
-│   │   └── applications/  # ArgoCD Application manifests
-│   ├── external-secrets/  # ClusterSecretStores
-│   ├── otel/           # OpenTelemetry collector
-│   ├── arize-phoenix/  # LLM observability
-│   ├── cloudnative-pg/ # PostgreSQL operator
-│   ├── cert-manager/   # Certificate management
-│   └── keda/           # Event-driven autoscaling
-├── application/         # Application workloads
-│   └── rem-stack/      # Full REM stack (API, workers, postgres)
-│       ├── components/ # Base components
-│       └── overlays/   # Environment-specific configs
-└── TROUBLESHOOTING.md  # Deployment guide and common issues
+├── README.md                # This file
+├── TROUBLESHOOTING.md       # Deployment guide and common issues
+├── cluster-config.yaml      # Deployment configuration template
+│
+├── infra/                   # Infrastructure layer
+│   └── cdk-eks/            # AWS CDK for EKS + supporting resources
+│
+├── platform/                # Platform services (deployed via ArgoCD)
+│   ├── argocd/             # ArgoCD app-of-apps pattern
+│   │   └── applications/   # Platform operator applications
+│   ├── cert-manager/       # Certificate management
+│   ├── external-secrets/   # AWS SSM integration
+│   └── ...                 # Other platform components
+│
+├── application/             # Application workloads
+│   └── rem-stack/          # REM application stack
+│       ├── components/     # Base components (API, workers, postgres)
+│       └── overlays/       # Environment configs (staging, prod)
+│
+└── local/                   # Local development (docker-compose)
 ```
 
-## ConfigMap Generator
+## CLI Commands Reference
 
-The `generate-configmap.sh` script bridges infrastructure (CDK/CloudFormation outputs) with application configuration (REM settings.py).
+| Command | Purpose |
+|---------|---------|
+| `rem cluster init` | Initialize config and download manifests |
+| `rem cluster validate` | Check prerequisites (tools, AWS, K8s, ArgoCD) |
+| `rem cluster validate --pre-argocd` | Check only pre-deployment prerequisites |
+| `rem cluster setup-ssm` | Create AWS SSM parameters from env vars |
+| `rem cluster generate` | Regenerate manifests from config |
+| `rem cluster apply` | Deploy ArgoCD applications |
+| `rem cluster apply --dry-run` | Preview deployment |
 
-### Purpose
+## Configuration
 
-- **Pull from CloudFormation**: Infrastructure-created resources (bucket names, queue URLs, cluster metadata)
-- **Pull from REM settings**: Application defaults, nested variable patterns (`S3__*`, `OTEL__*`)
-- **Only override infrastructure-specific values**: Skip settings that have sensible local defaults
+### cluster-config.yaml
 
-### Usage
-
-```bash
-# Generate ConfigMaps (outputs to stdout)
-./generate-configmap.sh
-
-# Apply directly to cluster
-./generate-configmap.sh | kubectl apply -f -
-
-# Save to file for version control
-./generate-configmap.sh > application/rem-api/base/configmap.yaml
-
-# Custom stack/namespace/profile
-./generate-configmap.sh REMApplicationClusterA rem rem
-```
-
-### Generated ConfigMaps
-
-1. **rem-config** (namespace: `rem`)
-   - S3 bucket name (overrides `rem-storage` → `rem-io-dev`)
-   - OTEL endpoint (enables OTEL, points to `observability` namespace)
-   - Phoenix endpoint (enables Phoenix, points to `observability` namespace)
-   - Postgres connection string (points to `postgres-cluster` namespace)
-
-2. **rem-queues** (namespace: `rem`)
-   - SQS queue URLs for file processing
-
-3. **rem-postgres-backup** (namespace: `postgres-cluster`)
-   - S3 backup bucket for CloudNativePG operator
-
-### How It Works
-
-The script:
-1. Fetches CloudFormation stack outputs via AWS CLI
-2. Knows REM's expected environment variable structure (from `rem/src/rem/settings.py`)
-3. Knows cluster namespace architecture (`rem`, `observability`, `postgres-cluster`)
-4. Generates Kubernetes ConfigMaps with comments referencing settings.py line numbers
-5. Only includes values that differ from application defaults
-
-### Example Output
+The main configuration file for your deployment:
 
 ```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: rem-config
+project:
+  name: rem
   namespace: rem
-data:
-  # Default: rem-storage -> Override with CDK-created bucket
-  S3__BUCKET_NAME: "rem-io-dev"
+  environment: staging
 
-  # Default: OTEL__ENABLED=false -> Enable in cluster
-  OTEL__ENABLED: "true"
-  OTEL__COLLECTOR_ENDPOINT: "http://otel-collector.observability.svc.cluster.local:4318"
+git:
+  repoURL: https://github.com/YOUR_ORG/YOUR_REPO.git
+  targetRevision: main
 
-  # ... more settings ...
+aws:
+  region: us-east-1
+  ssmPrefix: /rem
 ```
 
-## Deployment Workflow
+### Environment Variables
 
-### Using CLI (Recommended)
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `ANTHROPIC_API_KEY` | Yes | Anthropic API key |
+| `OPENAI_API_KEY` | Yes | OpenAI API key |
+| `GITHUB_REPO_URL` | Yes | Git repository URL |
+| `GITHUB_PAT` | Yes | GitHub Personal Access Token |
+| `GITHUB_USERNAME` | Yes | GitHub username |
+| `GOOGLE_CLIENT_ID` | No | Google OAuth client ID |
+| `GOOGLE_CLIENT_SECRET` | No | Google OAuth client secret |
+| `AWS_PROFILE` | No | AWS profile (default: rem) |
 
-```bash
-# 1. Initialize config for your project
-rem cluster init --project-name myproject --git-repo https://github.com/myorg/myrepo.git
+## Architecture
 
-# 2. Deploy CDK infrastructure
-cd manifests/infra/cdk-eks
-cdk deploy REMApplicationClusterA
+### Application Cluster
 
-# 3. Setup AWS SSM parameters (secrets)
-rem cluster setup-ssm
-
-# 4. Generate all manifests (includes SQL ConfigMap)
-rem cluster generate
-
-# 5. Validate all prerequisites are met
-rem cluster validate
-
-# 6. Deploy application via ArgoCD
-kubectl apply -f manifests/application/rem-stack/argocd-staging.yaml
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Application Cluster                       │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
+│  │   ArgoCD    │  │ cert-manager│  │ external-secrets    │  │
+│  │ (GitOps)    │  │ (certs)     │  │ (AWS SSM)           │  │
+│  └─────────────┘  └─────────────┘  └─────────────────────┘  │
+│                                                              │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │                    rem namespace                         ││
+│  │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌───────────┐  ││
+│  │  │ rem-api │  │ workers │  │ phoenix │  │ postgres  │  ││
+│  │  │ (HPA)   │  │ (KEDA)  │  │ (OTEL)  │  │ (CNPG)    │  ││
+│  │  └─────────┘  └─────────┘  └─────────┘  └───────────┘  ││
+│  └─────────────────────────────────────────────────────────┘│
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### Manual Deployment
+### Management Cluster (WIP)
 
-1. **Deploy Infrastructure** (see `infra/cdk-eks/README.md`)
-   ```bash
-   cd infra/cdk-eks
-   npx cdk deploy --profile rem
-   ```
+The management cluster pattern enables:
+- Centralized ArgoCD managing multiple clusters
+- Separate blast radius for control plane
+- Multi-region/multi-account deployments
 
-2. **Create SSM Parameters**
-   ```bash
-   aws ssm put-parameter --name "/rem/postgres/username" --value "remuser" --type String
-   aws ssm put-parameter --name "/rem/postgres/password" --value "$(openssl rand -base64 24)" --type SecureString
-   aws ssm put-parameter --name "/rem/llm/anthropic-api-key" --value "sk-ant-..." --type SecureString
-   aws ssm put-parameter --name "/rem/llm/openai-api-key" --value "sk-..." --type SecureString
-   ```
+```
+┌─────────────────────┐
+│ Management Cluster  │
+│  ┌───────────────┐  │       ┌─────────────────┐
+│  │    ArgoCD     │──────────│ App Cluster A   │
+│  │   (central)   │  │       └─────────────────┘
+│  └───────────────┘  │       ┌─────────────────┐
+│                     │───────│ App Cluster B   │
+└─────────────────────┘       └─────────────────┘
+```
 
-3. **Deploy Platform Services** (see `platform/README.md`)
-   ```bash
-   kubectl apply -f platform/argocd/applications/external-secrets-operator.yaml
-   kubectl apply -f platform/argocd/applications/cloudnative-pg.yaml
-   kubectl apply -f platform/argocd/applications/keda.yaml
-   kubectl apply -f platform/external-secrets/cluster-secret-store.yaml
-   kubectl apply -f platform/external-secrets/kubernetes-cluster-secret-store.yaml
-   ```
+This is planned for future releases.
 
-4. **Generate All Manifests** (includes SQL ConfigMap)
-   ```bash
-   rem cluster generate
-   ```
+## Troubleshooting
 
-5. **Deploy Application**
-   ```bash
-   kubectl apply -f application/rem-stack/argocd-staging.yaml
-   ```
+See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for:
+- Deployment checklist
+- Common issues and fixes
+- Session notes from deployments
 
-## Configuration Philosophy
+## Related Documentation
 
-Following CLAUDE.md principles:
-
-- **Infrastructure layer** creates resources (EKS, S3, SQS, VPC)
-- **Platform layer** installs operators and shared services (ArgoCD, OTEL, PostgreSQL)
-- **Application layer** deploys REM workloads
-- **ConfigMap generator** bridges the gap, pulling from both infra outputs and app requirements
-
-## References
-
-- Infrastructure: `infra/*/README.md`
-- Platform: `platform/README.md`
-- Application: `application/README.md`
-- REM Settings: `../rem/src/rem/settings.py`
+| Component | Location |
+|-----------|----------|
+| CDK Infrastructure | `infra/cdk-eks/README.md` |
+| Platform Services | `platform/README.md` |
+| Application Stack | `application/README.md` |
+| REM Package | `../rem/README.md` |

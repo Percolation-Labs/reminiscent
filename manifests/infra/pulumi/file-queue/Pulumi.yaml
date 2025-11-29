@@ -1,3 +1,0 @@
-name: file-queue
-runtime: yaml
-description: S3 bucket notifications to SQS for file processing
