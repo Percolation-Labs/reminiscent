@@ -5,6 +5,9 @@ metadata:
   namespace: argocd
   finalizers:
     - resources-finalizer.argocd.argoproj.io
+  annotations:
+    # Deploy after cert-manager and cluster-issuers (needs ClusterIssuer for webhook certs)
+    argocd.argoproj.io/sync-wave: "1"
 spec:
   project: default
   source:
@@ -18,10 +21,14 @@ spec:
             repository: otel/opentelemetry-collector-k8s
             tag: 0.115.1
         admissionWebhooks:
+          # Use cert-manager for webhook certificates (more reliable than auto-generated)
           certManager:
-            enabled: false
-          autoGenerateCert:
             enabled: true
+            issuerRef:
+              name: selfsigned-cluster-issuer
+              kind: ClusterIssuer
+          autoGenerateCert:
+            enabled: false
   destination:
     server: https://kubernetes.default.svc
     namespace: opentelemetry-operator-system

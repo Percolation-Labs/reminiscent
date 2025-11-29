@@ -1,0 +1,37 @@
+# ClusterIssuers for cert-manager
+#
+# Deploys ClusterIssuers needed by other components (e.g., OTEL operator webhooks).
+# Must deploy AFTER cert-manager CRDs are available (sync-wave: 0).
+#
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cluster-issuers
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  annotations:
+    # Deploy after cert-manager (wave -1) but before components that need issuers
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Percolation-Labs/reminiscent.git
+    targetRevision: main
+    path: manifests/platform/cert-manager
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cert-manager
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false  # cert-manager namespace created by cert-manager app
+      - ServerSideApply=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m

@@ -1,0 +1,145 @@
+# ArgoCD Zero-Touch Bootstrap Implementation Plan
+
+## Goal
+Enable clean cluster bootstrap where everything "just works" after running a single script with environment variables.
+
+## Secrets Ownership Analysis
+
+### Secrets WE Generate (random, we control):
+| Secret | SSM Path | Notes |
+|--------|----------|-------|
+| PostgreSQL password | `/rem/postgres/password` | Random, used by CNPG |
+| Auth session secret | `/rem/auth/session-secret` | Random, for cookie signing |
+| Phoenix API key | `/rem/phoenix/api-key` | Random, for Phoenix auth |
+| Phoenix secret | `/rem/phoenix/secret` | Random, for Phoenix sessions |
+| Phoenix admin secret | `/rem/phoenix/admin-secret` | Random, for Phoenix admin |
+
+### Secrets WE Set (fixed values, we control):
+| Secret | SSM Path | Value | Notes |
+|--------|----------|-------|-------|
+| PostgreSQL username | `/rem/postgres/username` | `remuser` | MUST match CNPG `owner` spec |
+
+### Secrets USER Must Provide:
+| Secret | Env Var | SSM Path | Notes |
+|--------|---------|----------|-------|
+| Anthropic API key | `ANTHROPIC_API_KEY` | `/rem/llm/anthropic-api-key` | Required for LLM |
+| OpenAI API key | `OPENAI_API_KEY` | `/rem/llm/openai-api-key` | Required for LLM |
+| GitHub PAT | `GITHUB_PAT` | N/A (K8s secret) | Required for private repo |
+| GitHub username | `GITHUB_USERNAME` | N/A (K8s secret) | Required for private repo |
+| Google Client ID | `GOOGLE_CLIENT_ID` | `/rem/auth/google-client-id` | Optional, placeholder if not set |
+| Google Client Secret | `GOOGLE_CLIENT_SECRET` | `/rem/auth/google-client-secret` | Optional, placeholder if not set |
+
+## Implementation Tasks
+
+### 1. Bootstrap Script (DONE)
+- [x] Created `scripts/bootstrap-argocd.sh`
+- [x] Takes env vars for user-provided secrets
+- [x] Generates random secrets for auto-generated ones
+- [x] Creates SSM parameters
+- [x] Creates ArgoCD repo secret
+- [x] Applies platform-apps and rem-stack
+
+### 2. Fix OTEL Operator Certs (IN PROGRESS)
+- [x] Updated to use cert-manager instead of autoGenerateCert
+- [ ] Need to ensure ClusterIssuer is deployed BEFORE OTEL operator
+- [ ] Add sync-wave annotations to enforce order
+
+### 3. Deploy ClusterIssuer via ArgoCD
+- [ ] Create ArgoCD application for cluster-issuers
+- [ ] Ensure it deploys after cert-manager but before OTEL operator
+
+### 4. Remove Duplicate Phoenix
+- [ ] Remove phoenix from rem-stack staging overlay (use arize-phoenix instead)
+- [ ] OR remove arize-phoenix app (keep phoenix in rem namespace)
+- Decision: Keep phoenix in rem namespace (simpler), remove arize-phoenix app
+
+### 5. Add Pre-flight Validation
+- [ ] Create `scripts/validate-prereqs.sh`
+- [ ] Check: kubectl access
+- [ ] Check: ArgoCD installed
+- [ ] Check: AWS credentials
+- [ ] Check: Required env vars set
+
+### 6. Update Documentation
+- [ ] Update TROUBLESHOOTING.md with bootstrap instructions
+- [ ] Add .env.example file
+- [ ] Update platform/README.md
+
+## Sync Wave Order (ArgoCD)
+
+```
+Wave -1: cert-manager (needs to be first)
+Wave 0:  cluster-issuers (needs cert-manager CRDs)
+Wave 0:  external-secrets-operator
+Wave 1:  cluster-secret-stores (needs ESO)
+Wave 1:  cloudnative-pg
+Wave 1:  keda
+Wave 1:  opentelemetry-operator (needs cert-manager + ClusterIssuer)
+Wave 2:  otel-collector (needs OTEL operator)
+Wave 2:  arize-phoenix OR remove it
+```
+
+## Files to Create/Modify
+
+### New Files:
+1. `scripts/bootstrap-argocd.sh` - DONE
+2. `scripts/validate-prereqs.sh` - TODO
+3. `manifests/platform/argocd/applications/cluster-issuers.yaml` - TODO
+4. `.env.example` - TODO
+
+### Modified Files:
+1. `manifests/platform/argocd/applications/opentelemetry-operator.yaml` - DONE (cert-manager)
+2. `manifests/platform/argocd/applications/cert-manager.yaml` - TODO (add sync-wave)
+3. `manifests/platform/argocd/applications/arize-phoenix.yaml` - TODO (remove or fix)
+4. `manifests/application/rem-stack/overlays/staging/kustomization.yaml` - TODO (remove phoenix ref)
+5. `manifests/TROUBLESHOOTING.md` - TODO (add bootstrap section)
+6. `manifests/platform/README.md` - TODO (update with env vars)
+
+## Environment Variables Summary
+
+```bash
+# Required - User must provide
+export ANTHROPIC_API_KEY=sk-ant-...      # Anthropic API key
+export OPENAI_API_KEY=sk-proj-...        # OpenAI API key
+export GITHUB_PAT=ghp_...                # GitHub Personal Access Token
+export GITHUB_USERNAME=your-username     # GitHub username
+export GITHUB_REPO_URL=https://github.com/ORG/REPO.git  # Git repo URL (REQUIRED)
+
+# Optional - Will use placeholders if not set
+export GOOGLE_CLIENT_ID=...              # Google OAuth client ID
+export GOOGLE_CLIENT_SECRET=...          # Google OAuth client secret
+
+# Optional - Override defaults
+export AWS_PROFILE=rem                   # AWS profile to use
+export REM_NAMESPACE=rem                 # Kubernetes namespace
+export SSM_PREFIX=/rem                   # SSM parameter prefix
+```
+
+## Pre-ArgoCD Resources (ConfigMaps)
+
+Before ArgoCD can deploy applications, certain ConfigMaps must exist:
+
+### 1. PostgreSQL Init SQL ConfigMap
+CNPG cluster needs SQL scripts for database initialization:
+```bash
+# Generate from migrations
+rem cluster generate-sql-configmap --apply
+# OR
+kubectl create configmap rem-postgres-init-sql \
+  --from-file=001_install.sql=rem/src/rem/sql/migrations/001_install.sql \
+  --from-file=002_install_models.sql=rem/src/rem/sql/migrations/002_install_models.sql \
+  --from-file=003_optional_extensions.sql=rem/src/rem/sql/migrations/003_optional_extensions.sql \
+  -n rem
+```
+
+### 2. Application ConfigMaps
+Generated by ArgoCD via kustomize configMapGenerator - no pre-creation needed.
+
+## Execution Order
+
+1. User sets environment variables
+2. User runs `./scripts/validate-prereqs.sh` (optional but recommended)
+3. User runs `./scripts/bootstrap-argocd.sh`
+4. Script creates SSM params, ArgoCD secret, applies apps
+5. ArgoCD syncs everything in correct order via sync-waves
+6. Done!

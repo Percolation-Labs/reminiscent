@@ -2,6 +2,49 @@
 
 Platform components deployed via ArgoCD using OCI Helm charts.
 
+## Quick Start: Zero-Touch Bootstrap
+
+For a fresh cluster, use the bootstrap script which handles all prerequisites:
+
+```bash
+# 1. Install rem CLI (required)
+pip install remdb
+
+# 2. Copy and configure environment variables
+cp .env.example .env
+# Edit .env with your values (API keys, GitHub credentials, repo URL)
+source .env
+
+# 3. Validate prerequisites
+./scripts/validate-prereqs.sh
+
+# 4. Run bootstrap (creates SSM params, secrets, and deploys ArgoCD apps)
+./scripts/bootstrap-argocd.sh
+```
+
+**Required environment variables:**
+| Variable | Description |
+|----------|-------------|
+| `GITHUB_REPO_URL` | Your fork's URL (e.g., `https://github.com/YOUR_ORG/YOUR_REPO.git`) |
+| `ANTHROPIC_API_KEY` | Anthropic API key for Claude |
+| `OPENAI_API_KEY` | OpenAI API key |
+| `GITHUB_PAT` | GitHub Personal Access Token (repo scope) |
+| `GITHUB_USERNAME` | GitHub username |
+
+**Optional environment variables:**
+| Variable | Description |
+|----------|-------------|
+| `GOOGLE_CLIENT_ID` | Google OAuth client ID (placeholder if not set) |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret (placeholder if not set) |
+| `AWS_PROFILE` | AWS profile to use (default: `rem`) |
+| `REM_NAMESPACE` | Kubernetes namespace (default: `rem`) |
+
+The bootstrap script will:
+1. Create SSM parameters for all secrets (auto-generates PostgreSQL password, Phoenix keys, etc.)
+2. Create ArgoCD repository secret for private repo access
+3. Use `rem` CLI to generate PostgreSQL init ConfigMaps
+4. Deploy platform-apps (app-of-apps) and rem-stack
+
 ## Forking This Stack
 
 This stack is designed to be forkable. ArgoCD Applications currently point to `https://github.com/Percolation-Labs/reminiscent.git`.
@@ -38,13 +81,15 @@ These are deployed by CDK as EKS addons - no manual installation needed:
 
 Platform components deployed as ArgoCD Applications using the OCI repository pattern:
 
-1. **cert-manager**: Certificate management
-2. **external-secrets-operator**: Secret management from AWS Parameter Store
-3. **cluster-secret-stores**: ClusterSecretStores for AWS SSM and K8s secrets
-4. **cloudnative-pg**: PostgreSQL operator for database clusters
-5. **opentelemetry-operator**: OTEL instrumentation and collection
-6. **keda**: Event-driven autoscaling for workers
-7. **arize-phoenix**: LLM observability platform
+1. **cert-manager** (sync-wave: -1): Certificate management - deploys first
+2. **cluster-issuers** (sync-wave: 0): ClusterIssuers for cert-manager
+3. **external-secrets-operator** (sync-wave: 0): Secret management from AWS Parameter Store
+4. **cluster-secret-stores** (sync-wave: 1): ClusterSecretStores for AWS SSM and K8s secrets
+5. **cloudnative-pg** (sync-wave: 1): PostgreSQL operator for database clusters
+6. **opentelemetry-operator** (sync-wave: 1): OTEL instrumentation and collection (uses cert-manager for webhook certs)
+7. **keda** (sync-wave: 1): Event-driven autoscaling for workers
+
+**Note:** Phoenix (LLM observability) is deployed via rem-stack, not as a platform app.
 
 ## Deployment
 
@@ -108,17 +153,17 @@ watch kubectl get applications -n argocd
 # All applications should show: HEALTH=Healthy, STATUS=Synced
 ```
 
-### Deployment Order (Automatic)
+### Deployment Order (Automatic via Sync-Waves)
 
-ArgoCD manages dependencies and deploys in this order:
+ArgoCD manages dependencies using sync-wave annotations:
 
-1. **cert-manager** (required by opentelemetry-operator)
-2. **external-secrets-operator** (required by ClusterSecretStores)
-3. **cluster-secret-stores** (required by applications using ExternalSecrets)
-4. **cloudnative-pg** (required by applications with databases)
-5. **keda** (required by event-driven autoscaling)
-6. **opentelemetry-operator** (required by instrumented applications)
-7. **arize-phoenix** (LLM observability)
+| Wave | Components | Notes |
+|------|-----------|-------|
+| -1 | cert-manager | Must be first (CRDs needed by others) |
+| 0 | cluster-issuers, external-secrets-operator | Need cert-manager CRDs |
+| 1 | cluster-secret-stores, cloudnative-pg, keda, opentelemetry-operator | Need ESO/cert-manager ready |
+
+The OTEL operator uses cert-manager to generate webhook certificates (via `selfsigned-cluster-issuer`).
 
 **Note:** ALB Controller and Karpenter are deployed by CDK, not ArgoCD.
 
@@ -152,10 +197,16 @@ Before deploying platform layer:
 
 ### AWS Parameter Store Secrets
 
-Before deploying, populate required secrets in AWS Parameter Store:
+**Recommended:** Use the bootstrap script which creates all SSM parameters automatically:
+```bash
+./scripts/bootstrap-argocd.sh
+```
+
+**Manual creation** (if not using bootstrap):
 
 ```bash
 # PostgreSQL credentials (required)
+# IMPORTANT: Username MUST be "remuser" to match CNPG cluster owner spec
 aws ssm put-parameter --name /rem/postgres/username --value "remuser" --type String
 aws ssm put-parameter --name /rem/postgres/password --value "$(openssl rand -base64 24)" --type SecureString
 
@@ -168,9 +219,12 @@ aws ssm put-parameter --name /rem/phoenix/api-key --value "$(openssl rand -base6
 aws ssm put-parameter --name /rem/phoenix/secret --value "$(openssl rand -base64 32)" --type SecureString
 aws ssm put-parameter --name /rem/phoenix/admin-secret --value "$(openssl rand -base64 32)" --type SecureString
 
-# Optional: OAuth credentials
-aws ssm put-parameter --name /rem/auth/google-client-id --value "..." --type String
-aws ssm put-parameter --name /rem/auth/google-client-secret --value "..." --type SecureString
+# Auth secrets
+aws ssm put-parameter --name /rem/auth/session-secret --value "$(openssl rand -base64 32)" --type SecureString
+
+# Optional: OAuth credentials (use "placeholder" if not using Google OAuth)
+aws ssm put-parameter --name /rem/auth/google-client-id --value "placeholder" --type String
+aws ssm put-parameter --name /rem/auth/google-client-secret --value "placeholder" --type SecureString
 ```
 
 ### Pod Identity
