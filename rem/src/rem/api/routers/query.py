@@ -216,7 +216,7 @@ class QueryResponse(BaseModel):
 @router.post("/query", response_model=QueryResponse)
 async def execute_query(
     request: QueryRequest,
-    x_user_id: str = Header(..., description="User ID for query isolation"),
+    x_user_id: str | None = Header(default=None, description="User ID for query isolation (optional, uses default if not provided)"),
 ) -> QueryResponse:
     """
     Execute a REM query.
@@ -265,6 +265,9 @@ async def execute_query(
 
         rem_service = RemService(db)
 
+        # Use effective_user_id from settings if not provided
+        effective_user_id = x_user_id or settings.test.effective_user_id
+
         if request.mode == QueryMode.STAGED_PLAN:
             # Staged plan mode - execute multi-stage query plan
             # TODO: Implementation pending in RemService.execute_staged_plan()
@@ -295,7 +298,7 @@ async def execute_query(
 
             result = await rem_service.ask_rem(
                 natural_query=request.query,
-                tenant_id=x_user_id,
+                tenant_id=effective_user_id,
                 llm_model=request.model,
                 plan_mode=request.plan_only,
             )
@@ -333,7 +336,7 @@ async def execute_query(
             rem_query = RemQuery.model_validate({
                 "query_type": query_type,
                 "parameters": parameters,
-                "user_id": x_user_id,
+                "user_id": effective_user_id,
             })
 
             result = await rem_service.execute_query(rem_query)

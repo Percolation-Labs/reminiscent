@@ -16,6 +16,7 @@ from loguru import logger
 
 from ...settings import settings
 from ...services.postgres.schema_generator import SchemaGenerator
+from ...utils.sql_paths import get_package_sql_dir, get_package_migrations_dir
 
 
 def _import_model_modules() -> list[str]:
@@ -55,7 +56,7 @@ def _import_model_modules() -> list[str]:
     "--output-dir",
     type=click.Path(path_type=Path),
     default=None,
-    help=f"Base output directory (default: {settings.sql_dir}/migrations)",
+    help="Base output directory (default: package sql/migrations)",
 )
 def generate(output: Path, output_dir: Path | None):
     """
@@ -110,8 +111,8 @@ def generate(output: Path, output_dir: Path | None):
     models = registry.get_models(include_core=True)
     click.echo(f"Generating schema from {len(models)} registered models")
 
-    # Default to migrations directory
-    actual_output_dir = output_dir or Path(settings.sql_dir) / "migrations"
+    # Default to package migrations directory
+    actual_output_dir = output_dir or get_package_migrations_dir()
     generator = SchemaGenerator(output_dir=actual_output_dir)
 
     # Generate schema from registry
@@ -124,7 +125,7 @@ def generate(output: Path, output_dir: Path | None):
         # Generate background indexes in parent sql dir
         background_indexes = generator.generate_background_indexes()
         if background_indexes:
-            bg_file = Path(settings.sql_dir) / "background_indexes.sql"
+            bg_file = get_package_sql_dir() / "background_indexes.sql"
             bg_file.write_text(background_indexes)
             click.echo(f"✓ Background indexes: {bg_file}")
 
@@ -204,7 +205,7 @@ def validate():
     "-o",
     type=click.Path(path_type=Path),
     default=None,
-    help=f"Output file for background indexes (default: {settings.sql_dir}/background_indexes.sql)",
+    help="Output file for background indexes (default: package sql/background_indexes.sql)",
 )
 def indexes(output: Path):
     """

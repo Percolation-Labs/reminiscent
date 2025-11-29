@@ -420,9 +420,9 @@ def _generate_sql_configmap(project_name: str, namespace: str, output_dir: Path)
 
     Called by `cluster generate` to include SQL migrations in the manifest generation.
     """
-    from ...settings import settings
+    from ...utils.sql_paths import get_package_migrations_dir
 
-    sql_dir = Path(settings.sql_dir) / "migrations"
+    sql_dir = get_package_migrations_dir()
 
     if not sql_dir.exists():
         click.secho(f"  ⚠ SQL directory not found: {sql_dir}", fg="yellow")

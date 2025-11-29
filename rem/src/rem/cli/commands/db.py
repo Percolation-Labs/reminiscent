@@ -126,29 +126,51 @@ def migrate(background_indexes: bool):
 async def _migrate_async(background_indexes: bool):
     """Async implementation of migrate command."""
     from ...settings import settings
+    from ...utils.sql_paths import (
+        get_package_sql_dir,
+        get_user_sql_dir,
+        list_all_migrations,
+    )
 
     click.echo()
     click.echo("REM Database Migration")
     click.echo("=" * 60)
 
-    # Find SQL directory
-    sql_dir = Path(settings.sql_dir)
-    migrations_dir = sql_dir / "migrations"
+    # Find package SQL directory
+    try:
+        package_sql_dir = get_package_sql_dir()
+        click.echo(f"Package SQL: {package_sql_dir}")
+    except FileNotFoundError as e:
+        click.secho(f"✗ {e}", fg="red")
+        raise click.Abort()
 
-    click.echo(f"SQL Directory: {sql_dir}")
+    # Check for user migrations
+    user_sql_dir = get_user_sql_dir()
+    if user_sql_dir:
+        click.echo(f"User SQL: {user_sql_dir}")
+
+    # Get all migrations (package + user)
+    all_migrations = list_all_migrations()
+
+    if not all_migrations:
+        click.secho("✗ No migration files found", fg="red")
+        raise click.Abort()
+
+    click.echo(f"Found {len(all_migrations)} migration(s)")
     click.echo()
 
-    # Standard migration files
-    migrations = [
-        (migrations_dir / "001_install.sql", "Core Infrastructure"),
-        (migrations_dir / "002_install_models.sql", "Entity Tables"),
-    ]
+    # Add background indexes if requested
+    migrations_to_apply = [(f, f.stem) for f in all_migrations]
 
     if background_indexes:
-        migrations.append((sql_dir / "background_indexes.sql", "Background Indexes"))
+        bg_indexes = package_sql_dir / "background_indexes.sql"
+        if bg_indexes.exists():
+            migrations_to_apply.append((bg_indexes, "Background Indexes"))
+        else:
+            click.secho("⚠ background_indexes.sql not found, skipping", fg="yellow")
 
-    # Check files exist
-    for file_path, description in migrations:
+    # Check all files exist (they should, but verify)
+    for file_path, description in migrations_to_apply:
         if not file_path.exists():
             click.secho(f"✗ {file_path.name} not found", fg="red")
             if "002" in file_path.name:
@@ -162,8 +184,8 @@ async def _migrate_async(background_indexes: bool):
     conn_str = settings.postgres.connection_string
     total_time = 0.0
 
-    for file_path, description in migrations:
-        click.echo(f"Applying: {description} ({file_path.name})")
+    for file_path, description in migrations_to_apply:
+        click.echo(f"Applying: {file_path.name}")
 
         sql_content = file_path.read_text(encoding="utf-8")
         start_time = time.time()

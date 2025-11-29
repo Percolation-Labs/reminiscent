@@ -70,7 +70,7 @@ docker compose -f docker-compose.prebuilt.yml up -d postgres
 # Add --claude-desktop to register with Claude Desktop app
 rem configure --install --claude-desktop
 
-# Load quickstart dataset (uses default user)
+# Load quickstart dataset
 rem db load datasets/quickstart/sample_data.yaml
 
 # Ask questions
@@ -82,10 +82,6 @@ rem process ingest datasets/formats/files/bitcoin_whitepaper.pdf --category rese
 
 # Query ingested content
 rem ask "What is the Bitcoin whitepaper about?"
-
-# Try other datasets (use --user-id for multi-tenant scenarios)
-rem db load datasets/domains/recruitment/scenarios/candidate_pipeline/data.yaml --user-id acme-corp
-rem ask --user-id acme-corp "Show me candidates with Python experience"
 ```
 
 **What you get:**
@@ -172,23 +168,19 @@ Configuration saved to `~/.rem/config.yaml` (can edit with `rem configure --edit
 # Clone datasets repository
 git clone https://github.com/Percolation-Labs/remstack-lab.git
 
-# Load quickstart dataset (uses default user)
+# Load quickstart dataset
 rem db load --file remstack-lab/datasets/quickstart/sample_data.yaml
 
 # Test with sample queries
 rem ask "What documents exist in the system?"
 rem ask "Show me meetings about API design"
 rem ask "Who is Sarah Chen?"
-
-# Try domain-specific datasets (use --user-id for multi-tenant scenarios)
-rem db load --file remstack-lab/datasets/domains/recruitment/scenarios/candidate_pipeline/data.yaml --user-id acme-corp
-rem ask --user-id acme-corp "Show me candidates with Python experience"
 ```
 
 **Option B: Bring your own data**
 
 ```bash
-# Ingest your own files (uses default user)
+# Ingest your own files
 echo "REM is a bio-inspired memory system for agentic AI workloads." > test-doc.txt
 rem process ingest test-doc.txt --category documentation --tags rem,ai
 
@@ -202,7 +194,6 @@ rem ask "What do you know about REM from my knowledge base?"
 # Test the OpenAI-compatible chat completions API
 curl -X POST http://localhost:8000/api/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "X-User-Id: demo-user" \
   -d '{
     "model": "anthropic:claude-sonnet-4-5-20250929",
     "messages": [{"role": "user", "content": "What documents did Sarah Chen author?"}],
@@ -230,14 +221,11 @@ curl -X POST http://localhost:8000/api/v1/chat/completions \
 ```bash
 cd remstack-lab
 
-# Load any dataset (uses default user)
+# Load any dataset
 rem db load --file datasets/quickstart/sample_data.yaml
 
 # Explore formats
 rem db load --file datasets/formats/engrams/scenarios/team_meeting/team_standup_meeting.yaml
-
-# Try domain-specific examples (use --user-id for multi-tenant scenarios)
-rem db load --file datasets/domains/recruitment/scenarios/candidate_pipeline/data.yaml --user-id acme-corp
 ```
 
 ## See Also
@@ -391,19 +379,14 @@ REM provides **4 built-in MCP tools** your agents can use:
 
 ### Multi-User Isolation
 
-Custom agents are **scoped by `user_id`**, ensuring complete data isolation:
+For multi-tenant deployments, custom agents are **scoped by `user_id`**, ensuring complete data isolation. Use `--user-id` flag when you need tenant separation:
 
 ```bash
-# User A creates a custom agent
-rem process ingest my-agent.yaml --user-id user-a --category agents
+# Create agent for specific tenant
+rem process ingest my-agent.yaml --user-id tenant-a --category agents
 
-# User B cannot see User A's agent
-rem ask my-agent "test" --user-id user-b
-# ❌ Error: Schema not found (LOOKUP returns no results for user-b)
-
-# User A can use their agent
-rem ask my-agent "test" --user-id user-a
-# ✅ Works - LOOKUP finds schema for user-a
+# Query with tenant context
+rem ask my-agent "test" --user-id tenant-a
 ```
 
 ### Advanced: Ontology Extractors
@@ -631,8 +614,8 @@ POST /api/v1/chat/completions
 ```
 
 **Headers**:
-- `X-Tenant-Id`: Tenant identifier (required for REM)
-- `X-User-Id`: User identifier
+- `X-Tenant-Id`: Tenant identifier (optional, for multi-tenant deployments)
+- `X-User-Id`: User identifier (optional, uses default if not provided)
 - `X-Session-Id`: Session/conversation identifier
 - `X-Agent-Schema`: Agent schema URI to use
 
@@ -1114,14 +1097,11 @@ Test Pydantic AI agent with natural language queries.
 # Ask a question
 rem ask "What documents did Sarah Chen author?"
 
-# With context headers
-rem ask "Find all resources about API design" \
-  --user-id user-123 \
-  --tenant-id acme-corp
-
 # Use specific agent schema
-rem ask "Analyze this contract" \
-  --agent-schema contract-analyzer-v1
+rem ask contract-analyzer "Analyze this contract"
+
+# Stream response
+rem ask "Find all resources about API design" --stream
 ```
 
 ### Global Options
@@ -1515,6 +1495,37 @@ Generate this structure with: `rem scaffold my-app`
 | **MCP Prompts** | `@app.mcp_server.prompt()` or `app.mcp_server.add_prompt(fn)` |
 | **Models** | `rem.register_models(Model)` then `rem db schema generate` |
 | **Agent Schemas** | `rem.register_schema_path("./schemas")` or `SCHEMA__PATHS` env var |
+| **SQL Migrations** | Place in `sql/migrations/` (auto-detected) |
+
+### Custom Migrations
+
+REM automatically discovers migrations from two sources:
+
+1. **Package migrations** (001-099): Built-in migrations from the `remdb` package
+2. **User migrations** (100+): Your custom migrations in `./sql/migrations/`
+
+**Convention**: Place custom SQL files in `sql/migrations/` relative to your project root:
+
+```
+my-rem-app/
+├── sql/
+│   └── migrations/
+│       ├── 100_custom_table.sql      # Runs after package migrations
+│       ├── 101_add_indexes.sql
+│       └── 102_custom_functions.sql
+└── ...
+```
+
+**Numbering**: Use 100+ for user migrations to ensure they run after package migrations (001-099). All migrations are sorted by filename, so proper numbering ensures correct execution order.
+
+**Running migrations**:
+```bash
+# Apply all migrations (package + user)
+rem db migrate
+
+# Apply with background indexes (for production)
+rem db migrate --background-indexes
+```
 
 ## License
 

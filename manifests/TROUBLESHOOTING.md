@@ -487,4 +487,40 @@ kubectl get secret rem-api-secrets -n rem -o yaml
    done
    ```
 
-**Result**: ArgoCD successfully syncing from private repo. rem-api running. Phoenix has separate database migration issue (not ArgoCD-related).
+7. **Duplicate ArgoCD applications from old repo**
+   - Old apps `cloudnativepg` and `external-secrets` conflicted with new `cloudnative-pg` and `external-secrets-operator`
+   - **Fix**: Delete old duplicates:
+     ```bash
+     kubectl delete application cloudnativepg external-secrets -n argocd
+     ```
+
+8. **OpenTelemetry operator webhook certificate error**
+   - Error: `tls: failed to verify certificate: x509: certificate signed by unknown authority`
+   - otel-collector app stuck OutOfSync due to webhook rejecting creates
+   - **Cause**: The webhook caBundle doesn't match the operator's TLS cert. This can happen after operator restarts or upgrades.
+   - **Fix (nuclear option)**: Delete and recreate the OTEL operator ArgoCD app to regenerate certs:
+     ```bash
+     # Delete the app (ArgoCD finalizer will clean up resources)
+     kubectl delete application opentelemetry-operator -n argocd
+
+     # Wait for cleanup, then sync platform-apps to recreate
+     sleep 10
+     kubectl annotate application platform-apps -n argocd argocd.argoproj.io/refresh=hard --overwrite
+     kubectl patch application platform-apps -n argocd --type merge -p '{"operation":{"sync":{"revision":"HEAD"}}}'
+
+     # Wait for operator, then sync otel-collector
+     sleep 30
+     kubectl patch application otel-collector -n argocd --type merge -p '{"operation":{"sync":{"revision":"HEAD"}}}'
+     ```
+   - **Note**: Do NOT manually delete the cert secret - the operator pod needs it to start
+
+9. **Changes must be pushed before ArgoCD sees them**
+   - Local manifest changes don't affect ArgoCD until pushed to git
+   - Apps showed "Unknown" sync status because they still had old placeholder URLs in cluster
+   - **Fix**: Commit, push, then hard refresh:
+     ```bash
+     git add -A && git commit -m "update manifests" && git push
+     kubectl annotate application platform-apps -n argocd argocd.argoproj.io/refresh=hard --overwrite
+     ```
+
+**Result**: ArgoCD successfully syncing from private repo. rem-api running. Phoenix recovered after fixing credentials.

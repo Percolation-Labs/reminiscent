@@ -405,9 +405,7 @@ def configure_command(install: bool, claude_desktop: bool, show: bool, edit: boo
 
                 # Create a context for the command and invoke it
                 ctx = click.Context(migrate)
-                ctx.invoke(migrate, install_only=False, models_only=False,
-                          background_indexes=False, connection=None,
-                          sql_dir=Path("rem/sql"))
+                ctx.invoke(migrate, background_indexes=False)
 
                 click.echo("✅ Database installation complete")
 

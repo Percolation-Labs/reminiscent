@@ -40,6 +40,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 from ...settings import settings
+from ...utils.sql_paths import get_package_sql_dir
 from .register_type import register_type, should_embed_field
 
 # Namespace UUID for generating deterministic UUIDs from model names
@@ -234,9 +235,9 @@ class SchemaGenerator:
         Initialize schema generator.
 
         Args:
-            output_dir: Optional directory for output files (defaults to settings.sql_dir)
+            output_dir: Optional directory for output files (defaults to package sql dir)
         """
-        self.output_dir = output_dir or Path(settings.sql_dir)
+        self.output_dir = output_dir or get_package_sql_dir()
         self.schemas: dict[str, dict] = {}
 
     def discover_models(self, directory: str | Path) -> dict[str, Type[BaseModel]]:

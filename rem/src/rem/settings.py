@@ -1334,11 +1334,6 @@ class Settings(BaseSettings):
         description="Root path for reverse proxy (e.g., /rem for ALB routing)",
     )
 
-    sql_dir: str = Field(
-        default="src/rem/sql",
-        description="Directory for SQL files and migrations",
-    )
-
     # Nested settings groups
     api: APISettings = Field(default_factory=APISettings)
     chat: ChatSettings = Field(default_factory=ChatSettings)
