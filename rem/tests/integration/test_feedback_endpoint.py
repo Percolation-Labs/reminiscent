@@ -1,7 +1,7 @@
 """
-Integration tests for feedback endpoints.
+Integration tests for feedback endpoint.
 
-Tests the /feedback API endpoints including submission and retrieval.
+Tests the /api/v1/messages/feedback API endpoint for submitting feedback.
 """
 
 import pytest
@@ -17,47 +17,17 @@ def client():
     return TestClient(app)
 
 
-class TestFeedbackCategoriesEndpoint:
-    """Tests for GET /api/v1/feedback/categories endpoint."""
-
-    def test_list_categories(self, client):
-        """Should return all predefined categories."""
-        response = client.get("/api/v1/feedback/categories")
-        assert response.status_code == 200
-
-        data = response.json()
-        assert "categories" in data
-        assert len(data["categories"]) > 0
-
-        # Check category structure
-        category = data["categories"][0]
-        assert "value" in category
-        assert "label" in category
-        assert "description" in category
-        assert "sentiment" in category
-
-    def test_categories_include_sentiments(self, client):
-        """Categories should have positive, negative, and neutral sentiments."""
-        response = client.get("/api/v1/feedback/categories")
-        data = response.json()
-
-        sentiments = {c["sentiment"] for c in data["categories"]}
-        assert "positive" in sentiments
-        assert "negative" in sentiments
-        assert "neutral" in sentiments
-
-
 @pytest.mark.skipif(
     not settings.postgres.enabled,
     reason="Database not enabled (POSTGRES__ENABLED=false)"
 )
 class TestFeedbackSubmissionEndpoint:
-    """Tests for POST /api/v1/feedback endpoint."""
+    """Tests for POST /api/v1/messages/feedback endpoint."""
 
     def test_submit_session_feedback(self, client):
         """Should submit feedback for a session."""
         response = client.post(
-            "/api/v1/feedback",
+            "/api/v1/messages/feedback",
             json={
                 "session_id": "test-session-123",
                 "rating": 4,
@@ -83,7 +53,7 @@ class TestFeedbackSubmissionEndpoint:
         # Use a valid UUID format for message_id
         message_id = "00000000-0000-0000-0000-000000000456"
         response = client.post(
-            "/api/v1/feedback",
+            "/api/v1/messages/feedback",
             json={
                 "session_id": "test-session-123",
                 "message_id": message_id,
@@ -104,7 +74,7 @@ class TestFeedbackSubmissionEndpoint:
     def test_submit_thumbs_down(self, client):
         """Should accept thumbs down rating (-1)."""
         response = client.post(
-            "/api/v1/feedback",
+            "/api/v1/messages/feedback",
             json={
                 "session_id": "test-session-123",
                 "rating": -1,
@@ -122,7 +92,7 @@ class TestFeedbackSubmissionEndpoint:
     def test_submit_feedback_with_trace(self, client):
         """Should accept explicit trace info."""
         response = client.post(
-            "/api/v1/feedback",
+            "/api/v1/messages/feedback",
             json={
                 "session_id": "test-session-123",
                 "rating": 4,
@@ -143,7 +113,7 @@ class TestFeedbackSubmissionEndpoint:
     def test_submit_feedback_comment_only(self, client):
         """Should accept feedback with only comment (no rating)."""
         response = client.post(
-            "/api/v1/feedback",
+            "/api/v1/messages/feedback",
             json={
                 "session_id": "test-session-123",
                 "comment": "Just a note about this session",
@@ -155,71 +125,3 @@ class TestFeedbackSubmissionEndpoint:
         )
         assert response.status_code == 201
         assert response.json()["rating"] is None
-
-
-@pytest.mark.skipif(
-    not settings.postgres.enabled,
-    reason="Database not enabled (POSTGRES__ENABLED=false)"
-)
-class TestFeedbackListEndpoint:
-    """Tests for GET /api/v1/feedback endpoint."""
-
-    def test_list_feedback_empty(self, client):
-        """Should return empty list when no feedback."""
-        response = client.get(
-            "/api/v1/feedback",
-            headers={
-                "X-User-Id": "unique-test-user",
-                "X-Tenant-Id": "unique-test-tenant",
-            },
-        )
-        assert response.status_code == 200
-
-        data = response.json()
-        assert data["object"] == "list"
-        assert isinstance(data["data"], list)
-
-    def test_list_feedback_with_filters(self, client):
-        """Should filter feedback by session_id."""
-        # First submit some feedback
-        client.post(
-            "/api/v1/feedback",
-            json={
-                "session_id": "filter-test-session",
-                "rating": 5,
-            },
-            headers={
-                "X-User-Id": "filter-test-user",
-                "X-Tenant-Id": "filter-test-tenant",
-            },
-        )
-
-        # Then filter by session
-        response = client.get(
-            "/api/v1/feedback?session_id=filter-test-session",
-            headers={
-                "X-User-Id": "filter-test-user",
-                "X-Tenant-Id": "filter-test-tenant",
-            },
-        )
-        assert response.status_code == 200
-
-        data = response.json()
-        for feedback in data["data"]:
-            assert feedback["session_id"] == "filter-test-session"
-
-
-@pytest.mark.skipif(
-    not settings.postgres.enabled,
-    reason="Database not enabled (POSTGRES__ENABLED=false)"
-)
-class TestFeedbackGetEndpoint:
-    """Tests for GET /api/v1/feedback/{id} endpoint."""
-
-    def test_get_nonexistent_feedback(self, client):
-        """Should return 404 for unknown feedback."""
-        response = client.get(
-            "/api/v1/feedback/00000000-0000-0000-0000-000000000000",
-            headers={"X-Tenant-Id": "test-tenant"},
-        )
-        assert response.status_code == 404

@@ -605,6 +605,162 @@ COMMENT ON TABLE rate_limits IS
 'UNLOGGED rate limiting table. Counts may be lost on crash (acceptable for rate limiting).';
 
 -- ============================================================================
+-- SHARED SESSIONS HELPER FUNCTIONS
+-- ============================================================================
+-- Note: The shared_sessions TABLE is created by 002_install_models.sql (auto-generated)
+-- These functions provide aggregate queries for the session sharing workflow.
+
+-- Count distinct users sharing sessions with the current user
+CREATE OR REPLACE FUNCTION fn_count_shared_with_me(
+    p_tenant_id VARCHAR(100),
+    p_user_id VARCHAR(256)
+)
+RETURNS BIGINT AS $$
+BEGIN
+    RETURN (
+        SELECT COUNT(DISTINCT owner_user_id)
+        FROM shared_sessions
+        WHERE tenant_id = p_tenant_id
+          AND shared_with_user_id = p_user_id
+          AND deleted_at IS NULL
+    );
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+COMMENT ON FUNCTION fn_count_shared_with_me IS
+'Count distinct users sharing sessions with the specified user.';
+
+-- Get aggregated summary of users sharing sessions with current user
+CREATE OR REPLACE FUNCTION fn_get_shared_with_me(
+    p_tenant_id VARCHAR(100),
+    p_user_id VARCHAR(256),
+    p_limit INTEGER DEFAULT 50,
+    p_offset INTEGER DEFAULT 0
+)
+RETURNS TABLE(
+    user_id VARCHAR(256),
+    name VARCHAR(256),
+    email VARCHAR(256),
+    session_count BIGINT,
+    message_count BIGINT,
+    first_message_at TIMESTAMP,
+    last_message_at TIMESTAMP
+) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        ss.owner_user_id AS user_id,
+        COALESCE(u.name, ss.owner_user_id) AS name,
+        u.email AS email,
+        COUNT(DISTINCT ss.session_id)::BIGINT AS session_count,
+        COALESCE(SUM(msg_counts.msg_count), 0)::BIGINT AS message_count,
+        MIN(msg_counts.first_msg)::TIMESTAMP AS first_message_at,
+        MAX(msg_counts.last_msg)::TIMESTAMP AS last_message_at
+    FROM shared_sessions ss
+    LEFT JOIN users u ON u.user_id = ss.owner_user_id AND u.tenant_id = ss.tenant_id
+    LEFT JOIN (
+        SELECT
+            m.session_id,
+            m.user_id,
+            COUNT(*)::BIGINT AS msg_count,
+            MIN(m.created_at) AS first_msg,
+            MAX(m.created_at) AS last_msg
+        FROM messages m
+        WHERE m.tenant_id = p_tenant_id
+          AND m.deleted_at IS NULL
+        GROUP BY m.session_id, m.user_id
+    ) msg_counts ON msg_counts.session_id = ss.session_id AND msg_counts.user_id = ss.owner_user_id
+    WHERE ss.tenant_id = p_tenant_id
+      AND ss.shared_with_user_id = p_user_id
+      AND ss.deleted_at IS NULL
+    GROUP BY ss.owner_user_id, u.name, u.email
+    ORDER BY MAX(msg_counts.last_msg) DESC NULLS LAST
+    LIMIT p_limit
+    OFFSET p_offset;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+COMMENT ON FUNCTION fn_get_shared_with_me IS
+'Get aggregated summary of users sharing sessions with the specified user.';
+
+-- Count messages in sessions shared by a specific user
+CREATE OR REPLACE FUNCTION fn_count_shared_messages(
+    p_tenant_id VARCHAR(100),
+    p_recipient_user_id VARCHAR(256),
+    p_owner_user_id VARCHAR(256)
+)
+RETURNS BIGINT AS $$
+BEGIN
+    RETURN (
+        SELECT COUNT(*)
+        FROM messages m
+        WHERE m.tenant_id = p_tenant_id
+          AND m.deleted_at IS NULL
+          AND m.session_id IN (
+              SELECT ss.session_id
+              FROM shared_sessions ss
+              WHERE ss.tenant_id = p_tenant_id
+                AND ss.owner_user_id = p_owner_user_id
+                AND ss.shared_with_user_id = p_recipient_user_id
+                AND ss.deleted_at IS NULL
+          )
+    );
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+COMMENT ON FUNCTION fn_count_shared_messages IS
+'Count messages in sessions shared by a specific user with the recipient.';
+
+-- Get messages from sessions shared by a specific user
+CREATE OR REPLACE FUNCTION fn_get_shared_messages(
+    p_tenant_id VARCHAR(100),
+    p_recipient_user_id VARCHAR(256),
+    p_owner_user_id VARCHAR(256),
+    p_limit INTEGER DEFAULT 50,
+    p_offset INTEGER DEFAULT 0
+)
+RETURNS TABLE(
+    id UUID,
+    content TEXT,
+    message_type VARCHAR(256),
+    session_id VARCHAR(256),
+    model VARCHAR(256),
+    token_count INTEGER,
+    created_at TIMESTAMP,
+    metadata JSONB
+) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        m.id,
+        m.content,
+        m.message_type,
+        m.session_id,
+        m.model,
+        m.token_count,
+        m.created_at,
+        m.metadata
+    FROM messages m
+    WHERE m.tenant_id = p_tenant_id
+      AND m.deleted_at IS NULL
+      AND m.session_id IN (
+          SELECT ss.session_id
+          FROM shared_sessions ss
+          WHERE ss.tenant_id = p_tenant_id
+            AND ss.owner_user_id = p_owner_user_id
+            AND ss.shared_with_user_id = p_recipient_user_id
+            AND ss.deleted_at IS NULL
+      )
+    ORDER BY m.created_at DESC
+    LIMIT p_limit
+    OFFSET p_offset;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+COMMENT ON FUNCTION fn_get_shared_messages IS
+'Get messages from sessions shared by a specific user with the recipient.';
+
+-- ============================================================================
 -- RECORD INSTALLATION
 -- ============================================================================
 

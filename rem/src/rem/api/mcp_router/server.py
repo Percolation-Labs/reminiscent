@@ -127,10 +127,12 @@ def create_mcp_server(is_local: bool = False) -> FastMCP:
             "AVAILABLE TOOLS\n"
             "═══════════════════════════════════════════════════════════════════════════\n"
             "\n"
-            "• rem_query - Execute REM queries (LOOKUP, FUZZY, SEARCH, SQL, TRAVERSE)\n"
-            "• ask_rem - Natural language to REM query conversion\n"
+            "• search_rem - Execute REM queries (LOOKUP, FUZZY, SEARCH, SQL, TRAVERSE)\n"
+            "• ask_rem_agent - Natural language to REM query conversion\n"
             "  - plan_mode=True: Hints agent to use TRAVERSE with depth=0 for edge analysis\n"
-            "• parse_and_ingest_file - Ingest files from local paths (local server only), s3://, or https://\n"
+            "• ingest_into_rem - Ingest files from local paths (local server only), s3://, or https://\n"
+            "• list_schema - List all database schemas (tables) with row counts\n"
+            "• get_schema - Get detailed schema for a specific table (columns, types, indexes)\n"
             "\n"
             "═══════════════════════════════════════════════════════════════════════════\n"
             "AVAILABLE RESOURCES (Read-Only)\n"
@@ -175,7 +177,9 @@ def create_mcp_server(is_local: bool = False) -> FastMCP:
     # Register REM tools
     from .tools import (
         ask_rem_agent,
+        get_schema,
         ingest_into_rem,
+        list_schema,
         read_resource,
         register_metadata,
         search_rem,
@@ -185,6 +189,8 @@ def create_mcp_server(is_local: bool = False) -> FastMCP:
     mcp.tool()(ask_rem_agent)
     mcp.tool()(read_resource)
     mcp.tool()(register_metadata)
+    mcp.tool()(list_schema)
+    mcp.tool()(get_schema)
 
     # File ingestion tool (with local path support for local servers)
     # Wrap to inject is_local parameter

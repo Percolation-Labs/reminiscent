@@ -591,6 +591,22 @@ async def create_agent(
 
         set_agent_resource_attributes(agent_schema=agent_schema)
 
+    # Extract schema metadata for search_rem tool description suffix
+    # This allows entity schemas to add context-specific notes to the search_rem tool
+    search_rem_suffix = None
+    if metadata:
+        # Check for default_search_table in metadata (set by entity schemas)
+        extra = agent_schema.get("json_schema_extra", {}) if agent_schema else {}
+        default_table = extra.get("default_search_table")
+        has_embeddings = extra.get("has_embeddings", False)
+
+        if default_table:
+            # Build description suffix for search_rem
+            search_rem_suffix = f"\n\nFor this schema, use `search_rem` to query `{default_table}`. "
+            if has_embeddings:
+                search_rem_suffix += f"SEARCH works well on {default_table} (has embeddings). "
+            search_rem_suffix += f"Example: `SEARCH \"your query\" FROM {default_table} LIMIT 10`"
+
     # Add tools from MCP server (in-process, no subprocess)
     if mcp_server_configs:
         for server_config in mcp_server_configs:
@@ -614,9 +630,17 @@ async def create_agent(
                     mcp_tools_dict = await mcp_server.get_tools()
 
                     for tool_name, tool_func in mcp_tools_dict.items():
-                        wrapped_tool = create_mcp_tool_wrapper(tool_name, tool_func, user_id=context.user_id if context else None)
+                        # Add description suffix to search_rem tool if schema specifies a default table
+                        tool_suffix = search_rem_suffix if tool_name == "search_rem" else None
+
+                        wrapped_tool = create_mcp_tool_wrapper(
+                            tool_name,
+                            tool_func,
+                            user_id=context.user_id if context else None,
+                            description_suffix=tool_suffix,
+                        )
                         tools.append(wrapped_tool)
-                        logger.debug(f"Loaded MCP tool: {tool_name}")
+                        logger.debug(f"Loaded MCP tool: {tool_name}" + (" (with schema suffix)" if tool_suffix else ""))
 
                     logger.info(f"Loaded {len(mcp_tools_dict)} tools from MCP server: {server_id} (in-process)")
 

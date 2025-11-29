@@ -1,0 +1,36 @@
+---
+# Kustomization for UNLOGGED Table Restorer
+#
+# Deploys the infrastructure to automatically rebuild UNLOGGED tables
+# (kv_store, rate_limits) after PostgreSQL restarts or failovers.
+#
+# Components:
+# - CronJob: Periodic check every 5 minutes (belt & suspenders)
+# - Argo Events: Event-driven trigger on CNPG Cluster status changes
+#
+# Prerequisites:
+# - Argo Events operator installed
+# - CNPG Cluster deployed
+# - Database credentials secret exists
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: rem
+
+labels:
+  - pairs:
+      app.kubernetes.io/name: unlogged-restorer
+      app.kubernetes.io/component: maintenance
+      app.kubernetes.io/part-of: rem
+    includeSelectors: false
+
+resources:
+  # Periodic CronJob (always runs as fallback)
+  - cronjob.yaml
+  # Argo Events for real-time detection (optional - comment out if Argo Events not installed)
+  - argo-eventsource.yaml
+  - argo-sensor.yaml
+
+# Common labels for all resources
+commonLabels:
+  team: rem

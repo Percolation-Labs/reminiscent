@@ -58,7 +58,7 @@ users:
 resources:
   - id: 06179554-0f2b-5548-a9c5-87d4cc576473
     tenant_id: acme-corp
-    user_id: bb55c781-f880-594a-82e5-5191f0b64be8
+    # user_id: null (public data - visible to all)
     name: API Design Document v2
     uri: s3://acme-docs/api-design-v2.md
     content: |
@@ -88,22 +88,22 @@ resources:
       version: "2.0"
       status: approved
     graph_edges:
-      - dst: bb55c781-f880-594a-82e5-5191f0b64be8
+      - dst: Sarah Chen
         rel_type: authored_by
         weight: 1.0
         properties: {}
-      - dst: 3c4bfc2a-33b2-566f-85f1-62be50fe58d6
+      - dst: Mike Johnson
         rel_type: reviewed_by
         weight: 0.8
         properties: {}
-      - dst: ce0d7bd1-bcd5-57da-9fbe-c7d5f5b36020
+      - dst: API Design Document v1
         rel_type: supersedes
         weight: 0.9
         properties: {}
 
   - id: e47ac016-19d3-5a4c-811e-08dc20f259a5
     tenant_id: acme-corp
-    user_id: bb55c781-f880-594a-82e5-5191f0b64be8
+    # user_id: null (public)
     name: Q4 2024 Retrospective Notes
     uri: s3://acme-docs/q4-retro-2024.md
     content: |
@@ -133,18 +133,18 @@ resources:
       quarter: Q4
       year: 2024
     graph_edges:
-      - dst: bb55c781-f880-594a-82e5-5191f0b64be8
+      - dst: Sarah Chen
         rel_type: facilitator
         weight: 1.0
         properties: {}
-      - dst: 4f056f0b-0043-5441-b23b-cb250641c232
+      - dst: Q4 2024 Team Retrospective
         rel_type: derived_from
         weight: 1.0
         properties: {}
 
   - id: 162c70da-b279-5b63-b50e-9658c699e832
     tenant_id: acme-corp
-    user_id: 679e6ccd-08ff-5cee-b0fc-7e9135fb8595
+    # user_id: null (public)
     name: Frontend Component Refactor
     uri: s3://acme-docs/frontend-refactor-notes.md
     content: |
@@ -173,11 +173,11 @@ resources:
       type: code-notes
       language: javascript
     graph_edges:
-      - dst: 679e6ccd-08ff-5cee-b0fc-7e9135fb8595
+      - dst: Alex Kim
         rel_type: authored_by
         weight: 1.0
         properties: {}
-      - dst: 3c4bfc2a-33b2-566f-85f1-62be50fe58d6
+      - dst: Mike Johnson
         rel_type: paired_with
         weight: 0.9
         properties: {}
@@ -273,7 +273,7 @@ moments:
 messages:
   - id: a9fbbbad-ad62-5ecb-9d3b-ef1b1df021a2
     tenant_id: acme-corp
-    user_id: bb55c781-f880-594a-82e5-5191f0b64be8
+    # user_id: null (public)
     content: Hey team, I just pushed the API design doc v2. Can someone review?
     message_type: user
     session_id: session_team_chat_001
@@ -283,7 +283,7 @@ messages:
 
   - id: c618b82a-265c-5efb-8bbb-6842b40248e8
     tenant_id: acme-corp
-    user_id: 3c4bfc2a-33b2-566f-85f1-62be50fe58d6
+    # user_id: null (public)
     content: On it! Will take a look this afternoon.
     message_type: user
     session_id: session_team_chat_001
@@ -293,7 +293,7 @@ messages:
 
   - id: 20b75e5d-cca5-5201-b4c0-a897d35ccf59
     tenant_id: acme-corp
-    user_id: 679e6ccd-08ff-5cee-b0fc-7e9135fb8595
+    # user_id: null (public)
     content: Looks good Sarah! Just one question about the error handling strategy.
     message_type: user
     session_id: session_team_chat_001
@@ -316,7 +316,7 @@ messages:
 files:
   - id: af70189a-0b1c-5f1e-9f23-b4a185a12ff7
     tenant_id: acme-corp
-    user_id: bb55c781-f880-594a-82e5-5191f0b64be8
+    # user_id: null (public)
     name: api-architecture-diagram.png
     uri: s3://acme-files/diagrams/api-architecture-diagram.png
     mime_type: image/png
@@ -328,7 +328,7 @@ files:
 
   - id: 4a20f443-4eef-5cd9-83c1-ac594dc12bc8
     tenant_id: acme-corp
-    user_id: bb55c781-f880-594a-82e5-5191f0b64be8
+    # user_id: null (public)
     name: q4-retro-recording.mp4
     uri: s3://acme-files/recordings/q4-retro-2024.mp4
     mime_type: video/mp4
@@ -340,7 +340,7 @@ files:
 
   - id: cb6b8074-b4bc-5e7e-8829-e73154faa188
     tenant_id: acme-corp
-    user_id: 679e6ccd-08ff-5cee-b0fc-7e9135fb8595
+    # user_id: null (public)
     name: design-mockups.pdf
     uri: s3://acme-files/uploads/design-mockups.pdf
     mime_type: application/pdf

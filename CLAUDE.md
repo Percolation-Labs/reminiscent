@@ -129,15 +129,21 @@ No incremental migrations (003, 004, etc.) - regenerate from code.
 # 1. Edit models in src/rem/models/entities/
 # 2. Register new models in src/rem/registry.py
 rem db schema generate   # Regenerate 002_install_models.sql
-rem db diff              # See what changed
-rem db apply src/rem/sql/migrations/002_install_models.sql
+rem db diff              # See additive changes (default: --strategy additive)
+rem db diff --generate   # Generate migration SQL file
+rem db apply <file>      # Apply the migration
+
+# Migration strategies:
+rem db diff                        # additive only (safe, no drops)
+rem db diff --strategy full        # all changes including drops
+rem db diff --strategy safe        # additive + safe type widenings
 
 # CI/CD - detect drift:
 rem db diff --check      # Exit 1 if drift detected
 
 # Remote database (production/staging):
 kubectl port-forward -n <namespace> svc/rem-postgres-rw 5433:5432 &
-POSTGRES__CONNECTION_STRING="postgresql://rem:rem@localhost:5433/rem" rem db diff
+POSTGRES__CONNECTION_STRING="postgresql://user:pass@localhost:5433/db" rem db diff
 ```
 
 ---

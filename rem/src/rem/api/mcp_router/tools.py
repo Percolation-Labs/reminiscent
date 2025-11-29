@@ -15,6 +15,9 @@ Available Tools:
 - ask_rem_agent: Natural language to REM query conversion via agent
 - ingest_into_rem: Full file ingestion pipeline (read + store + parse + chunk)
 - read_resource: Access MCP resources (for Claude Desktop compatibility)
+- register_metadata: Register response metadata for SSE MetadataEvent
+- list_schema: List all schemas (tables, agents) in the database with row counts
+- get_schema: Get detailed schema for a table (columns, types, indexes)
 """
 
 from functools import wraps
@@ -716,5 +719,313 @@ async def register_metadata(
     # Merge any extra fields
     if extra:
         result["extra"] = extra
+
+    return result
+
+
+@mcp_tool_error_handler
+async def list_schema(
+    include_system: bool = False,
+    user_id: str | None = None,
+) -> dict[str, Any]:
+    """
+    List all schemas (tables) in the REM database.
+
+    Returns metadata about all available tables including their names,
+    row counts, and descriptions. Use this to discover what data is
+    available before constructing queries.
+
+    Args:
+        include_system: If True, include PostgreSQL system tables (pg_*, information_schema).
+                       Default False shows only REM application tables.
+        user_id: Optional user identifier (defaults to authenticated user or "default")
+
+    Returns:
+        Dict with:
+        - status: "success" or "error"
+        - tables: List of table metadata dicts with:
+            - name: Table name
+            - schema: Schema name (usually "public")
+            - estimated_rows: Approximate row count
+            - description: Table comment if available
+
+    Examples:
+        # List all REM schemas
+        list_schema()
+
+        # Include system tables
+        list_schema(include_system=True)
+    """
+    rem_service = await get_rem_service()
+    user_id = AgentContext.get_user_id_or_default(user_id, source="list_schema")
+
+    # Query information_schema for tables
+    schema_filter = ""
+    if not include_system:
+        schema_filter = """
+            AND table_schema = 'public'
+            AND table_name NOT LIKE 'pg_%'
+            AND table_name NOT LIKE '_pg_%'
+        """
+
+    query = f"""
+        SELECT
+            t.table_schema,
+            t.table_name,
+            pg_catalog.obj_description(
+                (quote_ident(t.table_schema) || '.' || quote_ident(t.table_name))::regclass,
+                'pg_class'
+            ) as description,
+            (
+                SELECT reltuples::bigint
+                FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE c.relname = t.table_name
+                AND n.nspname = t.table_schema
+            ) as estimated_rows
+        FROM information_schema.tables t
+        WHERE t.table_type = 'BASE TABLE'
+        {schema_filter}
+        ORDER BY t.table_schema, t.table_name
+    """
+
+    # Access postgres service directly from cache
+    postgres_service = _service_cache.get("postgres")
+    if not postgres_service:
+        postgres_service = rem_service._postgres
+
+    rows = await postgres_service.fetch(query)
+
+    tables = []
+    for row in rows:
+        tables.append({
+            "name": row["table_name"],
+            "schema": row["table_schema"],
+            "estimated_rows": int(row["estimated_rows"]) if row["estimated_rows"] else 0,
+            "description": row["description"],
+        })
+
+    logger.info(f"Listed {len(tables)} schemas for user {user_id}")
+
+    return {
+        "tables": tables,
+        "count": len(tables),
+    }
+
+
+@mcp_tool_error_handler
+async def get_schema(
+    table_name: str,
+    include_indexes: bool = True,
+    include_constraints: bool = True,
+    columns: list[str] | None = None,
+    user_id: str | None = None,
+) -> dict[str, Any]:
+    """
+    Get detailed schema information for a specific table.
+
+    Returns column definitions, data types, constraints, and indexes.
+    Use this to understand table structure before writing SQL queries.
+
+    Args:
+        table_name: Name of the table to inspect (e.g., "resources", "moments")
+        include_indexes: Include index information (default True)
+        include_constraints: Include constraint information (default True)
+        columns: Optional list of specific columns to return. If None, returns all columns.
+        user_id: Optional user identifier (defaults to authenticated user or "default")
+
+    Returns:
+        Dict with:
+        - status: "success" or "error"
+        - table_name: Name of the table
+        - columns: List of column definitions with:
+            - name: Column name
+            - type: PostgreSQL data type
+            - nullable: Whether NULL is allowed
+            - default: Default value if any
+            - description: Column comment if available
+        - indexes: List of indexes (if include_indexes=True)
+        - constraints: List of constraints (if include_constraints=True)
+        - primary_key: Primary key column(s)
+
+    Examples:
+        # Get full schema for resources table
+        get_schema(table_name="resources")
+
+        # Get only specific columns
+        get_schema(
+            table_name="resources",
+            columns=["id", "name", "created_at"]
+        )
+
+        # Get schema without indexes
+        get_schema(
+            table_name="moments",
+            include_indexes=False
+        )
+    """
+    rem_service = await get_rem_service()
+    user_id = AgentContext.get_user_id_or_default(user_id, source="get_schema")
+
+    # Access postgres service
+    postgres_service = _service_cache.get("postgres")
+    if not postgres_service:
+        postgres_service = rem_service._postgres
+
+    # Verify table exists
+    exists_query = """
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name = $1
+        )
+    """
+    exists = await postgres_service.fetchval(exists_query, table_name)
+    if not exists:
+        return {
+            "status": "error",
+            "error": f"Table '{table_name}' not found in public schema",
+        }
+
+    # Get columns
+    columns_filter = ""
+    if columns:
+        placeholders = ", ".join(f"${i+2}" for i in range(len(columns)))
+        columns_filter = f"AND column_name IN ({placeholders})"
+
+    columns_query = f"""
+        SELECT
+            c.column_name,
+            c.data_type,
+            c.udt_name,
+            c.is_nullable,
+            c.column_default,
+            c.character_maximum_length,
+            c.numeric_precision,
+            pg_catalog.col_description(
+                (quote_ident(c.table_schema) || '.' || quote_ident(c.table_name))::regclass,
+                c.ordinal_position
+            ) as description
+        FROM information_schema.columns c
+        WHERE c.table_schema = 'public'
+        AND c.table_name = $1
+        {columns_filter}
+        ORDER BY c.ordinal_position
+    """
+
+    params = [table_name]
+    if columns:
+        params.extend(columns)
+
+    column_rows = await postgres_service.fetch(columns_query, *params)
+
+    column_defs = []
+    for row in column_rows:
+        # Build a more readable type string
+        data_type = row["data_type"]
+        if row["character_maximum_length"]:
+            data_type = f"{data_type}({row['character_maximum_length']})"
+        elif row["udt_name"] in ("int4", "int8", "float4", "float8"):
+            # Use common type names
+            type_map = {"int4": "integer", "int8": "bigint", "float4": "real", "float8": "double precision"}
+            data_type = type_map.get(row["udt_name"], data_type)
+        elif row["udt_name"] == "vector":
+            data_type = "vector"
+
+        column_defs.append({
+            "name": row["column_name"],
+            "type": data_type,
+            "nullable": row["is_nullable"] == "YES",
+            "default": row["column_default"],
+            "description": row["description"],
+        })
+
+    result = {
+        "table_name": table_name,
+        "columns": column_defs,
+        "column_count": len(column_defs),
+    }
+
+    # Get primary key
+    pk_query = """
+        SELECT a.attname as column_name
+        FROM pg_index i
+        JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+        WHERE i.indrelid = $1::regclass
+        AND i.indisprimary
+        ORDER BY array_position(i.indkey, a.attnum)
+    """
+    pk_rows = await postgres_service.fetch(pk_query, table_name)
+    result["primary_key"] = [row["column_name"] for row in pk_rows]
+
+    # Get indexes
+    if include_indexes:
+        indexes_query = """
+            SELECT
+                i.relname as index_name,
+                am.amname as index_type,
+                ix.indisunique as is_unique,
+                ix.indisprimary as is_primary,
+                array_agg(a.attname ORDER BY array_position(ix.indkey, a.attnum)) as columns
+            FROM pg_index ix
+            JOIN pg_class i ON i.oid = ix.indexrelid
+            JOIN pg_class t ON t.oid = ix.indrelid
+            JOIN pg_am am ON am.oid = i.relam
+            JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
+            WHERE t.relname = $1
+            GROUP BY i.relname, am.amname, ix.indisunique, ix.indisprimary
+            ORDER BY i.relname
+        """
+        index_rows = await postgres_service.fetch(indexes_query, table_name)
+        result["indexes"] = [
+            {
+                "name": row["index_name"],
+                "type": row["index_type"],
+                "unique": row["is_unique"],
+                "primary": row["is_primary"],
+                "columns": row["columns"],
+            }
+            for row in index_rows
+        ]
+
+    # Get constraints
+    if include_constraints:
+        constraints_query = """
+            SELECT
+                con.conname as constraint_name,
+                con.contype as constraint_type,
+                array_agg(a.attname ORDER BY array_position(con.conkey, a.attnum)) as columns,
+                pg_get_constraintdef(con.oid) as definition
+            FROM pg_constraint con
+            JOIN pg_class t ON t.oid = con.conrelid
+            JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(con.conkey)
+            WHERE t.relname = $1
+            GROUP BY con.conname, con.contype, con.oid
+            ORDER BY con.contype, con.conname
+        """
+        constraint_rows = await postgres_service.fetch(constraints_query, table_name)
+
+        # Map constraint types to readable names
+        type_map = {
+            "p": "PRIMARY KEY",
+            "u": "UNIQUE",
+            "f": "FOREIGN KEY",
+            "c": "CHECK",
+            "x": "EXCLUSION",
+        }
+
+        result["constraints"] = []
+        for row in constraint_rows:
+            # contype is returned as bytes (char type), decode it
+            con_type = row["constraint_type"]
+            if isinstance(con_type, bytes):
+                con_type = con_type.decode("utf-8")
+            result["constraints"].append({
+                "name": row["constraint_name"],
+                "type": type_map.get(con_type, con_type),
+                "columns": row["columns"],
+                "definition": row["definition"],
+            })
+
+    logger.info(f"Retrieved schema for table '{table_name}' with {len(column_defs)} columns")
 
     return result

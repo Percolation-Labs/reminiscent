@@ -484,7 +484,7 @@ async def test_remove_nonexistent_share_fails(client, postgres_service, clean_sh
 
 @pytest.mark.asyncio
 async def test_get_shared_with_me_endpoint(client, postgres_service, clean_shared_sessions, setup_test_users, setup_test_messages):
-    """Test GET /api/v1/shared-with-me endpoint."""
+    """Test GET /api/v1/sessions/shared-with-me endpoint."""
     # Alice shares 2 sessions with Bob
     for session_id in ALICE_SESSIONS.keys():
         await client.post(
@@ -502,7 +502,7 @@ async def test_get_shared_with_me_endpoint(client, postgres_service, clean_share
 
     # Bob checks who is sharing with him
     response = await client.get(
-        "/api/v1/shared-with-me",
+        "/api/v1/sessions/shared-with-me",
         headers=auth_headers("user-bob"),
     )
 
@@ -550,7 +550,7 @@ async def test_get_shared_with_me_pagination(client, postgres_service, clean_sha
 
     # Get first page with page_size=1
     response = await client.get(
-        "/api/v1/shared-with-me?page=1&page_size=1",
+        "/api/v1/sessions/shared-with-me?page=1&page_size=1",
         headers=auth_headers("user-charlie"),
     )
 
@@ -567,7 +567,7 @@ async def test_get_shared_with_me_pagination(client, postgres_service, clean_sha
 
     # Get second page
     response = await client.get(
-        "/api/v1/shared-with-me?page=2&page_size=1",
+        "/api/v1/sessions/shared-with-me?page=2&page_size=1",
         headers=auth_headers("user-charlie"),
     )
 
@@ -579,7 +579,7 @@ async def test_get_shared_with_me_pagination(client, postgres_service, clean_sha
 
 @pytest.mark.asyncio
 async def test_get_shared_messages_endpoint(client, postgres_service, clean_shared_sessions, setup_test_users, setup_test_messages):
-    """Test GET /api/v1/shared-with-me/{user_id}/messages endpoint."""
+    """Test GET /api/v1/sessions/shared-with-me/{user_id}/messages endpoint."""
     # Bob shares all his sessions with Alice
     for session_id in BOB_SESSIONS.keys():
         await client.post(
@@ -590,7 +590,7 @@ async def test_get_shared_messages_endpoint(client, postgres_service, clean_shar
 
     # Alice gets messages from Bob's shared sessions
     response = await client.get(
-        "/api/v1/shared-with-me/user-bob/messages",
+        "/api/v1/sessions/shared-with-me/user-bob/messages",
         headers=auth_headers("user-alice"),
     )
 
@@ -618,7 +618,7 @@ async def test_get_shared_messages_pagination(client, postgres_service, clean_sh
 
     # Get first 3 messages
     response = await client.get(
-        "/api/v1/shared-with-me/user-bob/messages?page=1&page_size=3",
+        "/api/v1/sessions/shared-with-me/user-bob/messages?page=1&page_size=3",
         headers=auth_headers("user-alice"),
     )
 
@@ -640,7 +640,7 @@ async def test_full_sharing_workflow(client, postgres_service, clean_shared_sess
     """Test complete sharing workflow: share, view, unshare, verify."""
     # 1. Initial state - Bob has no shares
     response = await client.get(
-        "/api/v1/shared-with-me",
+        "/api/v1/sessions/shared-with-me",
         headers=auth_headers("user-bob"),
     )
     assert response.json()["metadata"]["total"] == 0
@@ -655,7 +655,7 @@ async def test_full_sharing_workflow(client, postgres_service, clean_shared_sess
 
     # 3. Bob can now see Alice in shared-with-me
     response = await client.get(
-        "/api/v1/shared-with-me",
+        "/api/v1/sessions/shared-with-me",
         headers=auth_headers("user-bob"),
     )
     data = response.json()
@@ -674,7 +674,7 @@ async def test_full_sharing_workflow(client, postgres_service, clean_shared_sess
 
     # 5. Bob's view updates
     response = await client.get(
-        "/api/v1/shared-with-me",
+        "/api/v1/sessions/shared-with-me",
         headers=auth_headers("user-bob"),
     )
     data = response.json()
@@ -683,7 +683,7 @@ async def test_full_sharing_workflow(client, postgres_service, clean_shared_sess
 
     # 6. Bob can view Alice's shared messages
     response = await client.get(
-        "/api/v1/shared-with-me/user-alice/messages",
+        "/api/v1/sessions/shared-with-me/user-alice/messages",
         headers=auth_headers("user-bob"),
     )
     assert len(response.json()["data"]) == 7
@@ -697,7 +697,7 @@ async def test_full_sharing_workflow(client, postgres_service, clean_shared_sess
 
     # 8. Bob's view updates - only session-2 remains
     response = await client.get(
-        "/api/v1/shared-with-me",
+        "/api/v1/sessions/shared-with-me",
         headers=auth_headers("user-bob"),
     )
     data = response.json()
@@ -713,7 +713,7 @@ async def test_full_sharing_workflow(client, postgres_service, clean_shared_sess
 
     # 10. Bob has no shares again
     response = await client.get(
-        "/api/v1/shared-with-me",
+        "/api/v1/sessions/shared-with-me",
         headers=auth_headers("user-bob"),
     )
     assert response.json()["metadata"]["total"] == 0
@@ -728,7 +728,7 @@ async def test_full_sharing_workflow(client, postgres_service, clean_shared_sess
 
     # 12. Bob can see Alice again
     response = await client.get(
-        "/api/v1/shared-with-me",
+        "/api/v1/sessions/shared-with-me",
         headers=auth_headers("user-bob"),
     )
     assert response.json()["metadata"]["total"] == 1

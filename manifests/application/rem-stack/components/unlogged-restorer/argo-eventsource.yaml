@@ -1,0 +1,95 @@
+---
+# Argo Events EventSource for CloudNativePG Cluster Changes
+#
+# Watches the CNPG Cluster custom resource for changes that indicate
+# a failover or restart has occurred. Key fields to watch:
+# - status.currentPrimary: Changes when failover occurs
+# - status.phase: Transitions during restart/recovery
+#
+# When these change, we trigger a job to check and rebuild UNLOGGED tables.
+#
+# Prerequisites:
+# - Argo Events installed in cluster
+# - EventSource controller running
+# - RBAC permissions to watch CNPG Clusters
+apiVersion: argoproj.io/v1alpha1
+kind: EventSource
+metadata:
+  name: cnpg-cluster-watcher
+  namespace: rem
+  labels:
+    app: unlogged-restorer
+    component: eventsource
+spec:
+  # Service account with permissions to watch CNPG clusters
+  template:
+    serviceAccountName: cnpg-watcher-sa
+
+  # Watch Kubernetes resources
+  resource:
+    # Watch CNPG Cluster custom resource
+    cnpg-cluster-events:
+      # Watch in the namespace where postgres lives
+      # NOTE: Update this to match your CNPG cluster namespace
+      namespace: siggy
+
+      # CloudNativePG Cluster CRD coordinates
+      group: postgresql.cnpg.io
+      version: v1
+      resource: clusters
+
+      # Only watch UPDATE events (status changes)
+      eventTypes:
+        - UPDATE
+
+      # Filter to our specific cluster by name
+      filter:
+        fields:
+          - key: metadata.name
+            operation: "=="
+            value: rem-postgres
+
+---
+# ServiceAccount for EventSource pod
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cnpg-watcher-sa
+  namespace: rem
+  labels:
+    app: unlogged-restorer
+
+---
+# ClusterRole to watch CNPG Clusters across namespaces
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cnpg-cluster-watcher-role
+  labels:
+    app: unlogged-restorer
+rules:
+  # Permission to watch CNPG Cluster resources
+  - apiGroups: ["postgresql.cnpg.io"]
+    resources: ["clusters"]
+    verbs: ["get", "list", "watch"]
+  # Permission to watch pods (for additional context)
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+
+---
+# Bind ClusterRole to ServiceAccount
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cnpg-cluster-watcher-binding
+  labels:
+    app: unlogged-restorer
+subjects:
+  - kind: ServiceAccount
+    name: cnpg-watcher-sa
+    namespace: rem
+roleRef:
+  kind: ClusterRole
+  name: cnpg-cluster-watcher-role
+  apiGroup: rbac.authorization.k8s.io

@@ -30,7 +30,7 @@ spec:
     spec:
       containers:
         - name: postgres
-          image: pgvector/pgvector:pg18
+          image: percolationlabs/rem-pg:18
           ports:
             - containerPort: 5432
               name: postgres

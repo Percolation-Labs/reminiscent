@@ -242,6 +242,108 @@ monitoring:
   podMonitorEnabled: false
 ```
 
+### Issue 8: External Secrets Webhook Service Name Mismatch
+
+**Error**: `failed calling webhook "validate.externalsecret.external-secrets.io": service "external-secrets-webhook" not found`
+
+**Cause**: The ValidatingWebhookConfiguration points to `external-secrets-webhook` but the actual service is named `external-secrets-operator-webhook`.
+
+**Diagnosis**:
+```bash
+# Check what service the webhook expects
+kubectl get validatingwebhookconfiguration externalsecret-validate \
+  -o jsonpath='{.webhooks[0].clientConfig.service.name}'
+# Returns: external-secrets-webhook
+
+# Check actual service name
+kubectl get svc -n external-secrets-system | grep webhook
+# Returns: external-secrets-operator-webhook
+```
+
+**Fix**:
+```bash
+kubectl patch validatingwebhookconfiguration externalsecret-validate \
+  --type='json' \
+  -p='[{"op": "replace", "path": "/webhooks/0/clientConfig/service/name", "value": "external-secrets-operator-webhook"}]'
+```
+
+### Issue 9: AWS Load Balancer Controller Webhook TLS Certificate Mismatch
+
+**Error**: `failed calling webhook "vingress.elbv2.k8s.aws": tls: failed to verify certificate: x509: certificate signed by unknown authority`
+
+**Cause**: The webhook's `caBundle` doesn't match the TLS secret used by the controller. This can happen after certificate rotation or controller restarts.
+
+**Diagnosis**:
+```bash
+# Compare certificate dates
+# Webhook caBundle:
+kubectl get validatingwebhookconfiguration aws-load-balancer-webhook \
+  -o jsonpath='{.webhooks[0].clientConfig.caBundle}' | base64 -d | \
+  openssl x509 -noout -dates
+
+# TLS Secret:
+kubectl get secret aws-load-balancer-tls -n kube-system \
+  -o jsonpath='{.data.ca\.crt}' | base64 -d | \
+  openssl x509 -noout -dates
+```
+
+**Fix**:
+```bash
+# Get new CA from secret
+NEW_CA=$(kubectl get secret aws-load-balancer-tls -n kube-system -o jsonpath='{.data.ca\.crt}')
+
+# Update validating webhook
+kubectl patch validatingwebhookconfiguration aws-load-balancer-webhook \
+  --type='json' \
+  -p="[{\"op\": \"replace\", \"path\": \"/webhooks/0/clientConfig/caBundle\", \"value\": \"$NEW_CA\"},
+      {\"op\": \"replace\", \"path\": \"/webhooks/1/clientConfig/caBundle\", \"value\": \"$NEW_CA\"},
+      {\"op\": \"replace\", \"path\": \"/webhooks/2/clientConfig/caBundle\", \"value\": \"$NEW_CA\"}]"
+
+# Update mutating webhook
+kubectl patch mutatingwebhookconfiguration aws-load-balancer-webhook \
+  --type='json' \
+  -p="[{\"op\": \"replace\", \"path\": \"/webhooks/0/clientConfig/caBundle\", \"value\": \"$NEW_CA\"},
+      {\"op\": \"replace\", \"path\": \"/webhooks/1/clientConfig/caBundle\", \"value\": \"$NEW_CA\"},
+      {\"op\": \"replace\", \"path\": \"/webhooks/2/clientConfig/caBundle\", \"value\": \"$NEW_CA\"}]"
+```
+
+**Prevention**: If the controller manages its own certs, ensure cert-manager or the controller's built-in cert rotation updates both the secret AND the webhook configurations.
+
+### Issue 10: ArgoCD Repo Server Cache Not Refreshing
+
+**Error**: ArgoCD shows `Synced` or `OutOfSync` but the revision doesn't match the latest commit on `main`.
+
+**Cause**: ArgoCD repo-server caches git data and manifests. A stale cache can cause sync to use old manifests even when new commits exist.
+
+**Diagnosis**:
+```bash
+# Check ArgoCD's synced revision
+kubectl get app <app-name> -n argocd -o jsonpath='{.status.sync.revision}'
+
+# Compare with actual remote HEAD
+git ls-remote origin main
+
+# Check repo-server logs for cache hits
+kubectl logs -n argocd -l app.kubernetes.io/name=argocd-repo-server | grep "cache hit"
+```
+
+**Fix**:
+```bash
+# Option 1: Hard refresh the application
+kubectl annotate application <app-name> -n argocd \
+  argocd.argoproj.io/refresh=hard --overwrite
+
+# Option 2: Restart repo-server to clear all caches
+kubectl rollout restart deployment argocd-repo-server -n argocd
+
+# Wait for it to come back up, then refresh
+sleep 30
+kubectl annotate application <app-name> -n argocd \
+  argocd.argoproj.io/refresh=hard --overwrite
+```
+
+**Prevention**: Configure GitHub webhook to notify ArgoCD of pushes for immediate refresh instead of relying on polling.
+
 ---
 
 ## Pod Identity Quick Reference

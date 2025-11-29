@@ -1,0 +1,44 @@
+# docker-compose.test.yml
+# Isolated test database - does NOT conflict with development database
+#
+# Port: 5051 (dev uses 5050)
+# Container: rem-postgres-test (dev uses rem-postgres)
+# Volume: postgres_data_test (dev uses postgres_data)
+#
+# Usage:
+#   docker compose -f docker-compose.test.yml up -d
+#   POSTGRES__CONNECTION_STRING="postgresql://rem:rem@localhost:5051/rem" uv run pytest tests/integration/
+#   docker compose -f docker-compose.test.yml down -v
+
+services:
+  postgres:
+    image: percolationlabs/rem-pg:18
+    container_name: rem-postgres-test
+    environment:
+      POSTGRES_DB: rem
+      POSTGRES_USER: rem
+      POSTGRES_PASSWORD: rem
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5051:5432"
+    volumes:
+      # Auto-apply migrations on startup
+      - ./src/rem/sql/migrations:/docker-entrypoint-initdb.d:ro
+      # Separate test volume
+      - postgres_data_test:/var/lib/postgresql
+    # pg_net requires shared_preload_libraries
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_net
+      - -c
+      - pg_net.database_name=rem
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rem -d rem"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data_test:
+    driver: local

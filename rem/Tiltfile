@@ -1,0 +1,144 @@
+# -*- mode: python -*-
+# =============================================================================
+# Tiltfile for REM Development
+# =============================================================================
+#
+# Usage:
+#   tilt up                    # Start with docker-compose
+#   tilt down                  # Stop all services
+#
+# Dashboard: http://localhost:10350
+#
+# This Tiltfile manages:
+# - PostgreSQL database (pgvector + pg_net)
+# - REM API server
+# - Database migrations
+# - Development tasks
+# =============================================================================
+
+# =============================================================================
+# Docker Compose Services
+# =============================================================================
+
+docker_compose(['./docker-compose.yml'])
+
+# Configure resources with UI enhancements
+dc_resource('postgres',
+    labels=['database'],
+)
+
+dc_resource('api',
+    labels=['app'],
+    resource_deps=['postgres'],
+    links=[
+        link('http://localhost:8000', 'API'),
+        link('http://localhost:8000/docs', 'Swagger UI'),
+        link('http://localhost:8000/health', 'Health Check'),
+    ],
+)
+
+# =============================================================================
+# Developer Task Buttons
+# =============================================================================
+
+# Apply database migrations
+local_resource(
+    'db-migrate',
+    cmd='POSTGRES__CONNECTION_STRING="postgresql://rem:rem@localhost:5050/rem" uv run rem db apply src/rem/sql/migrations/001_install.sql && POSTGRES__CONNECTION_STRING="postgresql://rem:rem@localhost:5050/rem" uv run rem db apply src/rem/sql/migrations/002_install_models.sql',
+    labels=['tasks'],
+    auto_init=False,
+    trigger_mode=TRIGGER_MODE_MANUAL,
+)
+
+# Generate schema from models
+local_resource(
+    'db-schema-generate',
+    cmd='uv run rem db schema generate',
+    labels=['tasks'],
+    auto_init=False,
+    trigger_mode=TRIGGER_MODE_MANUAL,
+)
+
+# Check schema drift
+local_resource(
+    'db-diff',
+    cmd='POSTGRES__CONNECTION_STRING="postgresql://rem:rem@localhost:5050/rem" uv run rem db diff',
+    labels=['tasks'],
+    auto_init=False,
+    trigger_mode=TRIGGER_MODE_MANUAL,
+)
+
+# Run unit tests
+local_resource(
+    'test-unit',
+    cmd='uv run pytest tests/unit/ -v --tb=short -m "not llm"',
+    labels=['tests'],
+    auto_init=False,
+    trigger_mode=TRIGGER_MODE_MANUAL,
+)
+
+# Run integration tests
+local_resource(
+    'test-integration',
+    cmd='POSTGRES__CONNECTION_STRING="postgresql://rem:rem@localhost:5050/rem" uv run pytest tests/integration/ -v --tb=short -m "not llm"',
+    labels=['tests'],
+    auto_init=False,
+    trigger_mode=TRIGGER_MODE_MANUAL,
+    resource_deps=['postgres'],
+)
+
+# Health check
+local_resource(
+    'health-check',
+    cmd='curl -sf http://localhost:8000/health | python3 -m json.tool || echo "API not ready"',
+    labels=['tasks'],
+    auto_init=False,
+    trigger_mode=TRIGGER_MODE_MANUAL,
+)
+
+# Test database connection
+local_resource(
+    'db-test-connection',
+    cmd='''POSTGRES__CONNECTION_STRING="postgresql://rem:rem@localhost:5050/rem" uv run python -c "
+import asyncio
+from rem.services.postgres import PostgresService
+
+async def test():
+    pg = PostgresService()
+    await pg.connect()
+    result = await pg.execute('SELECT version()')
+    print('Database connection: OK')
+    print(f'PostgreSQL: {result[0][\"version\"][:60]}...')
+    await pg.disconnect()
+
+asyncio.run(test())
+"''',
+    labels=['tasks'],
+    auto_init=False,
+    trigger_mode=TRIGGER_MODE_MANUAL,
+)
+
+# =============================================================================
+# Remote Cluster Tasks
+# =============================================================================
+
+# Port forward to remote EKS database
+local_resource(
+    'port-forward-remote-db',
+    cmd='kubectl port-forward -n siggy svc/rem-postgres-rw 5433:5432',
+    labels=['remote'],
+    auto_init=False,
+    trigger_mode=TRIGGER_MODE_MANUAL,
+)
+
+# Port forward to Phoenix UI
+local_resource(
+    'port-forward-phoenix',
+    cmd='kubectl port-forward -n siggy svc/phoenix 6006:6006',
+    labels=['remote'],
+    auto_init=False,
+    trigger_mode=TRIGGER_MODE_MANUAL,
+    links=[
+        link('http://localhost:6006', 'Phoenix UI'),
+    ],
+)

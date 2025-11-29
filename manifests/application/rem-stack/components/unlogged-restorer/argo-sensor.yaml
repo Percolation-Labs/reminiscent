@@ -1,0 +1,134 @@
+---
+# Argo Events Sensor for UNLOGGED Table Restore
+#
+# Listens to CNPG Cluster change events and triggers a restore job
+# when it detects conditions that would cause UNLOGGED tables to be lost.
+apiVersion: argoproj.io/v1alpha1
+kind: Sensor
+metadata:
+  name: unlogged-restore-trigger
+  namespace: rem
+  labels:
+    app: unlogged-restorer
+    component: sensor
+spec:
+  # Use dedicated service account
+  template:
+    serviceAccountName: unlogged-restore-sensor-sa
+
+  # Dependencies define what events trigger this sensor
+  dependencies:
+    - name: cnpg-cluster-update
+      eventSourceName: cnpg-cluster-watcher
+      eventName: cnpg-cluster-events
+
+  # Triggers define what happens when dependencies are satisfied
+  triggers:
+    - template:
+        name: unlogged-restore-job
+        # Log the event for debugging
+        log:
+          intervalSeconds: 1
+        # Trigger a Kubernetes Job
+        k8s:
+          operation: create
+          source:
+            resource:
+              apiVersion: batch/v1
+              kind: Job
+              metadata:
+                generateName: unlogged-restore-
+                namespace: rem
+                labels:
+                  app: unlogged-restorer
+                  component: restore-job
+                  triggered-by: argo-events
+              spec:
+                ttlSecondsAfterFinished: 300
+                backoffLimit: 1
+                template:
+                  metadata:
+                    labels:
+                      app: unlogged-restorer
+                      component: restore-job
+                  spec:
+                    restartPolicy: Never
+                    serviceAccountName: unlogged-restorer-sa
+                    containers:
+                    - name: restorer
+                      image: percolationlabs/rem:latest
+                      imagePullPolicy: Always
+                      command:
+                      - python
+                      - -m
+                      - rem.workers.unlogged_maintainer
+                      - --check-and-restore
+                      env:
+                      - name: POSTGRES__CONNECTION_STRING
+                        valueFrom:
+                          secretKeyRef:
+                            name: rem-postgres-connection
+                            key: uri
+                      resources:
+                        requests:
+                          memory: "128Mi"
+                          cpu: "50m"
+                        limits:
+                          memory: "256Mi"
+                          cpu: "200m"
+
+---
+# ServiceAccount for Sensor
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: unlogged-restore-sensor-sa
+  namespace: rem
+  labels:
+    app: unlogged-restorer
+
+---
+# ServiceAccount for the triggered Job
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: unlogged-restorer-sa
+  namespace: rem
+  labels:
+    app: unlogged-restorer
+
+---
+# Role for Sensor to create Jobs
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: unlogged-restore-sensor-role
+  namespace: rem
+  labels:
+    app: unlogged-restorer
+rules:
+  # Permission to create Jobs
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  # Permission to read secrets for job spec
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: unlogged-restore-sensor-binding
+  namespace: rem
+  labels:
+    app: unlogged-restorer
+subjects:
+  - kind: ServiceAccount
+    name: unlogged-restore-sensor-sa
+    namespace: rem
+roleRef:
+  kind: Role
+  name: unlogged-restore-sensor-role
+  apiGroup: rbac.authorization.k8s.io

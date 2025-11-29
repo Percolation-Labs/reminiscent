@@ -28,7 +28,12 @@ def create_pydantic_tool(func: Callable[..., Any]) -> Tool:
     return Tool(func)
 
 
-def create_mcp_tool_wrapper(tool_name: str, mcp_tool: Any, user_id: str | None = None) -> Tool:
+def create_mcp_tool_wrapper(
+    tool_name: str,
+    mcp_tool: Any,
+    user_id: str | None = None,
+    description_suffix: str | None = None,
+) -> Tool:
     """
     Create a Pydantic AI Tool from a FastMCP FunctionTool.
 
@@ -40,6 +45,8 @@ def create_mcp_tool_wrapper(tool_name: str, mcp_tool: Any, user_id: str | None =
         tool_name: Name of the MCP tool
         mcp_tool: The FastMCP FunctionTool object
         user_id: Optional user_id to inject into tool calls
+        description_suffix: Optional text to append to the tool's docstring.
+            Used to add schema-specific context (e.g., default table for search_rem).
 
     Returns:
         A Pydantic AI Tool instance
@@ -52,7 +59,11 @@ def create_mcp_tool_wrapper(tool_name: str, mcp_tool: Any, user_id: str | None =
     sig = inspect.signature(tool_func)
     has_user_id = "user_id" in sig.parameters
 
-    # If we need to inject user_id, create a wrapper
+    # Build the docstring with optional suffix
+    base_doc = tool_func.__doc__ or ""
+    final_doc = base_doc + description_suffix if description_suffix else base_doc
+
+    # If we need to inject user_id or modify docstring, create a wrapper
     # Otherwise, use the function directly for better signature preservation
     if user_id and has_user_id:
         async def wrapped_tool(**kwargs) -> Any:
@@ -69,11 +80,26 @@ def create_mcp_tool_wrapper(tool_name: str, mcp_tool: Any, user_id: str | None =
 
         # Copy signature from original function for Pydantic AI inspection
         wrapped_tool.__name__ = tool_name
-        wrapped_tool.__doc__ = tool_func.__doc__
+        wrapped_tool.__doc__ = final_doc
         wrapped_tool.__annotations__ = tool_func.__annotations__
         wrapped_tool.__signature__ = sig  # Important: preserve full signature
 
         logger.debug(f"Creating MCP tool wrapper with user_id injection: {tool_name}")
+        return Tool(wrapped_tool)
+    elif description_suffix:
+        # Need to wrap just for docstring modification
+        async def wrapped_tool(**kwargs) -> Any:
+            """Wrapper for docstring modification."""
+            valid_params = set(sig.parameters.keys())
+            filtered_kwargs = {k: v for k, v in kwargs.items() if k in valid_params}
+            return await tool_func(**filtered_kwargs)
+
+        wrapped_tool.__name__ = tool_name
+        wrapped_tool.__doc__ = final_doc
+        wrapped_tool.__annotations__ = tool_func.__annotations__
+        wrapped_tool.__signature__ = sig
+
+        logger.debug(f"Creating MCP tool wrapper with description suffix: {tool_name}")
         return Tool(wrapped_tool)
     else:
         # No injection needed - use original function directly

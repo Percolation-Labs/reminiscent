@@ -803,8 +803,14 @@ This generates:
 Compare Pydantic models against the live database using Alembic autogenerate.
 
 ```bash
-# Show differences
+# Show additive changes only (default, safe for production)
 rem db diff
+
+# Show all changes including drops
+rem db diff --strategy full
+
+# Show additive + safe type widenings
+rem db diff --strategy safe
 
 # CI mode: exit 1 if drift detected
 rem db diff --check
@@ -813,9 +819,16 @@ rem db diff --check
 rem db diff --generate
 ```
 
+**Migration Strategies:**
+| Strategy | Description |
+|----------|-------------|
+| `additive` | Only ADD columns/tables/indexes (safe, no data loss) - **default** |
+| `full` | All changes including DROPs (use with caution) |
+| `safe` | Additive + safe column type widenings (e.g., VARCHAR(50) → VARCHAR(256)) |
+
 **Output shows:**
 - `+ ADD COLUMN` - Column in model but not in DB
-- `- DROP COLUMN` - Column in DB but not in model
+- `- DROP COLUMN` - Column in DB but not in model (only with `--strategy full`)
 - `~ ALTER COLUMN` - Column type or constraints differ
 - `+ CREATE TABLE` / `- DROP TABLE` - Table additions/removals
 

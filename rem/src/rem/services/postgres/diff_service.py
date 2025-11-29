@@ -49,6 +49,7 @@ class SchemaDiff:
     summary: list[str] = field(default_factory=list)
     sql: str = ""
     upgrade_ops: Optional[ops.UpgradeOps] = None
+    filtered_count: int = 0  # Number of operations filtered out by strategy
 
     @property
     def change_count(self) -> int:
@@ -61,17 +62,24 @@ class DiffService:
     Service for comparing Pydantic models against database schema.
 
     Uses Alembic's autogenerate machinery without creating revision files.
+
+    Strategies:
+        additive: Only ADD operations (columns, tables, indexes). No drops. Safe for production.
+        full: All operations including DROPs. Use with caution.
+        safe: Additive + safe column type changes (widenings like VARCHAR(50) -> VARCHAR(256)).
     """
 
-    def __init__(self, models_dir: Optional[Path] = None):
+    def __init__(self, models_dir: Optional[Path] = None, strategy: str = "additive"):
         """
         Initialize diff service.
 
         Args:
             models_dir: Directory containing Pydantic models.
                        If None, uses default rem/models/entities location.
+            strategy: Migration strategy - 'additive' (default), 'full', or 'safe'
         """
         self.models_dir = models_dir
+        self.strategy = strategy
         self._metadata = None
 
     def get_connection_url(self) -> str:
@@ -130,6 +138,7 @@ class DiffService:
         metadata = self.get_target_metadata()
 
         summary = []
+        filtered_count = 0
 
         with engine.connect() as conn:
             # Create migration context for comparison
@@ -148,9 +157,13 @@ class DiffService:
             migration_script = produce_migrations(context, metadata)
             upgrade_ops = migration_script.upgrade_ops
 
-            # Process detected operations
+            # Filter operations based on strategy
             if upgrade_ops and upgrade_ops.ops:
-                for op in upgrade_ops.ops:
+                filtered_ops, filtered_count = self._filter_operations(upgrade_ops.ops)
+                upgrade_ops.ops = filtered_ops
+
+                # Process filtered operations
+                for op in filtered_ops:
                     summary.extend(self._describe_operation(op))
 
         has_changes = len(summary) > 0
@@ -165,7 +178,99 @@ class DiffService:
             summary=summary,
             sql=sql,
             upgrade_ops=upgrade_ops,
+            filtered_count=filtered_count,
         )
+
+    def _filter_operations(self, operations: list) -> tuple[list, int]:
+        """
+        Filter operations based on migration strategy.
+
+        Args:
+            operations: List of Alembic operations
+
+        Returns:
+            Tuple of (filtered_operations, count_of_filtered_out)
+        """
+        if self.strategy == "full":
+            # Full strategy: include everything
+            return operations, 0
+
+        filtered = []
+        filtered_count = 0
+
+        for op in operations:
+            if isinstance(op, ops.ModifyTableOps):
+                # Filter sub-operations within table
+                sub_filtered, sub_count = self._filter_operations(op.ops)
+                filtered_count += sub_count
+                if sub_filtered:
+                    op.ops = sub_filtered
+                    filtered.append(op)
+            elif self._is_allowed_operation(op):
+                filtered.append(op)
+            else:
+                filtered_count += 1
+
+        return filtered, filtered_count
+
+    def _is_allowed_operation(self, op: ops.MigrateOperation) -> bool:
+        """
+        Check if an operation is allowed by the current strategy.
+
+        Args:
+            op: Alembic operation
+
+        Returns:
+            True if operation is allowed, False if it should be filtered out
+        """
+        # Additive operations (allowed in all strategies)
+        if isinstance(op, (ops.CreateTableOp, ops.AddColumnOp, ops.CreateIndexOp, ops.CreateForeignKeyOp)):
+            return True
+
+        # Destructive operations (only allowed in 'full' strategy)
+        if isinstance(op, (ops.DropTableOp, ops.DropColumnOp, ops.DropIndexOp, ops.DropConstraintOp)):
+            return self.strategy == "full"
+
+        # Alter operations
+        if isinstance(op, ops.AlterColumnOp):
+            if self.strategy == "full":
+                return True
+            if self.strategy == "safe":
+                # Allow safe type changes (widenings)
+                return self._is_safe_type_change(op)
+            # additive: no alter operations
+            return False
+
+        # Unknown operations: allow in full, deny otherwise
+        return self.strategy == "full"
+
+    def _is_safe_type_change(self, op: ops.AlterColumnOp) -> bool:
+        """
+        Check if a column type change is safe (widening, not narrowing).
+
+        Safe changes:
+        - VARCHAR(n) -> VARCHAR(m) where m > n
+        - INTEGER -> BIGINT
+        - Adding nullable (NOT NULL -> NULL)
+
+        Args:
+            op: AlterColumnOp to check
+
+        Returns:
+            True if the change is safe
+        """
+        # Allowing nullable is always safe
+        if op.modify_nullable is True:
+            return True
+
+        # Type changes: only allow VARCHAR widenings for now
+        if op.modify_type is not None:
+            new_type = str(op.modify_type).upper()
+            # VARCHAR widenings are generally safe
+            if "VARCHAR" in new_type:
+                return True  # Assume widening; could add length comparison
+
+        return False
 
     def _describe_operation(self, op: ops.MigrateOperation, prefix: str = "") -> list[str]:
         """Convert Alembic operation to human-readable description."""

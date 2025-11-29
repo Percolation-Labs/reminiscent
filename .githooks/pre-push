@@ -1,0 +1,84 @@
+#!/bin/bash
+# =============================================================================
+# Pre-push Hook: Run Integration Tests with Docker
+# =============================================================================
+# Before pushing:
+# 1. Starts ISOLATED test PostgreSQL (port 5051, separate from dev on 5050)
+# 2. Waits for migrations (auto-applied via docker-entrypoint-initdb.d)
+# 3. Runs integration tests
+# 4. Tears down test containers
+#
+# This does NOT affect your local development database!
+#
+# Skip with: git push --no-verify
+# Install: git config core.hooksPath .githooks
+# =============================================================================
+
+set -e
+
+echo "=== Pre-push: Running integration tests ==="
+
+# Get the repo root and rem directory
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+REM_DIR="$REPO_ROOT/rem"
+cd "$REM_DIR"
+
+# Test database config (isolated from dev database)
+TEST_COMPOSE="$REM_DIR/docker-compose.test.yml"
+TEST_PORT="5051"
+TEST_CONN="postgresql://rem:rem@localhost:${TEST_PORT}/rem"
+
+# ---------------------------------------------------------------------------
+# Step 1: Start Test PostgreSQL (isolated from dev)
+# ---------------------------------------------------------------------------
+echo ""
+echo ">>> Starting isolated test PostgreSQL (port ${TEST_PORT})..."
+echo "    (Your dev database on port 5050 is not affected)"
+
+# Start test database
+docker compose -f "$TEST_COMPOSE" up -d
+
+# Wait for PostgreSQL to be ready
+echo ">>> Waiting for PostgreSQL to be ready..."
+for i in {1..30}; do
+    if docker compose -f "$TEST_COMPOSE" exec -T postgres pg_isready -U rem -d rem >/dev/null 2>&1; then
+        echo "✓ Test PostgreSQL ready (port ${TEST_PORT})"
+        break
+    fi
+    if [ $i -eq 30 ]; then
+        echo "✗ Test PostgreSQL failed to start"
+        docker compose -f "$TEST_COMPOSE" logs postgres
+        docker compose -f "$TEST_COMPOSE" down -v
+        exit 1
+    fi
+    sleep 1
+done
+
+# Give a moment for migrations to complete (mounted in docker-entrypoint-initdb.d)
+sleep 2
+
+# ---------------------------------------------------------------------------
+# Step 2: Run integration tests
+# ---------------------------------------------------------------------------
+echo ""
+echo ">>> Running integration tests..."
+
+POSTGRES__CONNECTION_STRING="$TEST_CONN" \
+    uv run pytest tests/integration/ -q --tb=line -m "not llm" 2>/dev/null || {
+    echo ""
+    echo "✗ Integration tests failed"
+    docker compose -f "$TEST_COMPOSE" down -v
+    exit 1
+}
+
+echo "✓ Integration tests passed"
+
+# ---------------------------------------------------------------------------
+# Step 3: Cleanup
+# ---------------------------------------------------------------------------
+echo ""
+echo ">>> Cleaning up test database..."
+docker compose -f "$TEST_COMPOSE" down -v
+
+echo ""
+echo "=== Pre-push: OK ==="

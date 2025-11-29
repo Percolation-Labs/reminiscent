@@ -1,0 +1,110 @@
+---
+# UNLOGGED Table Restorer CronJob
+#
+# Periodic check to ensure kv_store is populated after PostgreSQL restarts/failovers.
+# This is the "belt & suspenders" approach - runs every 5 minutes to catch any edge cases
+# that Argo Events might miss.
+#
+# UNLOGGED tables (kv_store, rate_limits) are truncated on:
+# - Primary pod restart
+# - Failover to replica (replicas have empty UNLOGGED tables by design)
+#
+# This CronJob checks if kv_store is empty but entities exist, and rebuilds if needed.
+# Safe to run frequently - the check is idempotent and uses advisory locks.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: unlogged-restorer
+  namespace: rem
+  labels:
+    app: unlogged-restorer
+    component: maintenance
+spec:
+  # Run every 5 minutes
+  schedule: "*/5 * * * *"
+
+  # Only keep last successful and failed jobs
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+
+  # Skip if previous job is still running
+  concurrencyPolicy: Forbid
+
+  # Start within 60 seconds of scheduled time or skip
+  startingDeadlineSeconds: 60
+
+  jobTemplate:
+    metadata:
+      labels:
+        app: unlogged-restorer
+        component: maintenance
+    spec:
+      # Clean up completed jobs after 5 minutes
+      ttlSecondsAfterFinished: 300
+
+      # Don't retry on failure - next scheduled run will check again
+      backoffLimit: 0
+
+      template:
+        metadata:
+          labels:
+            app: unlogged-restorer
+            component: maintenance
+        spec:
+          restartPolicy: Never
+
+          # Use the postgres service account for database access
+          serviceAccountName: unlogged-restorer-sa
+
+          containers:
+          - name: restorer
+            image: percolationlabs/rem:latest
+            imagePullPolicy: IfNotPresent
+
+            command:
+            - python
+            - -m
+            - rem.workers.unlogged_maintainer
+            - --check-and-restore
+
+            env:
+            # Database connection
+            - name: POSTGRES__CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: rem-database-credentials
+                  key: uri
+
+            # S3 settings for watermark (uses IRSA)
+            - name: S3__BUCKET_NAME
+              value: "${S3_BUCKET_NAME}"
+            - name: S3__REGION
+              value: "${AWS_REGION}"
+
+            # Disable telemetry for maintenance jobs
+            - name: OTEL__ENABLED
+              value: "false"
+
+            resources:
+              requests:
+                memory: "128Mi"
+                cpu: "50m"
+              limits:
+                memory: "256Mi"
+                cpu: "200m"
+
+---
+# ServiceAccount for UNLOGGED Restorer
+# Needs:
+# - Database access (via secret)
+# - S3 access for watermark (via IRSA)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: unlogged-restorer-sa
+  namespace: rem
+  labels:
+    app: unlogged-restorer
+  annotations:
+    # IRSA annotation for S3 access
+    eks.amazonaws.com/role-arn: ${REM_WORKER_ROLE_ARN}

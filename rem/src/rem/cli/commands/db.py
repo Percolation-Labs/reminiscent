@@ -470,6 +470,13 @@ async def _load_async(file_path: Path, user_id: str | None, dry_run: bool):
     help="Generate incremental migration file from diff",
 )
 @click.option(
+    "--strategy",
+    "-s",
+    type=click.Choice(["additive", "full", "safe"]),
+    default="additive",
+    help="Migration strategy: additive (no drops, default), full (all changes), safe (additive + type widenings)",
+)
+@click.option(
     "--models",
     "-m",
     type=click.Path(exists=True, path_type=Path),
@@ -491,6 +498,7 @@ async def _load_async(file_path: Path, user_id: str | None, dry_run: bool):
 def diff(
     check: bool,
     generate: bool,
+    strategy: str,
     models: Path | None,
     output_dir: Path | None,
     message: str,
@@ -502,23 +510,30 @@ def diff(
     - Your Pydantic models (the target schema)
     - The current database (what's actually deployed)
 
+    Strategies:
+        additive  Only ADD columns/tables/indexes (safe, no data loss) [default]
+        full      All changes including DROPs (use with caution)
+        safe      Additive + safe column type changes (widenings only)
+
     Examples:
-        rem db diff                    # Show what would change
-        rem db diff --check            # CI mode: exit 1 if drift detected
-        rem db diff --generate         # Create migration file from diff
+        rem db diff                        # Show additive changes only
+        rem db diff --strategy full        # Show all changes including drops
+        rem db diff --generate             # Create migration file
+        rem db diff --check                # CI mode: exit 1 if drift
 
     Workflow:
         1. Develop locally, modify Pydantic models
         2. Run 'rem db diff' to see changes
         3. Run 'rem db diff --generate' to create migration
-        4. Review generated SQL, then 'rem db migrate'
+        4. Review generated SQL, then 'rem db apply <file>'
     """
-    asyncio.run(_diff_async(check, generate, models, output_dir, message))
+    asyncio.run(_diff_async(check, generate, strategy, models, output_dir, message))
 
 
 async def _diff_async(
     check: bool,
     generate: bool,
+    strategy: str,
     models: Path | None,
     output_dir: Path | None,
     message: str,
@@ -529,9 +544,10 @@ async def _diff_async(
     click.echo()
     click.echo("REM Schema Diff")
     click.echo("=" * 60)
+    click.echo(f"Strategy: {strategy}")
 
     # Initialize diff service
-    diff_service = DiffService(models_dir=models)
+    diff_service = DiffService(models_dir=models, strategy=strategy)
 
     try:
         # Compute diff
@@ -543,10 +559,16 @@ async def _diff_async(
         if not result.has_changes:
             click.secho("✓ No schema drift detected", fg="green")
             click.echo("  Database matches Pydantic models")
+            if result.filtered_count > 0:
+                click.echo()
+                click.secho(f"  ({result.filtered_count} destructive change(s) hidden by '{strategy}' strategy)", fg="yellow")
+                click.echo("  Use --strategy full to see all changes")
             return
 
         # Show changes
         click.secho(f"⚠ Schema drift detected: {result.change_count} change(s)", fg="yellow")
+        if result.filtered_count > 0:
+            click.secho(f"   ({result.filtered_count} destructive change(s) hidden by '{strategy}' strategy)", fg="yellow")
         click.echo()
         click.echo("Changes:")
         for line in result.summary:
@@ -581,7 +603,7 @@ async def _diff_async(
                 click.echo()
                 click.echo("Next steps:")
                 click.echo("  1. Review the generated SQL file")
-                click.echo("  2. Run: rem db migrate")
+                click.echo("  2. Run: rem db apply <file>")
             else:
                 click.echo("No migration file generated (no changes)")
 

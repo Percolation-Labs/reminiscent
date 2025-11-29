@@ -376,10 +376,13 @@ def create_app() -> FastAPI:
 
     app.include_router(chat_router)
     app.include_router(models_router)
+    # shared_sessions_router MUST be before messages_router
+    # because messages_router has /sessions/{session_id} which would match
+    # before the more specific /sessions/shared-with-me routes
+    app.include_router(shared_sessions_router)
     app.include_router(messages_router)
     app.include_router(feedback_router)
     app.include_router(admin_router)
-    app.include_router(shared_sessions_router)
     app.include_router(query_router)
 
     # Register auth router (if enabled)

@@ -1,0 +1,153 @@
+# =============================================================================
+# CI Workflow - Validate Pull Requests
+# =============================================================================
+#
+# Runs on every push to feature branches and PRs to main.
+# - Unit tests (no database required)
+# - Integration tests (with PostgreSQL service)
+# - Type checking with mypy
+#
+# =============================================================================
+
+name: CI
+
+on:
+  push:
+    branches-ignore:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Unit Tests (no database)
+  # ---------------------------------------------------------------------------
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync --all-extras --frozen
+
+      - name: Run unit tests
+        run: uv run pytest tests/unit/ -v --tb=short -m "not llm"
+
+  # ---------------------------------------------------------------------------
+  # Integration Tests (with PostgreSQL)
+  # ---------------------------------------------------------------------------
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: percolationlabs/rem-pg:18
+        env:
+          POSTGRES_DB: rem
+          POSTGRES_USER: rem
+          POSTGRES_PASSWORD: rem
+        ports:
+          - 5050:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync --all-extras --frozen
+
+      - name: Apply migrations
+        env:
+          POSTGRES__CONNECTION_STRING: postgresql://rem:rem@localhost:5050/rem
+        run: |
+          uv run rem db apply src/rem/sql/migrations/001_install.sql
+          uv run rem db apply src/rem/sql/migrations/002_install_models.sql
+
+      - name: Check schema drift
+        env:
+          POSTGRES__CONNECTION_STRING: postgresql://rem:rem@localhost:5050/rem
+        run: |
+          # Use --strategy full to detect ALL drift (including drops)
+          # This ensures the migration files are in sync with models
+          uv run rem db diff --strategy full --check
+
+      - name: Run integration tests
+        env:
+          POSTGRES__CONNECTION_STRING: postgresql://rem:rem@localhost:5050/rem
+        run: uv run pytest tests/integration/ -v --tb=short -m "not llm"
+
+  # ---------------------------------------------------------------------------
+  # Type Checking
+  # ---------------------------------------------------------------------------
+  type-check:
+    name: Type Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync --all-extras --frozen
+
+      - name: Run mypy
+        run: uv run mypy src/rem --ignore-missing-imports --no-error-summary || echo "Type check warnings"
+
+  # ---------------------------------------------------------------------------
+  # Lint Check
+  # ---------------------------------------------------------------------------
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync --all-extras --frozen
+
+      - name: Run ruff
+        run: uv run ruff check src/rem --output-format=github || echo "Lint warnings"
