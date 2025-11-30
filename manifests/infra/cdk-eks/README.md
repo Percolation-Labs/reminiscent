@@ -320,6 +320,15 @@ CDK now deploys ArgoCD and SSM parameters automatically (when enabled). After CD
 # Configure kubectl
 aws eks update-kubeconfig --name <cluster-name> --region us-east-1 --profile rem
 
+# Set GitHub credentials
+# Option 1: Use gh CLI (auto-detected by rem cluster apply)
+# Note: OAuth tokens (gho_) may not work for ArgoCD - use a PAT if needed
+
+# Option 2: Use a Personal Access Token (recommended for private repos)
+export GITHUB_USERNAME=<your-username>
+export GITHUB_PAT=ghp_<your-personal-access-token>  # Create at GitHub > Settings > Developer settings
+export GITHUB_REPO_URL=https://github.com/<org>/<repo>.git
+
 # Deploy ArgoCD Applications (platform + rem-stack)
 rem cluster apply
 

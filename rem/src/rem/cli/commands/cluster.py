@@ -978,10 +978,50 @@ def apply(config: Path | None, dry_run: bool, skip_platform: bool):
     namespace = cfg.get("project", {}).get("namespace", project_name)
     git_repo = cfg.get("git", {}).get("repoURL", "")
 
-    # Get credentials from environment
+    # Get credentials from environment, with fallback to gh CLI
     github_repo_url = os.environ.get("GITHUB_REPO_URL", git_repo)
     github_pat = os.environ.get("GITHUB_PAT", "")
     github_username = os.environ.get("GITHUB_USERNAME", "")
+
+    # Auto-detect from gh CLI if not set
+    if not github_pat or not github_username:
+        try:
+            # Try to get from gh CLI
+            gh_user = subprocess.run(
+                ["gh", "api", "user", "--jq", ".login"],
+                capture_output=True, text=True, timeout=10
+            )
+            gh_token = subprocess.run(
+                ["gh", "auth", "token"],
+                capture_output=True, text=True, timeout=10
+            )
+            if gh_user.returncode == 0 and gh_token.returncode == 0:
+                if not github_username:
+                    github_username = gh_user.stdout.strip()
+                if not github_pat:
+                    github_pat = gh_token.stdout.strip()
+                click.secho("  ℹ Using credentials from gh CLI", fg="cyan")
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass  # gh CLI not available
+
+    # Warn about OAuth tokens (gho_) vs PATs (ghp_)
+    if github_pat and github_pat.startswith("gho_"):
+        click.secho("  ⚠ Token appears to be an OAuth token (gho_)", fg="yellow")
+        click.secho("    OAuth tokens may not work for ArgoCD repo access", fg="yellow")
+        click.secho("    Consider using a Personal Access Token (ghp_) with 'repo' scope", fg="yellow")
+
+    # Auto-detect git remote if repo URL not set
+    if not github_repo_url:
+        try:
+            result = subprocess.run(
+                ["git", "remote", "get-url", "origin"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                github_repo_url = result.stdout.strip()
+                click.secho(f"  ℹ Using repo URL from git remote: {github_repo_url}", fg="cyan")
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
 
     click.echo()
     click.echo("ArgoCD Application Deployment")
