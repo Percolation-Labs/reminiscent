@@ -16,11 +16,9 @@ spec:
     kind: Deployment
 
   # Scaling behavior
-  # TODO: KEDA needs Pod Identity for SQS access - currently disabled
-  # For now, set minReplicaCount to 1 to avoid scale-to-zero issues with KEDA auth
   pollingInterval: 10   # Check SQS every 10 seconds
   cooldownPeriod: 60    # Wait 60s before scaling down after last trigger
-  minReplicaCount: 1    # Keep at least 1 replica (KEDA Pod Identity TBD)
+  minReplicaCount: 0    # Scale to zero when queue is empty
   maxReplicaCount: 20   # Max pods (adjust based on workload)
 
   # Advanced scaling behavior (optional)
@@ -52,10 +50,10 @@ spec:
   #   --query 'Stacks[0].Outputs[?OutputKey==`FileProcessingQueueUrl`].OutputValue' --output text
   triggers:
   - type: aws-sqs-queue
+    authenticationRef:
+      name: file-processor-trigger-auth
     metadata:
       # SQS Queue URL (from CDK stack output: FileProcessingQueueUrl)
       queueURL: https://sqs.us-east-1.amazonaws.com/852140462228/rem-cluster-b-file-processing-staging
       queueLength: "10"      # Target: 1 pod per 10 messages
       awsRegion: us-east-1
-      # Note: KEDA uses default AWS credentials chain (node role via IMDS)
-      # For scale-to-zero with Pod Identity, KEDA operator needs separate Pod Identity config

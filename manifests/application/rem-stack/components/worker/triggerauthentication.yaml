@@ -1,11 +1,10 @@
 # KEDA TriggerAuthentication for SQS
 #
-# Uses EKS Pod Identity via KEDA operator (not workload).
+# Uses EKS Pod Identity via KEDA operator (not workload pod).
 # This allows KEDA to scale from 0 replicas since it doesn't need a running pod for credentials.
 #
-# NOTE: KEDA operator needs Pod Identity with SQS permissions.
-# For now, use aws-eks identity which uses the node's role (has SQS access via Karpenter setup).
-# TODO: Create dedicated KEDA service account with Pod Identity for SQS access.
+# The keda-operator service account has Pod Identity configured in CDK with SQS permissions.
+# identityOwner: operator means KEDA uses the operator's credentials, not the workload's.
 
 apiVersion: keda.sh/v1alpha1
 kind: TriggerAuthentication
@@ -13,4 +12,5 @@ metadata:
   name: file-processor-trigger-auth
 spec:
   podIdentity:
-    provider: aws-eks  # Use EKS Pod Identity via node role
+    provider: aws
+    identityOwner: operator  # KEDA operator has Pod Identity with SQS access

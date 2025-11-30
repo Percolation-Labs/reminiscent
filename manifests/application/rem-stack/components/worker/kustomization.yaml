@@ -1,10 +1,11 @@
 # File Processor Worker Component
 #
 # Worker for async file processing from SQS
+# KEDA scales based on SQS queue depth (0-20 replicas)
 #
-# KEDA scaling is disabled until KEDA operator has proper AWS credentials.
-# TODO: Add Pod Identity association for keda-operator service account in CDK
-# See: keda-scaledobject.yaml and triggerauthentication.yaml (not deployed)
+# Prerequisites:
+#   - KEDA operator installed (via ArgoCD platform-apps)
+#   - keda-operator service account has Pod Identity for SQS access (CDK)
 
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
@@ -12,7 +13,6 @@ kind: Kustomization
 resources:
   # Uses rem-app service account (created in api component) with Pod Identity
   - deployment.yaml
-  # KEDA resources - DISABLED until keda-operator has Pod Identity for SQS
-  # Uncomment when KEDA operator can authenticate to AWS:
-  # - keda-scaledobject.yaml
-  # - triggerauthentication.yaml
+  # KEDA resources for SQS-based autoscaling
+  - keda-scaledobject.yaml
+  - triggerauthentication.yaml

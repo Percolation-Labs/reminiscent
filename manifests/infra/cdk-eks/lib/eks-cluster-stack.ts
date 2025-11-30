@@ -52,6 +52,7 @@ export class EksClusterStack extends cdk.Stack {
   public readonly cnpgBackupRole: iam.Role;
   public readonly externalSecretsRole: iam.Role;
   public readonly ebsCsiRole: iam.Role;
+  public readonly kedaOperatorRole: iam.Role;
 
   constructor(scope: Construct, id: string, props: EksClusterStackProps) {
     super(scope, id, props);
@@ -394,6 +395,23 @@ export class EksClusterStack extends cdk.Stack {
       resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/${props.config.clusterNamePrefix}/*`],
     }));
 
+    // KEDA Operator Role (for SQS-based autoscaling)
+    this.kedaOperatorRole = this.createPodIdentityRole('KEDAOperatorRole', `${props.clusterName}-keda-operator`,
+      'Pod identity role for KEDA operator to read SQS queue metrics');
+
+    // KEDA needs to read SQS queue attributes to determine scaling
+    this.kedaOperatorRole.addToPolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'sqs:GetQueueAttributes',
+        'sqs:GetQueueUrl',
+      ],
+      resources: [
+        this.fileProcessingQueue.queueArn,
+        this.fileProcessingDLQ.queueArn,
+      ],
+    }));
+
     // ============================================================
     // CLOUDWATCH LOG GROUPS
     // ============================================================
@@ -559,6 +577,31 @@ export class EksClusterStack extends cdk.Stack {
     });
     argocdNamespace.node.addDependency(externalSecretsNamespace);
 
+    // KEDA namespace and service account (for SQS-based autoscaling)
+    // Note: KEDA is installed via ArgoCD Helm chart, but we pre-create SA for Pod Identity
+    const kedaNamespace = new eks.KubernetesManifest(this, 'KEDANamespace', {
+      cluster: this.cluster,
+      manifest: [{
+        apiVersion: 'v1',
+        kind: 'Namespace',
+        metadata: { name: 'keda' },
+      }],
+    });
+    kedaNamespace.node.addDependency(argocdNamespace);
+
+    const kedaOperatorServiceAccount = new eks.KubernetesManifest(this, 'KEDAOperatorServiceAccount', {
+      cluster: this.cluster,
+      manifest: [{
+        apiVersion: 'v1',
+        kind: 'ServiceAccount',
+        metadata: {
+          name: 'keda-operator',
+          namespace: 'keda',
+        },
+      }],
+    });
+    kedaOperatorServiceAccount.node.addDependency(kedaNamespace);
+
     // ============================================================
     // POD IDENTITY ASSOCIATIONS
     // Moving these here to avoid cross-stack validation issues
@@ -617,6 +660,15 @@ export class EksClusterStack extends cdk.Stack {
       roleArn: this.karpenterRole.roleArn,
     });
     karpenterPodIdentity.node.addDependency(karpenterServiceAccount);
+
+    // KEDA Operator Pod Identity (for SQS-based autoscaling)
+    const kedaOperatorPodIdentity = new eks.CfnPodIdentityAssociation(this, 'KEDAOperatorPodIdentity', {
+      clusterName: this.cluster.clusterName,
+      namespace: 'keda',
+      serviceAccount: 'keda-operator',
+      roleArn: this.kedaOperatorRole.roleArn,
+    });
+    kedaOperatorPodIdentity.node.addDependency(kedaOperatorServiceAccount);
 
     // ============================================================
     // OUTPUTS
