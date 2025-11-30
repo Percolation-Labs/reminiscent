@@ -320,13 +320,13 @@ CDK now deploys ArgoCD and SSM parameters automatically (when enabled). After CD
 # Configure kubectl
 aws eks update-kubeconfig --name <cluster-name> --region us-east-1 --profile rem
 
-# Set GitHub credentials
-# Option 1: Use gh CLI (auto-detected by rem cluster apply)
-# Note: OAuth tokens (gho_) may not work for ArgoCD - use a PAT if needed
+# Set GitHub credentials - auto-detected from gh CLI
+# The 'rem cluster apply' command will automatically use credentials from 'gh auth'
+# OAuth tokens (gho_), PATs (ghp_), and fine-grained tokens all work
 
-# Option 2: Use a Personal Access Token (recommended for private repos)
+# Or set manually:
 export GITHUB_USERNAME=<your-username>
-export GITHUB_PAT=ghp_<your-personal-access-token>  # Create at GitHub > Settings > Developer settings
+export GITHUB_PAT=<your-token>  # OAuth (gho_), PAT (ghp_), or fine-grained (github_pat_)
 export GITHUB_REPO_URL=https://github.com/<org>/<repo>.git
 
 # Deploy ArgoCD Applications (platform + rem-stack)
@@ -343,6 +343,51 @@ rem cluster apply --dry-run
 4. Deploys rem-stack (API, workers, PostgreSQL)
 
 See `manifests/README.md` for the full deployment workflow.
+
+### Local Development with Tilt
+
+After cluster setup, you can run a local development environment using Tilt:
+
+```bash
+cd rem
+
+# Start local development environment
+tilt up
+
+# Or run in streaming mode (logs in terminal)
+tilt up --stream
+
+# Stop all services
+tilt down
+```
+
+**Local endpoints:**
+- Tilt Dashboard: http://localhost:10350
+- API: http://localhost:8000
+- Swagger UI: http://localhost:8000/docs
+- Health Check: http://localhost:8000/health
+- PostgreSQL: localhost:5050 (user: rem, password: rem)
+
+**Remote port forwarding (via Tilt tasks):**
+The Tilt dashboard includes manual trigger buttons for:
+- `port-forward-argocd`: Forward ArgoCD UI to http://localhost:8004
+- `port-forward-remote-api`: Forward remote REM API to http://localhost:8080
+- `port-forward-remote-db`: Forward remote EKS database to localhost:5433
+- `port-forward-phoenix`: Forward Phoenix UI to http://localhost:60006
+
+**ArgoCD credentials (first-time setup):**
+```bash
+# Username is always 'admin'
+# Get the initial admin password:
+kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d && echo
+```
+
+**Tilt task buttons:**
+- `db-migrate`: Apply database migrations
+- `db-diff`: Check schema drift
+- `test-unit`: Run unit tests
+- `test-integration`: Run integration tests
+- `health-check`: Check API health
 
 ## Stack Outputs
 
@@ -386,33 +431,6 @@ export QUEUE_URL=$(aws cloudformation describe-stacks \
   --query 'Stacks[0].Outputs[?OutputKey==`FileProcessingQueueUrl`].OutputValue' \
   --output text)
 ```
-
-### Creating ConfigMaps from Outputs
-
-Use the ConfigMap generator script (located at manifests root) to create Kubernetes ConfigMaps:
-
-```bash
-# From the manifests directory
-cd ../../
-./generate-configmap.sh
-
-# Apply directly to cluster
-./generate-configmap.sh | kubectl apply -f -
-
-# Or save to file for ArgoCD
-./generate-configmap.sh > application/rem-api/base/configmap.yaml
-```
-
-The script bridges infrastructure (CDK stack outputs) and application (REM settings.py):
-- **Pulls from CloudFormation**: Bucket names, queue URLs, cluster metadata
-- **Pulls from REM settings**: Default values, nested variable patterns, namespace architecture
-- **Only overrides infrastructure-specific values**:
-  - **S3__BUCKET_NAME**: `rem-io-dev` (overrides default `rem-storage`)
-  - **OTEL__ENABLED**: `true` + cluster endpoint (overrides disabled default)
-  - **PHOENIX__ENABLED**: `true` + cluster endpoint (overrides disabled default)
-  - **POSTGRES__CONNECTION_STRING**: CloudNativePG cluster service (overrides localhost)
-
-**Note**: See comments in generated ConfigMap YAML for REM settings.py line references.
 
 ### Using Outputs in Deployments
 

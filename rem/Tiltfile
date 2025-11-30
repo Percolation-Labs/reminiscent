@@ -134,11 +134,36 @@ local_resource(
 # Port forward to Phoenix UI
 local_resource(
     'port-forward-phoenix',
-    cmd='kubectl port-forward -n rem svc/phoenix 6006:6006',
+    cmd='kubectl port-forward -n rem svc/phoenix 60006:6006',
     labels=['remote'],
     auto_init=False,
     trigger_mode=TRIGGER_MODE_MANUAL,
     links=[
-        link('http://localhost:6006', 'Phoenix UI'),
+        link('http://localhost:60006', 'Phoenix UI'),
+    ],
+)
+
+# Port forward to ArgoCD UI (finds server service dynamically, excludes dex/repo-server)
+local_resource(
+    'port-forward-argocd',
+    cmd='kubectl port-forward -n argocd svc/$(kubectl get svc -n argocd --no-headers | grep -v dex | grep -v repo-server | grep server | awk "{print \\$1}") 8004:80',
+    labels=['remote'],
+    auto_init=False,
+    trigger_mode=TRIGGER_MODE_MANUAL,
+    links=[
+        link('http://localhost:8004', 'ArgoCD UI'),
+    ],
+)
+
+# Port forward to remote REM API
+local_resource(
+    'port-forward-remote-api',
+    cmd='kubectl port-forward -n rem svc/rem-api 8080:8000',
+    labels=['remote'],
+    auto_init=False,
+    trigger_mode=TRIGGER_MODE_MANUAL,
+    links=[
+        link('http://localhost:8080', 'Remote API'),
+        link('http://localhost:8080/docs', 'Remote Swagger UI'),
     ],
 )
