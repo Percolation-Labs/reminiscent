@@ -1004,11 +1004,14 @@ def apply(config: Path | None, dry_run: bool, skip_platform: bool):
         except (subprocess.TimeoutExpired, FileNotFoundError):
             pass  # gh CLI not available
 
-    # Warn about OAuth tokens (gho_) vs PATs (ghp_)
-    if github_pat and github_pat.startswith("gho_"):
-        click.secho("  ⚠ Token appears to be an OAuth token (gho_)", fg="yellow")
-        click.secho("    OAuth tokens may not work for ArgoCD repo access", fg="yellow")
-        click.secho("    Consider using a Personal Access Token (ghp_) with 'repo' scope", fg="yellow")
+    # Info about token type
+    if github_pat:
+        if github_pat.startswith("gho_"):
+            click.secho("  ℹ Using OAuth token from gh CLI", fg="cyan")
+        elif github_pat.startswith("ghp_"):
+            click.secho("  ℹ Using Personal Access Token", fg="cyan")
+        elif github_pat.startswith("github_pat_"):
+            click.secho("  ℹ Using Fine-grained Personal Access Token", fg="cyan")
 
     # Auto-detect git remote if repo URL not set
     if not github_repo_url:

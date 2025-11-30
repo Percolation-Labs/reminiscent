@@ -9,6 +9,14 @@
 - `rem/README.md` - Full documentation, CLI reference, API usage
 - `rem/src/rem/settings.py` - All configuration options
 
+**Local Development (Recommended):**
+
+```bash
+cd rem
+tilt up                                     # Start postgres + API + worker with dashboard
+# Open http://localhost:10350 for logs, restart buttons, task runners
+```
+
 **Common Commands:**
 
 ```bash
@@ -184,6 +192,7 @@ See `rem/README.md#rem-query-dialect` for full grammar.
 | Component | README Location |
 |-----------|-----------------|
 | **REM Package** | `rem/README.md` |
+| **Local Dev (Tilt)** | `manifests/local/README.md` |
 | **Agentic Framework** | `rem/src/rem/agentic/README.md` |
 | **PostgreSQL Service** | `rem/src/rem/services/postgres/README.md` |
 | **Dreaming Workers** | `rem/src/rem/services/dreaming/README.md` |
@@ -191,7 +200,7 @@ See `rem/README.md#rem-query-dialect` for full grammar.
 | **Content Processing** | `rem/src/rem/services/content/README.md` |
 | **CLI Commands** | `rem/src/rem/cli/README.md` |
 | **Utilities** | `rem/src/rem/utils/README.md` |
-| **EKS Infrastructure** | `manifests/infra/pulumi/eks-yaml/README.md` |
+| **EKS Infrastructure** | `manifests/infra/cdk-eks/README.md` |
 | **Platform (ArgoCD)** | `manifests/platform/README.md` |
 | **Application Deployment** | `manifests/application/README.md` |
 

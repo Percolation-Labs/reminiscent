@@ -2,6 +2,24 @@
 
 The infrastructure layer is provisioned using **AWS CDK (TypeScript)**.
 
+## Prerequisites
+
+Install these tools (or ask your AI to help):
+- kubectl, Docker Desktop, aws cli, node, gh (standard cloud dev tools)
+- [Tilt](https://tilt.dev) - for local development
+
+## Local Development First
+
+Before deploying to EKS, test locally with Tilt:
+
+```bash
+cd rem
+tilt up
+# Dashboard: http://localhost:10350
+```
+
+See [manifests/local/README.md](../local/README.md) for full local dev documentation.
+ 
 ## CDK EKS Stack
 
 **Location**: `manifests/infra/cdk-eks/`

@@ -181,30 +181,34 @@ remstack/
 
 ## Development
 
-### Local Development (Hybrid)
+### Local Development with Tilt (Recommended)
+
+[Tilt](https://tilt.dev) provides a unified dashboard for local development with hot reload, logs, and task buttons.
 
 ```bash
-# Start PostgreSQL
 cd rem
-docker compose up postgres -d
+tilt up
 
-# Install package
-pip install -e ".[dev]"
-
-# Run migrations
-rem db migrate
-
-# Start API server (hot reload)
-uvicorn rem.api.main:app --reload
-
-# Run tests
-pytest tests/integration/
+# Open http://localhost:10350 for:
+# - Unified logs for all services
+# - One-click restart buttons
+# - Task buttons: db-migrate, test-integration, db-diff, etc.
+# - Service health status
+# - Links to API docs, Swagger UI
 ```
 
-### Docker Development
+**Services started:**
+- PostgreSQL with pgvector on port 5050
+- API with hot reload on port 8000
+- Worker (file processor)
+
+**Stop:** `tilt down`
+
+See [manifests/local/README.md](manifests/local/README.md) for advanced options (MinIO, local K8s mode).
+
+### Alternative: Docker Compose
 
 ```bash
-# Build and run everything
 cd rem
 docker compose up --build
 
@@ -214,6 +218,14 @@ docker compose logs -f api
 # Run CLI commands
 docker exec rem-api rem db migrate
 docker exec rem-api rem ask "What is REM?"
+```
+
+### Running Tests
+
+```bash
+cd rem
+pytest tests/integration/ -v -m "not llm"  # Non-LLM tests (fast)
+./scripts/run_mypy.sh                       # Type checking
 ```
 
 ## Deployment
@@ -385,23 +397,3 @@ resources = await repo.get_by_user_id("user-123", limit=10)
 - **GitOps**: ArgoCD for continuous delivery
 - **Database Operator**: CloudNativePG for PostgreSQL management
 - **Observability**: OpenTelemetry + Arize Phoenix for LLM tracing
-
-## Developers
-
-### Running Tests
-Run the integration test suite to verify changes:
-```bash
-cd rem
-pytest tests/integration/
-```
-
-### Type Checking
-Run the type checker to catch schema and type-related issues:
-```bash
-./scripts/check_types.sh
-```
-Alternatively, run mypy directly:
-```bash
-cd rem
-mypy src/rem
-```
