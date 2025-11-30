@@ -1498,8 +1498,8 @@ def env_check(env_file: Path | None, environment: str, strict: bool):
 @click.option(
     "--namespace",
     "-n",
-    default="siggy",
-    help="Kubernetes namespace (default: siggy)",
+    default="rem",
+    help="Kubernetes namespace (default: rem)",
 )
 @click.option(
     "--exclude-secrets",
@@ -1646,8 +1646,8 @@ def env_generate(
 @click.option(
     "--namespace",
     "-n",
-    default="siggy",
-    help="Kubernetes namespace (default: siggy)",
+    default="rem",
+    help="Kubernetes namespace (default: rem)",
 )
 def env_diff(env_file: Path | None, configmap: str, namespace: str):
     """

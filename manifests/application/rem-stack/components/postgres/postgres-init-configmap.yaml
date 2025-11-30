@@ -2557,7 +2557,7 @@ data:
     \    p_user_id TEXT,\n    p_triggered_by TEXT DEFAULT 'query'\n)\nRETURNS VOID\
     \ AS $$\nDECLARE\n    v_has_pgnet BOOLEAN;\n    v_has_dblink BOOLEAN;\n    v_last_trigger\
     \ TIMESTAMPTZ;\n    v_api_secret TEXT;\n    v_debounce_seconds CONSTANT INTEGER\
-    \ := 30;\n    v_api_url TEXT := 'http://rem-api.siggy.svc.cluster.local:8000/api/admin/internal/rebuild-kv';\n\
+    \ := 30;\n    v_api_url TEXT := 'http://rem-api.rem.svc.cluster.local:8000/api/admin/internal/rebuild-kv';\n\
     \    v_request_id BIGINT;\nBEGIN\n    -- Quick check: is kv_store actually empty\
     \ for this user?\n    IF NOT rem_kv_store_empty(p_user_id) THEN\n        RETURN;\
     \  -- Cache has data, nothing to do\n    END IF;\n\n    -- Try to acquire advisory\

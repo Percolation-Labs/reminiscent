@@ -606,7 +606,7 @@ async def register_metadata(
     references: list[str] | None = None,
     sources: list[str] | None = None,
     flags: list[str] | None = None,
-    # Risk assessment fields (used by mental health agents like Siggy)
+    # Risk assessment fields (used by specialized agents)
     risk_level: str | None = None,
     risk_score: int | None = None,
     risk_reasoning: str | None = None,
@@ -663,7 +663,7 @@ async def register_metadata(
             sources=["REM database lookup"]
         )
 
-        # Mental health risk assessment (Siggy-style)
+        # Risk assessment example
         register_metadata(
             confidence=0.9,
             risk_level="green",

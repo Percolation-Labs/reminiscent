@@ -125,7 +125,7 @@ asyncio.run(test())
 # Port forward to remote EKS database
 local_resource(
     'port-forward-remote-db',
-    cmd='kubectl port-forward -n siggy svc/rem-postgres-rw 5433:5432',
+    cmd='kubectl port-forward -n rem svc/rem-postgres-rw 5433:5432',
     labels=['remote'],
     auto_init=False,
     trigger_mode=TRIGGER_MODE_MANUAL,
@@ -134,7 +134,7 @@ local_resource(
 # Port forward to Phoenix UI
 local_resource(
     'port-forward-phoenix',
-    cmd='kubectl port-forward -n siggy svc/phoenix 6006:6006',
+    cmd='kubectl port-forward -n rem svc/phoenix 6006:6006',
     labels=['remote'],
     auto_init=False,
     trigger_mode=TRIGGER_MODE_MANUAL,

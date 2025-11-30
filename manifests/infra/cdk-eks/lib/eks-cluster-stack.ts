@@ -360,10 +360,12 @@ export class EksClusterStack extends cdk.Stack {
     }));
 
     // EC2 Spot Service-Linked Role
-    new iam.CfnServiceLinkedRole(this, 'SpotServiceLinkedRole', {
-      awsServiceName: 'spot.amazonaws.com',
-      description: 'Service-linked role for EC2 Spot instances (required by Karpenter)',
-    });
+    // Note: This role is created once per account and may already exist
+    // If deployment fails with "already exists", this section can be safely removed
+    // new iam.CfnServiceLinkedRole(this, 'SpotServiceLinkedRole', {
+    //   awsServiceName: 'spot.amazonaws.com',
+    //   description: 'Service-linked role for EC2 Spot instances (required by Karpenter)',
+    // });
 
     // OTEL Collector Role
     this.otelCollectorRole = this.createPodIdentityRole('OTELCollectorRole', `${props.clusterName}-otel-collector`,
@@ -407,6 +409,214 @@ export class EksClusterStack extends cdk.Stack {
       retention: props.environment === 'production' ? logs.RetentionDays.ONE_MONTH : logs.RetentionDays.ONE_WEEK,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
+
+    // ============================================================
+    // NAMESPACES AND SERVICE ACCOUNTS
+    // Pre-create these so PodIdentityAssociations in AddonsStack pass validation
+    // ============================================================
+
+    // REM namespace and service account
+    const remNamespace = new eks.KubernetesManifest(this, 'REMNamespace', {
+      cluster: this.cluster,
+      manifest: [{
+        apiVersion: 'v1',
+        kind: 'Namespace',
+        metadata: { name: props.config.appNamespace },
+      }],
+    });
+
+    const remAppServiceAccount = new eks.KubernetesManifest(this, 'REMAppServiceAccount', {
+      cluster: this.cluster,
+      manifest: [{
+        apiVersion: 'v1',
+        kind: 'ServiceAccount',
+        metadata: {
+          name: 'rem-app',
+          namespace: props.config.appNamespace,
+        },
+      }],
+    });
+    remAppServiceAccount.node.addDependency(remNamespace);
+
+    // Observability namespace and service account
+    const observabilityNamespace = new eks.KubernetesManifest(this, 'ObservabilityNamespace', {
+      cluster: this.cluster,
+      manifest: [{
+        apiVersion: 'v1',
+        kind: 'Namespace',
+        metadata: { name: 'observability' },
+      }],
+    });
+    observabilityNamespace.node.addDependency(remNamespace);
+
+    const otelCollectorServiceAccount = new eks.KubernetesManifest(this, 'OTELCollectorServiceAccount', {
+      cluster: this.cluster,
+      manifest: [{
+        apiVersion: 'v1',
+        kind: 'ServiceAccount',
+        metadata: {
+          name: 'otel-collector',
+          namespace: 'observability',
+        },
+      }],
+    });
+    otelCollectorServiceAccount.node.addDependency(observabilityNamespace);
+
+    // Postgres namespace and service account
+    const postgresNamespace = new eks.KubernetesManifest(this, 'PostgresClusterNamespace', {
+      cluster: this.cluster,
+      manifest: [{
+        apiVersion: 'v1',
+        kind: 'Namespace',
+        metadata: { name: 'postgres-cluster' },
+      }],
+    });
+    postgresNamespace.node.addDependency(observabilityNamespace);
+
+    const postgresBackupServiceAccount = new eks.KubernetesManifest(this, 'PostgresBackupServiceAccount', {
+      cluster: this.cluster,
+      manifest: [{
+        apiVersion: 'v1',
+        kind: 'ServiceAccount',
+        metadata: {
+          name: 'postgres-backup',
+          namespace: 'postgres-cluster',
+        },
+      }],
+    });
+    postgresBackupServiceAccount.node.addDependency(postgresNamespace);
+
+    // Karpenter namespace and service account
+    const karpenterNamespace = new eks.KubernetesManifest(this, 'KarpenterNamespace', {
+      cluster: this.cluster,
+      manifest: [{
+        apiVersion: 'v1',
+        kind: 'Namespace',
+        metadata: { name: 'karpenter' },
+      }],
+    });
+    karpenterNamespace.node.addDependency(postgresNamespace);
+
+    const karpenterServiceAccount = new eks.KubernetesManifest(this, 'KarpenterServiceAccount', {
+      cluster: this.cluster,
+      manifest: [{
+        apiVersion: 'v1',
+        kind: 'ServiceAccount',
+        metadata: {
+          name: 'karpenter',
+          namespace: 'karpenter',
+        },
+      }],
+    });
+    karpenterServiceAccount.node.addDependency(karpenterNamespace);
+
+    // External Secrets namespace and service account
+    const externalSecretsNamespace = new eks.KubernetesManifest(this, 'ExternalSecretsNamespace', {
+      cluster: this.cluster,
+      manifest: [{
+        apiVersion: 'v1',
+        kind: 'Namespace',
+        metadata: { name: 'external-secrets-system' },
+      }],
+    });
+    externalSecretsNamespace.node.addDependency(karpenterNamespace);
+
+    const externalSecretsServiceAccount = new eks.KubernetesManifest(this, 'ExternalSecretsServiceAccount', {
+      cluster: this.cluster,
+      manifest: [{
+        apiVersion: 'v1',
+        kind: 'ServiceAccount',
+        metadata: {
+          name: 'external-secrets',
+          namespace: 'external-secrets-system',
+        },
+      }],
+    });
+    externalSecretsServiceAccount.node.addDependency(externalSecretsNamespace);
+
+    // ALB Controller service account in kube-system
+    const albControllerServiceAccount = new eks.KubernetesManifest(this, 'ALBControllerServiceAccount', {
+      cluster: this.cluster,
+      manifest: [{
+        apiVersion: 'v1',
+        kind: 'ServiceAccount',
+        metadata: {
+          name: 'aws-load-balancer-controller',
+          namespace: 'kube-system',
+        },
+      }],
+    });
+    albControllerServiceAccount.node.addDependency(externalSecretsNamespace);
+
+    // ArgoCD namespace
+    const argocdNamespace = new eks.KubernetesManifest(this, 'ArgoCDNamespace', {
+      cluster: this.cluster,
+      manifest: [{
+        apiVersion: 'v1',
+        kind: 'Namespace',
+        metadata: { name: 'argocd' },
+      }],
+    });
+    argocdNamespace.node.addDependency(externalSecretsNamespace);
+
+    // ============================================================
+    // POD IDENTITY ASSOCIATIONS
+    // Moving these here to avoid cross-stack validation issues
+    // ============================================================
+
+    // REM App Pod Identity
+    const remAppPodIdentity = new eks.CfnPodIdentityAssociation(this, 'REMAppPodIdentity', {
+      clusterName: this.cluster.clusterName,
+      namespace: props.config.appNamespace,
+      serviceAccount: 'rem-app',
+      roleArn: this.appPodRole.roleArn,
+    });
+    remAppPodIdentity.node.addDependency(remAppServiceAccount);
+
+    // OTEL Collector Pod Identity
+    const otelCollectorPodIdentity = new eks.CfnPodIdentityAssociation(this, 'OTELCollectorPodIdentity', {
+      clusterName: this.cluster.clusterName,
+      namespace: 'observability',
+      serviceAccount: 'otel-collector',
+      roleArn: this.otelCollectorRole.roleArn,
+    });
+    otelCollectorPodIdentity.node.addDependency(otelCollectorServiceAccount);
+
+    // CNPG Backup Pod Identity
+    const cnpgBackupPodIdentity = new eks.CfnPodIdentityAssociation(this, 'CNPGBackupPodIdentity', {
+      clusterName: this.cluster.clusterName,
+      namespace: 'postgres-cluster',
+      serviceAccount: 'postgres-backup',
+      roleArn: this.cnpgBackupRole.roleArn,
+    });
+    cnpgBackupPodIdentity.node.addDependency(postgresBackupServiceAccount);
+
+    // External Secrets Pod Identity
+    const externalSecretsPodIdentity = new eks.CfnPodIdentityAssociation(this, 'ExternalSecretsPodIdentity', {
+      clusterName: this.cluster.clusterName,
+      namespace: 'external-secrets-system',
+      serviceAccount: 'external-secrets',
+      roleArn: this.externalSecretsRole.roleArn,
+    });
+    externalSecretsPodIdentity.node.addDependency(externalSecretsServiceAccount);
+
+    // ALB Controller Pod Identity
+    const albControllerPodIdentity = new eks.CfnPodIdentityAssociation(this, 'ALBControllerPodIdentity', {
+      clusterName: this.cluster.clusterName,
+      namespace: 'kube-system',
+      serviceAccount: 'aws-load-balancer-controller',
+      roleArn: this.albControllerRole.roleArn,
+    });
+    albControllerPodIdentity.node.addDependency(albControllerServiceAccount);
+
+    // Karpenter Pod Identity
+    const karpenterPodIdentity = new eks.CfnPodIdentityAssociation(this, 'KarpenterPodIdentity', {
+      clusterName: this.cluster.clusterName,
+      namespace: 'karpenter',
+      serviceAccount: 'karpenter',
+      roleArn: this.karpenterRole.roleArn,
+    });
+    karpenterPodIdentity.node.addDependency(karpenterServiceAccount);
 
     // ============================================================
     // OUTPUTS

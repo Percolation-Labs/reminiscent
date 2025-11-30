@@ -91,7 +91,7 @@ DECLARE
     v_last_trigger TIMESTAMPTZ;
     v_api_secret TEXT;
     v_debounce_seconds CONSTANT INTEGER := 30;
-    v_api_url TEXT := 'http://rem-api.siggy.svc.cluster.local:8000/api/admin/internal/rebuild-kv';
+    v_api_url TEXT := 'http://rem-api.rem.svc.cluster.local:8000/api/admin/internal/rebuild-kv';
     v_request_id BIGINT;
 BEGIN
     -- Quick check: is kv_store actually empty for this user?

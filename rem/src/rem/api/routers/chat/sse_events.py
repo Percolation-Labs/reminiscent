@@ -321,7 +321,7 @@ class MetadataEvent(BaseModel):
     # Agent info
     agent_schema: str | None = Field(
         default=None,
-        description="Name of the agent schema used for this response (e.g., 'rem', 'Siggy')"
+        description="Name of the agent schema used for this response (e.g., 'rem', 'query-assistant')"
     )
 
     # Quality indicators

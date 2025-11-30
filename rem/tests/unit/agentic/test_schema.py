@@ -290,10 +290,10 @@ class TestAgentSchemaMetadataNewFields:
         """Test system_prompt field in metadata."""
         metadata = AgentSchemaMetadata(
             name="test-agent",
-            system_prompt="You are Siggy, a mental health assistant."
+            system_prompt="You are a helpful assistant."
         )
 
-        assert metadata.system_prompt == "You are Siggy, a mental health assistant."
+        assert metadata.system_prompt == "You are a helpful assistant."
         assert metadata.structured_output is True  # default
 
     def test_structured_output_disabled(self):
@@ -320,7 +320,7 @@ class TestAgentSchemaMetadataNewFields:
     def test_full_metadata_with_new_fields(self):
         """Test full metadata with all new fields."""
         metadata = AgentSchemaMetadata(
-            name="siggy",
+            name="test-agent",
             kind="agent",
             version="1.0.0",
             system_prompt="Extended instructions here...",

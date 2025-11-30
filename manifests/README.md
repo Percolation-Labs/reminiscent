@@ -33,7 +33,9 @@ cp .env.example .env
 
 # 2. Deploy infrastructure (includes ArgoCD + SSM params)
 npm install
-npx cdk deploy --all --profile rem
+npx cdk deploy --all --profile rem 2>&1 | tee deploy.log
+
+# Monitor in another terminal: tail -f deploy.log
 
 # 3. Configure kubectl
 aws eks update-kubeconfig --name <cluster-name> --region us-east-1 --profile rem
@@ -58,7 +60,7 @@ kubectl delete application --all -n argocd
 
 # 2. Destroy CDK stack
 cd manifests/infra/cdk-eks
-npx cdk destroy --all --profile rem
+npx cdk destroy --all --profile rem 2>&1 | tee destroy.log
 
 # 3. Recreate (follow Quick Start steps 4-9)
 ```

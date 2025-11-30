@@ -31,7 +31,7 @@ spec:
     cnpg-cluster-events:
       # Watch in the namespace where postgres lives
       # NOTE: Update this to match your CNPG cluster namespace
-      namespace: siggy
+      namespace: rem
 
       # CloudNativePG Cluster CRD coordinates
       group: postgresql.cnpg.io

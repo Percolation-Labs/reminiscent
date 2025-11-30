@@ -1,6 +1,7 @@
 import * as cdk from 'aws-cdk-lib';
 import * as eks from 'aws-cdk-lib/aws-eks';
-import * as ssm from 'aws-cdk-lib/aws-ssm';
+import * as iam from 'aws-cdk-lib/aws-iam';
+import * as cr from 'aws-cdk-lib/custom-resources';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
 import { ClusterConfig } from './config';
@@ -110,181 +111,19 @@ export class EksAddonsStack extends cdk.Stack {
     io2PostgresStorageClass.node.addDependency(gp3PostgresStorageClass);
 
     // ============================================================
-    // REM NAMESPACE + SERVICE ACCOUNT + POD IDENTITY
+    // HELM CHARTS
+    // Pod Identity associations are now in EksClusterStack
+    // Order: Karpenter first, then ALB Controller (to avoid webhook timing issues)
     // ============================================================
 
-    const remNamespace = new eks.KubernetesManifest(this, 'REMNamespace', {
-      cluster,
-      manifest: [{
-        apiVersion: 'v1',
-        kind: 'Namespace',
-        metadata: { name: props.config.appNamespace },
-      }],
-    });
-    remNamespace.node.addDependency(io2PostgresStorageClass);
-
-    const remAppServiceAccount = new eks.KubernetesManifest(this, 'REMAppServiceAccount', {
-      cluster,
-      manifest: [{
-        apiVersion: 'v1',
-        kind: 'ServiceAccount',
-        metadata: {
-          name: 'rem-app',
-          namespace: props.config.appNamespace,
-        },
-      }],
-    });
-    remAppServiceAccount.node.addDependency(remNamespace);
-
-    const remAppPodIdentity = new eks.CfnPodIdentityAssociation(this, 'REMAppPodIdentity', {
-      clusterName: cluster.clusterName,
-      namespace: props.config.appNamespace,
-      serviceAccount: 'rem-app',
-      roleArn: props.clusterStack.appPodRole.roleArn,
-    });
-    remAppPodIdentity.node.addDependency(remAppServiceAccount);
-
     // ============================================================
-    // OBSERVABILITY NAMESPACE + SERVICE ACCOUNT + POD IDENTITY
+    // KARPENTER HELM + NODEPOOL + NODECLASS
+    // Namespace, ServiceAccount, and PodIdentity created in EksClusterStack
+    // Installed BEFORE ALB Controller to avoid webhook timing issues
     // ============================================================
-
-    const observabilityNamespace = new eks.KubernetesManifest(this, 'ObservabilityNamespace', {
-      cluster,
-      manifest: [{
-        apiVersion: 'v1',
-        kind: 'Namespace',
-        metadata: { name: 'observability' },
-      }],
-    });
-    observabilityNamespace.node.addDependency(remNamespace);
-
-    const otelCollectorServiceAccount = new eks.KubernetesManifest(this, 'OTELCollectorServiceAccount', {
-      cluster,
-      manifest: [{
-        apiVersion: 'v1',
-        kind: 'ServiceAccount',
-        metadata: {
-          name: 'otel-collector',
-          namespace: 'observability',
-        },
-      }],
-    });
-    otelCollectorServiceAccount.node.addDependency(observabilityNamespace);
-
-    const otelCollectorPodIdentity = new eks.CfnPodIdentityAssociation(this, 'OTELCollectorPodIdentity', {
-      clusterName: cluster.clusterName,
-      namespace: 'observability',
-      serviceAccount: 'otel-collector',
-      roleArn: props.clusterStack.otelCollectorRole.roleArn,
-    });
-    otelCollectorPodIdentity.node.addDependency(otelCollectorServiceAccount);
-
-    // ============================================================
-    // POSTGRES NAMESPACE + SERVICE ACCOUNT + POD IDENTITY
-    // ============================================================
-
-    const postgresNamespace = new eks.KubernetesManifest(this, 'PostgresClusterNamespace', {
-      cluster,
-      manifest: [{
-        apiVersion: 'v1',
-        kind: 'Namespace',
-        metadata: { name: 'postgres-cluster' },
-      }],
-    });
-    postgresNamespace.node.addDependency(observabilityNamespace);
-
-    const postgresBackupServiceAccount = new eks.KubernetesManifest(this, 'PostgresBackupServiceAccount', {
-      cluster,
-      manifest: [{
-        apiVersion: 'v1',
-        kind: 'ServiceAccount',
-        metadata: {
-          name: 'postgres-backup',
-          namespace: 'postgres-cluster',
-        },
-      }],
-    });
-    postgresBackupServiceAccount.node.addDependency(postgresNamespace);
-
-    const cnpgBackupPodIdentity = new eks.CfnPodIdentityAssociation(this, 'CNPGBackupPodIdentity', {
-      clusterName: cluster.clusterName,
-      namespace: 'postgres-cluster',
-      serviceAccount: 'postgres-backup',
-      roleArn: props.clusterStack.cnpgBackupRole.roleArn,
-    });
-    cnpgBackupPodIdentity.node.addDependency(postgresBackupServiceAccount);
-
-    // ============================================================
-    // EXTERNAL SECRETS POD IDENTITY
-    // ============================================================
-
-    const externalSecretsPodIdentity = new eks.CfnPodIdentityAssociation(this, 'ExternalSecretsPodIdentity', {
-      clusterName: cluster.clusterName,
-      namespace: 'external-secrets-system',
-      serviceAccount: 'external-secrets',
-      roleArn: props.clusterStack.externalSecretsRole.roleArn,
-    });
-    externalSecretsPodIdentity.node.addDependency(cnpgBackupPodIdentity);
-
-    // ============================================================
-    // ALB CONTROLLER POD IDENTITY + HELM
-    // ============================================================
-
-    const albControllerPodIdentity = new eks.CfnPodIdentityAssociation(this, 'ALBControllerPodIdentity', {
-      clusterName: cluster.clusterName,
-      namespace: 'kube-system',
-      serviceAccount: 'aws-load-balancer-controller',
-      roleArn: props.clusterStack.albControllerRole.roleArn,
-    });
-    albControllerPodIdentity.node.addDependency(externalSecretsPodIdentity);
-
-    // Deploy AWS Load Balancer Controller via Helm
-    // Required for Ingress resources and ALB/NLB provisioning
-    const albController = new eks.HelmChart(this, 'ALBController', {
-      cluster,
-      chart: 'aws-load-balancer-controller',
-      repository: 'https://aws.github.io/eks-charts',
-      namespace: 'kube-system',
-      version: '1.14.0',
-      values: {
-        clusterName: cluster.clusterName,
-        region: this.region,
-        vpcId: props.clusterStack.vpc.vpcId,
-        serviceAccount: {
-          create: true,
-          name: 'aws-load-balancer-controller',
-          annotations: {},  // Pod Identity - no IRSA annotation needed
-        },
-        enableShield: false,
-        enableWaf: false,
-        enableWafv2: false,
-      },
-    });
-    albController.node.addDependency(albControllerPodIdentity);
-
-    // ============================================================
-    // KARPENTER NAMESPACE + HELM + NODEPOOL + NODECLASS
-    // ============================================================
-
-    const karpenterNamespace = new eks.KubernetesManifest(this, 'KarpenterNamespace', {
-      cluster,
-      manifest: [{
-        apiVersion: 'v1',
-        kind: 'Namespace',
-        metadata: { name: 'karpenter' },
-      }],
-    });
-    karpenterNamespace.node.addDependency(postgresNamespace);
-
-    const karpenterPodIdentity = new eks.CfnPodIdentityAssociation(this, 'KarpenterPodIdentity', {
-      clusterName: cluster.clusterName,
-      namespace: 'karpenter',
-      serviceAccount: 'karpenter',
-      roleArn: props.clusterStack.karpenterRole.roleArn,
-    });
-    karpenterPodIdentity.node.addDependency(karpenterNamespace);
 
     // Use eks.HelmChart directly (not cluster.addHelmChart) to keep it in this stack
+    // Note: ServiceAccount created in ClusterStack for Pod Identity
     const karpenter = new eks.HelmChart(this, 'Karpenter', {
       cluster,
       chart: 'karpenter',
@@ -306,12 +145,39 @@ export class EksAddonsStack extends cdk.Stack {
           },
         ],
         nodeSelector: { 'node-type': 'karpenter-controller' },
-        serviceAccount: { name: 'karpenter', annotations: {} },
+        serviceAccount: {
+          create: false,  // SA already created in ClusterStack for Pod Identity
+          name: 'karpenter',
+        },
       },
     });
+    karpenter.node.addDependency(io2PostgresStorageClass);
 
-    karpenter.node.addDependency(karpenterNamespace);
-    karpenter.node.addDependency(karpenterPodIdentity);
+    // Deploy AWS Load Balancer Controller via Helm
+    // Required for Ingress resources and ALB/NLB provisioning
+    // Note: ServiceAccount created in ClusterStack for Pod Identity
+    // Installed AFTER Karpenter to avoid webhook timing issues
+    const albController = new eks.HelmChart(this, 'ALBController', {
+      cluster,
+      chart: 'aws-load-balancer-controller',
+      repository: 'https://aws.github.io/eks-charts',
+      namespace: 'kube-system',
+      version: '1.14.0',
+      wait: true,  // Wait for pods to be ready before marking complete (required for webhook)
+      values: {
+        clusterName: cluster.clusterName,
+        region: this.region,
+        vpcId: props.clusterStack.vpc.vpcId,
+        serviceAccount: {
+          create: false,  // SA already created in ClusterStack for Pod Identity
+          name: 'aws-load-balancer-controller',
+        },
+        enableShield: false,
+        enableWaf: false,
+        enableWafv2: false,
+      },
+    });
+    albController.node.addDependency(karpenter);
 
     // Default NodePool
     const defaultNodePool = new eks.KubernetesManifest(this, 'KarpenterDefaultNodePool', {
@@ -394,7 +260,10 @@ export class EksAddonsStack extends cdk.Stack {
     defaultNodeClass.node.addDependency(karpenter);
 
     // ============================================================
-    // SSM PARAMETERS (Optional - for External Secrets Operator)
+    // SECRETS AND PARAMETERS
+    // - Secrets Manager: Random secrets (postgres password, session, phoenix)
+    // - SSM Parameters: Config values (API keys, postgres username)
+    // External Secrets Operator can read from both stores
     // ============================================================
 
     if (props.config.enableSsmParameters) {
@@ -408,98 +277,91 @@ export class EksAddonsStack extends cdk.Stack {
         console.warn('⚠️  OPENAI_API_KEY not set - SSM parameter will be empty');
       }
 
-      // PostgreSQL credentials
-      new ssm.StringParameter(this, 'PostgresUsername', {
-        parameterName: `${prefix}/postgres/username`,
-        stringValue: 'remuser',
-        description: 'PostgreSQL username for REM database',
-        tier: ssm.ParameterTier.STANDARD,
-      });
+      // Helper to create/update SSM parameter using SDK (bypasses CloudFormation early validation)
+      const putSsmParameter = (id: string, parameterName: string, value: string, description: string) => {
+        return new cr.AwsCustomResource(this, id, {
+          onCreate: {
+            service: 'SSM',
+            action: 'putParameter',
+            parameters: {
+              Name: parameterName,
+              Value: value,
+              Type: 'String',
+              Overwrite: true,
+              Description: description,
+            },
+            physicalResourceId: cr.PhysicalResourceId.of(parameterName),
+          },
+          onUpdate: {
+            service: 'SSM',
+            action: 'putParameter',
+            parameters: {
+              Name: parameterName,
+              Value: value,
+              Type: 'String',
+              Overwrite: true,
+              Description: description,
+            },
+            physicalResourceId: cr.PhysicalResourceId.of(parameterName),
+          },
+          policy: cr.AwsCustomResourcePolicy.fromStatements([
+            new iam.PolicyStatement({
+              actions: ['ssm:PutParameter', 'ssm:GetParameter', 'ssm:DeleteParameter'],
+              resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter${prefix}/*`],
+            }),
+          ]),
+        });
+      };
 
-      // Generate random password for PostgreSQL
-      const postgresPassword = new secretsmanager.Secret(this, 'PostgresPasswordSecret', {
-        secretName: `${prefix}/postgres/password-secret`,
+      // ---- SSM Parameters (for config values - API keys, usernames) ----
+
+      // PostgreSQL username (not a secret)
+      putSsmParameter('PostgresUsername', `${prefix}/postgres/username`, 'remuser', 'PostgreSQL username for REM database');
+
+      // LLM API Keys (from environment variables)
+      putSsmParameter('AnthropicApiKey', `${prefix}/llm/anthropic-api-key`, props.config.anthropicApiKey || 'placeholder', 'Anthropic API key for Claude');
+      putSsmParameter('OpenAIApiKey', `${prefix}/llm/openai-api-key`, props.config.openaiApiKey || 'placeholder', 'OpenAI API key');
+
+      // Google OAuth (from environment variables)
+      putSsmParameter('GoogleClientId', `${prefix}/auth/google-client-id`, props.config.googleClientId, 'Google OAuth Client ID');
+      putSsmParameter('GoogleClientSecret', `${prefix}/auth/google-client-secret`, props.config.googleClientSecret, 'Google OAuth Client Secret');
+
+      // ---- Secrets Manager (for random secrets - External Secrets reads from here) ----
+
+      // PostgreSQL password
+      new secretsmanager.Secret(this, 'PostgresPasswordSecret', {
+        secretName: `${prefix}/postgres/password`,
         generateSecretString: {
           excludeCharacters: '"@/\\\'',
           passwordLength: 32,
         },
-      });
-
-      new ssm.StringParameter(this, 'PostgresPassword', {
-        parameterName: `${prefix}/postgres/password`,
-        stringValue: postgresPassword.secretValue.unsafeUnwrap(),
         description: 'PostgreSQL password for REM database',
-        tier: ssm.ParameterTier.STANDARD,
       });
 
-      // LLM API Keys
-      new ssm.StringParameter(this, 'AnthropicApiKey', {
-        parameterName: `${prefix}/llm/anthropic-api-key`,
-        stringValue: props.config.anthropicApiKey || 'placeholder',
-        description: 'Anthropic API key for Claude',
-        tier: ssm.ParameterTier.STANDARD,
-      });
-
-      new ssm.StringParameter(this, 'OpenAIApiKey', {
-        parameterName: `${prefix}/llm/openai-api-key`,
-        stringValue: props.config.openaiApiKey || 'placeholder',
-        description: 'OpenAI API key',
-        tier: ssm.ParameterTier.STANDARD,
-      });
-
-      // Phoenix secrets (random)
-      const phoenixApiKey = new secretsmanager.Secret(this, 'PhoenixApiKeySecret', {
-        secretName: `${prefix}/phoenix/api-key-secret`,
+      // Phoenix secrets
+      new secretsmanager.Secret(this, 'PhoenixApiKeySecret', {
+        secretName: `${prefix}/phoenix/api-key`,
         generateSecretString: { passwordLength: 32 },
-      });
-      new ssm.StringParameter(this, 'PhoenixApiKey', {
-        parameterName: `${prefix}/phoenix/api-key`,
-        stringValue: phoenixApiKey.secretValue.unsafeUnwrap(),
-        tier: ssm.ParameterTier.STANDARD,
+        description: 'Phoenix API key',
       });
 
-      const phoenixSecret = new secretsmanager.Secret(this, 'PhoenixSecretSecret', {
-        secretName: `${prefix}/phoenix/secret-secret`,
+      new secretsmanager.Secret(this, 'PhoenixSecretSecret', {
+        secretName: `${prefix}/phoenix/secret`,
         generateSecretString: { passwordLength: 32 },
-      });
-      new ssm.StringParameter(this, 'PhoenixSecret', {
-        parameterName: `${prefix}/phoenix/secret`,
-        stringValue: phoenixSecret.secretValue.unsafeUnwrap(),
-        tier: ssm.ParameterTier.STANDARD,
+        description: 'Phoenix secret',
       });
 
-      const phoenixAdminSecret = new secretsmanager.Secret(this, 'PhoenixAdminSecret', {
-        secretName: `${prefix}/phoenix/admin-secret-secret`,
+      new secretsmanager.Secret(this, 'PhoenixAdminSecret', {
+        secretName: `${prefix}/phoenix/admin-secret`,
         generateSecretString: { passwordLength: 32 },
-      });
-      new ssm.StringParameter(this, 'PhoenixAdminSecretParam', {
-        parameterName: `${prefix}/phoenix/admin-secret`,
-        stringValue: phoenixAdminSecret.secretValue.unsafeUnwrap(),
-        tier: ssm.ParameterTier.STANDARD,
+        description: 'Phoenix admin secret',
       });
 
-      // Auth secrets
-      const sessionSecret = new secretsmanager.Secret(this, 'SessionSecret', {
-        secretName: `${prefix}/auth/session-secret-secret`,
+      // Session secret
+      new secretsmanager.Secret(this, 'SessionSecret', {
+        secretName: `${prefix}/auth/session-secret`,
         generateSecretString: { passwordLength: 32 },
-      });
-      new ssm.StringParameter(this, 'SessionSecretParam', {
-        parameterName: `${prefix}/auth/session-secret`,
-        stringValue: sessionSecret.secretValue.unsafeUnwrap(),
-        tier: ssm.ParameterTier.STANDARD,
-      });
-
-      // Google OAuth (optional)
-      new ssm.StringParameter(this, 'GoogleClientId', {
-        parameterName: `${prefix}/auth/google-client-id`,
-        stringValue: props.config.googleClientId,
-        tier: ssm.ParameterTier.STANDARD,
-      });
-
-      new ssm.StringParameter(this, 'GoogleClientSecret', {
-        parameterName: `${prefix}/auth/google-client-secret`,
-        stringValue: props.config.googleClientSecret,
-        tier: ssm.ParameterTier.STANDARD,
+        description: 'Session secret for authentication',
       });
     }
 
@@ -508,16 +370,7 @@ export class EksAddonsStack extends cdk.Stack {
     // ============================================================
 
     if (props.config.enableArgoCD) {
-      // Create argocd namespace
-      const argocdNamespace = new eks.KubernetesManifest(this, 'ArgoCDNamespace', {
-        cluster,
-        manifest: [{
-          apiVersion: 'v1',
-          kind: 'Namespace',
-          metadata: { name: 'argocd' },
-        }],
-      });
-      argocdNamespace.node.addDependency(karpenterNamespace);
+      // ArgoCD namespace created in EksClusterStack
 
       // Deploy ArgoCD via Helm
       const argocd = new eks.HelmChart(this, 'ArgoCD', {
@@ -552,7 +405,8 @@ export class EksAddonsStack extends cdk.Stack {
           },
         },
       });
-      argocd.node.addDependency(argocdNamespace);
+      // ArgoCD must wait for ALB Controller pods to be ready (webhook must be available)
+      argocd.node.addDependency(albController);
     }
 
     // ============================================================

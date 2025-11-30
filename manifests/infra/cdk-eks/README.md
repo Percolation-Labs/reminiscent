@@ -132,32 +132,31 @@ npx cdk bootstrap aws://852140462228/us-east-1
 ### Deploy
 
 ```bash
-# IMPORTANT: Always use --profile flag to ensure correct AWS account credentials
-# CDK does not respect AWS_PROFILE environment variable alone
-npx cdk deploy REMApplicationClusterA --profile rem --require-approval never
+# Recommended: Deploy with logging to deploy.log (essential for debugging)
+npx cdk deploy REMApplicationClusterA --profile rem --require-approval never 2>&1 | tee deploy.log
 ```
 
-**Note**: The `--profile rem` flag is **required** even if you have `AWS_PROFILE=rem` set in your environment. CDK CLI does not automatically use the environment variable and will fall back to default credentials, which may be for a different AWS account.
+**Important Notes**:
+- The `--profile rem` flag is **required** - CDK CLI does not respect `AWS_PROFILE` env var
+- Always use `tee deploy.log` - deployments take ~20 minutes and logs are critical for debugging
 
-**Tip: Log Output for Monitoring**
-
-For long-running deployments (~20 minutes), capture output to a file for easier monitoring:
-
+**Monitor in Another Terminal**:
 ```bash
-# Recommended: Output to file AND terminal simultaneously
-npx cdk deploy REMApplicationClusterA --profile rem --require-approval never 2>&1 | tee deploy.log
-
-# Monitor progress in another terminal
+# Watch progress in real-time
 tail -f deploy.log
 
-# Or search for specific events
+# Search for specific events
 grep -E "(CREATE_|UPDATE_|DELETE_|FAILED)" deploy.log
+
+# Check for errors
+grep -i "error\|failed" deploy.log
 ```
 
-This is especially useful when:
-- Deployment spans multiple terminal sessions
-- You need to review errors after the fact
-- Debugging Lambda rate limiting or CloudFormation failures
+**Why Log by Default**:
+- Deployments are long-running (~20 minutes)
+- CloudFormation events scroll quickly past terminal buffer
+- Lambda rate limiting errors need post-hoc analysis
+- Essential for debugging failed deployments
 
 #### What to Expect During Deployment
 
@@ -235,7 +234,7 @@ ALBControllerRoleArn: arn:aws:iam::[account]:role/application-cluster-a-alb-cont
 ExternalSecretsRoleArn: arn:aws:iam::[account]:role/application-cluster-a-external-secrets
 ```
 
-**Monitoring Progress**: Watch CloudFormation events in AWS Console or check `deploy.log` file created during deployment.
+**Monitoring Progress**: Use `tail -f deploy.log` in another terminal, or watch CloudFormation events in AWS Console.
 
 ### Connect to Cluster
 
@@ -555,9 +554,9 @@ cdk-eks/
 
 **Lessons Learned**:
 1. Always use `--profile` flag with CDK CLI (doesn't respect `AWS_PROFILE` env var)
-2. Deployment log (`deploy.log`) essential for debugging (use `tee` to capture)
+2. Always use `| tee deploy.log` - default in our deploy command for good reason
 3. CloudFormation nested stacks can be confusing - watch main stack progress
-4. EKS cluster creation is the bottleneck - be patient
+4. EKS cluster creation is the bottleneck - be patient (~10 min)
 5. Pod Identity associations happen AFTER ServiceAccounts are created
 6. Karpenter Helm chart installation can fail if nodes aren't ready - CDK handles retry logic
 
@@ -580,7 +579,7 @@ aws cloudformation describe-stack-events \
   --profile rem \
   --max-items 20
 
-# Check deploy.log for progress
+# Check deploy.log for progress (created by default deploy command)
 tail -f deploy.log
 
 # Check nested stack status

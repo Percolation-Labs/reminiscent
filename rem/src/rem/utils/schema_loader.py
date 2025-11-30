@@ -195,7 +195,7 @@ def load_agent_schema(
     """
     Load agent schema from YAML file with unified search logic and caching.
 
-    Schema names are case-invariant - "Siggy", "siggy", "SIGGY" all resolve to the same schema.
+    Schema names are case-invariant - "Rem", "rem", "REM" all resolve to the same schema.
 
     Filesystem schemas are cached indefinitely (immutable, versioned with code).
     Database schemas (future) will be cached with TTL for invalidation.
