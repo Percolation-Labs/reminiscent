@@ -92,7 +92,6 @@ For testing and development, manifests live in this repo. Changes here are bundl
 ```
 manifests/
 ├── README.md                # This file
-├── TROUBLESHOOTING.md       # Deployment guide and common issues
 ├── cluster-config.yaml      # Deployment configuration template
 │
 ├── infra/                   # Infrastructure layer
@@ -110,8 +109,22 @@ manifests/
 │       ├── components/     # Base components (API, workers, postgres)
 │       └── overlays/       # Environment configs (staging, prod)
 │
-└── local/                   # Local development (docker-compose)
+└── local/                   # Local development with Tilt
+    ├── Tiltfile            # Multi-tier local dev (compose, MinIO, K8s)
+    └── README.md           # Local dev documentation
 ```
+
+## Local Development
+
+Before deploying to EKS, develop and test locally with Tilt:
+
+```bash
+cd rem
+tilt up
+# Dashboard: http://localhost:10350
+```
+
+See [local/README.md](local/README.md) for full documentation including MinIO for S3 testing and local Kubernetes mode.
 
 ## CLI Commands Reference
 
@@ -204,10 +217,9 @@ This is planned for future releases.
 
 ## Troubleshooting
 
-See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for:
-- Deployment checklist
-- Common issues and fixes
-- Session notes from deployments
+Common issues are documented in:
+- [infra/cdk-eks/README.md](infra/cdk-eks/README.md) - CDK deployment issues
+- [local/README.md](local/README.md#troubleshooting) - Local development issues
 
 ## Related Documentation
 

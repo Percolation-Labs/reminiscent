@@ -55,7 +55,7 @@ rem ask --user-id demo-user "Show me meetings about API design"
 
 **Next steps:** Explore [remstack-lab](https://github.com/Percolation-Labs/remstack-lab) for domain-specific datasets (recruitment, legal, enterprise) and format examples (engrams, conversations).
 
-### Option 2: Docker Compose (All-in-One)
+### Option 2: Docker Compose (Developers)
 
 ```bash
 # Clone and start
@@ -73,6 +73,10 @@ curl http://localhost:8000/health
 - MCP Server: http://localhost:8000/api/v1/mcp
 - PostgreSQL: `localhost:5050` (rem/rem)
 
+**Port Guide:**
+- **5050**: Developers (local build with `docker-compose.yml`)
+- **5051**: Package users (pre-built image with `docker-compose.prebuilt.yml`)
+
 See [rem/README.md](rem/README.md) for detailed installation and usage.
 
 ## Architecture
@@ -86,7 +90,7 @@ See [rem/README.md](rem/README.md) for detailed installation and usage.
 ```mermaid
 graph TD
     API[FastAPI<br/>Chat + MCP] --> AGENTS[JSON Schema<br/>Agents]
-    AGENTS --> TOOLS[MCP Tools<br/>5 Tools]
+    AGENTS --> TOOLS[MCP Tools<br/>4 Tools]
 
     TOOLS --> QUERY[REM Query<br/>Dialect]
     QUERY --> DB[(PostgreSQL<br/>+pgvector)]
@@ -228,49 +232,23 @@ pytest tests/integration/ -v -m "not llm"  # Non-LLM tests (fast)
 ./scripts/run_mypy.sh                       # Type checking
 ```
 
-## Deployment
-
-### Prerequisites
-
-- AWS Account with credentials configured
-- AWS CLI and kubectl installed
-- Node.js and CDK CLI installed (`npm install -g aws-cdk`)
-- REM CLI installed (`pip install remdb`)
-
-### Deploy to AWS EKS
+## Deployment to AWS EKS
 
 ```bash
-# 1. Configure CDK
+# 1. Configure and deploy infrastructure
 cd manifests/infra/cdk-eks
-cp .env.example .env
-# Edit .env with your AWS account, API keys, etc.
-
-# 2. Deploy CDK infrastructure (~20-25 min)
-# Includes EKS, ArgoCD, SSM parameters
+cp .env.example .env        # Edit with AWS account, API keys
 npm install
-npx cdk deploy --all --profile <your-profile>
+npx cdk deploy --all --profile rem
 
-# 3. Configure kubectl
-aws eks update-kubeconfig --name <cluster-name> --region us-east-1 --profile <your-profile>
+# 2. Configure kubectl
+aws eks update-kubeconfig --name <cluster-name> --region us-east-1 --profile rem
 
-# 4. Deploy ArgoCD applications
-export GITHUB_REPO_URL=https://github.com/YOUR_ORG/YOUR_REPO.git
-export GITHUB_PAT=ghp_...
-export GITHUB_USERNAME=your-username
+# 3. Deploy ArgoCD applications
 rem cluster apply
 ```
 
-### CLI Cluster Commands
-
-| Command | Description |
-|---------|-------------|
-| `rem cluster init` | Initialize config & download manifests |
-| `rem cluster validate` | Validate deployment prerequisites |
-| `rem cluster apply` | Deploy ArgoCD applications (platform + rem-stack) |
-| `rem cluster apply --dry-run` | Preview ArgoCD deployment |
-| `rem cluster setup-ssm` | Create SSM parameters (if not using CDK) |
-
-See [manifests/README.md](manifests/README.md) for detailed deployment guide.
+See [manifests/README.md](manifests/README.md) for complete deployment guide, CLI commands, configuration options, and troubleshooting.
 
 ## Core Design Patterns
 

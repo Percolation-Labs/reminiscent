@@ -106,9 +106,10 @@ remstack/
 │   │   └── cli/           # Command-line interface
 │   └── README.md          # Full documentation
 ├── manifests/             # Kubernetes deployment
-│   ├── infra/            # EKS, Pulumi
+│   ├── infra/            # AWS CDK for EKS
 │   ├── platform/         # ArgoCD, CloudNativePG
-│   └── application/      # rem-api, file-processor
+│   ├── application/      # rem-api, file-processor
+│   └── local/            # Tilt local development
 └── CLAUDE.md             # This file
 ```
 

@@ -4,7 +4,7 @@ This directory contains Kubernetes manifests for the REM stack, organized using 
 
 ## Architecture
 
-The REM stack consists of **2 deployments** in the `rem-app` namespace:
+The REM stack consists of **2 deployments** in the `rem` namespace:
 
 1. **rem-api**: FastAPI server with **MCP server mounted** (not separate)
 2. **file-processor**: KEDA-scaled worker for file processing

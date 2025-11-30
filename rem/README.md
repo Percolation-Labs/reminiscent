@@ -614,8 +614,8 @@ POST /api/v1/chat/completions
 ```
 
 **Headers**:
-- `X-Tenant-Id`: Tenant identifier (optional, for multi-tenant deployments)
-- `X-User-Id`: User identifier (optional, uses default if not provided)
+- `X-User-Id`: User identifier (required for data isolation, uses default if not provided)
+- `X-Tenant-Id`: Deprecated - use `X-User-Id` instead (kept for backwards compatibility)
 - `X-Session-Id`: Session/conversation identifier
 - `X-Agent-Schema`: Agent schema URI to use
 
