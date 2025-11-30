@@ -4,7 +4,7 @@
 # This allows KEDA to scale from 0 replicas since it doesn't need a running pod for credentials.
 #
 # The keda-operator service account has Pod Identity configured in CDK with SQS permissions.
-# identityOwner: operator means KEDA uses the operator's credentials, not the workload's.
+# identityOwner: keda means KEDA uses the operator's credentials, not the workload's.
 
 apiVersion: keda.sh/v1alpha1
 kind: TriggerAuthentication
@@ -13,4 +13,4 @@ metadata:
 spec:
   podIdentity:
     provider: aws
-    identityOwner: operator  # KEDA operator has Pod Identity with SQS access
+    identityOwner: keda  # KEDA operator has Pod Identity with SQS access
