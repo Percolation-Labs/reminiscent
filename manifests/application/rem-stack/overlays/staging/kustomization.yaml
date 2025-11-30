@@ -56,6 +56,7 @@ configMapGenerator:
       - S3__BUCKET_NAME=rem-application-cluster-app-bucket
       - OTEL_COLLECTOR_ENDPOINT=http://phoenix.rem.svc.cluster.local:4317
       - AUTH__ENABLED=true
+      - SQS__QUEUE_URL=https://sqs.us-east-1.amazonaws.com/852140462228/rem-cluster-b-file-processing-staging
 
 # Labels for version tracking (no selectors to avoid immutable field conflicts)
 labels:

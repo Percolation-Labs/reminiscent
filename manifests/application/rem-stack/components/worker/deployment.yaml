@@ -63,19 +63,12 @@ spec:
         command: ["python", "-m", "rem.workers.sqs_file_processor"]
 
         # Environment variables from ConfigMaps (generated from CDK outputs)
+        # SQS__QUEUE_URL is included in rem-config (set per-environment in kustomize overlays)
         envFrom:
         - configMapRef:
-            name: rem-config  # S3__BUCKET_NAME, ENVIRONMENT, OTEL__, PHOENIX__
-        - configMapRef:
-            name: rem-queues  # FILE_PROCESSING_QUEUE_URL
+            name: rem-config  # S3__BUCKET_NAME, ENVIRONMENT, OTEL__, SQS__QUEUE_URL
 
         env:
-        # Map queue URL from ConfigMap to REM's expected env var
-        - name: SQS__QUEUE_URL
-          valueFrom:
-            configMapKeyRef:
-              name: rem-queues
-              key: FILE_PROCESSING_QUEUE_URL
 
         # Use regional STS endpoints (faster)
         - name: AWS_STS_REGIONAL_ENDPOINTS
