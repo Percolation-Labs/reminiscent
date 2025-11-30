@@ -161,7 +161,7 @@ remstack/
 │   ├── docker-compose.yml # Local development
 │   └── README.md          # Package documentation
 ├── manifests/             # Kubernetes deployment
-│   ├── infra/            # Pulumi EKS infrastructure
+│   ├── infra/            # AWS CDK EKS infrastructure
 │   ├── platform/         # ArgoCD, CloudNativePG, Phoenix
 │   └── application/      # REM application manifests
 └── README.md             # This file
@@ -173,7 +173,7 @@ remstack/
 ## Documentation
 
 - **Python Package**: [rem/README.md](rem/README.md) - Installation, CLI, API, development
-- **Infrastructure**: [manifests/infra/pulumi/eks-yaml/README.md](manifests/infra/pulumi/eks-yaml/README.md) - EKS cluster with Karpenter
+- **Infrastructure**: [manifests/infra/cdk-eks/README.md](manifests/infra/cdk-eks/README.md) - EKS cluster with CDK
 - **Platform**: [manifests/platform/README.md](manifests/platform/README.md) - ArgoCD, CloudNativePG, Phoenix
 - **Application**: [manifests/application/README.md](manifests/application/README.md) - Kubernetes deployment
 - **Database**: [rem/src/rem/services/postgres/README.md](rem/src/rem/services/postgres/README.md) - Schema, migrations, queries
@@ -228,28 +228,24 @@ docker exec rem-api rem ask "What is REM?"
 ### Deploy to AWS EKS
 
 ```bash
-# 1. Install remdb and initialize (auto-downloads manifests)
-pip install remdb
-rem cluster init --project-name myproject -y
-
-# Or specify a specific manifest version
-rem cluster init --project-name myproject --manifest-version v0.5.0 -y
-
-# 2. Deploy CDK infrastructure (~25-30 min)
+# 1. Configure CDK
 cd manifests/infra/cdk-eks
-cdk deploy REMApplicationClusterA
+cp .env.example .env
+# Edit .env with your AWS account, API keys, etc.
 
-# 3. Setup SSM parameters (secrets)
-rem cluster setup-ssm
+# 2. Deploy CDK infrastructure (~20-25 min)
+# Includes EKS, ArgoCD, SSM parameters
+npm install
+npx cdk deploy --all --profile <your-profile>
 
-# 4. Generate all manifests (includes SQL ConfigMap)
-rem cluster generate
+# 3. Configure kubectl
+aws eks update-kubeconfig --name <cluster-name> --region us-east-1 --profile <your-profile>
 
-# 5. Validate prerequisites
-rem cluster validate
-
-# 6. Deploy via ArgoCD (~5-10 min)
-kubectl apply -f manifests/application/rem-stack/argocd-staging.yaml
+# 4. Deploy ArgoCD applications
+export GITHUB_REPO_URL=https://github.com/YOUR_ORG/YOUR_REPO.git
+export GITHUB_PAT=ghp_...
+export GITHUB_USERNAME=your-username
+rem cluster apply
 ```
 
 ### CLI Cluster Commands
@@ -257,14 +253,12 @@ kubectl apply -f manifests/application/rem-stack/argocd-staging.yaml
 | Command | Description |
 |---------|-------------|
 | `rem cluster init` | Initialize config & download manifests |
-| `rem cluster init -y` | Auto-download without prompting |
-| `rem cluster init --manifest-version v0.5.0` | Download specific manifest version |
-| `rem cluster setup-ssm` | Create required SSM parameters |
-| `rem cluster generate` | Generate all manifests (ArgoCD, SQL ConfigMap, etc.) |
 | `rem cluster validate` | Validate deployment prerequisites |
-| `rem cluster env check` | Validate .env for cluster deployment |
+| `rem cluster apply` | Deploy ArgoCD applications (platform + rem-stack) |
+| `rem cluster apply --dry-run` | Preview ArgoCD deployment |
+| `rem cluster setup-ssm` | Create SSM parameters (if not using CDK) |
 
-See [manifests/TROUBLESHOOTING.md](manifests/TROUBLESHOOTING.md) for detailed deployment guide and common issues.
+See [manifests/README.md](manifests/README.md) for detailed deployment guide.
 
 ## Core Design Patterns
 
@@ -384,7 +378,7 @@ resources = await repo.get_by_user_id("user-123", limit=10)
 
 ### Infrastructure
 - **Cloud**: AWS EKS (Elastic Kubernetes Service)
-- **IaC**: Pulumi YAML (no Python virtualenv required)
+- **IaC**: AWS CDK (TypeScript)
 - **Autoscaling**: Karpenter for intelligent node provisioning
 
 ### Platform
