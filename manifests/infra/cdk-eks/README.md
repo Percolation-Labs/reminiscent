@@ -101,6 +101,13 @@ ENABLE_EXTERNAL_SECRETS=true
 ENABLE_CERT_MANAGER=true
 ENABLE_ADOT=true
 ENABLE_POD_IDENTITY=true
+ENABLE_ARGOCD=true           # Optional: disable for management cluster pattern
+ENABLE_SSM_PARAMETERS=true   # Creates SSM parameters for External Secrets
+
+# SSM Parameters (required if ENABLE_SSM_PARAMETERS=true)
+SSM_PREFIX=/rem
+ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=sk-proj-...
 
 # Cost Optimization
 USE_SPOT_INSTANCES=true
@@ -308,24 +315,26 @@ aws cloudformation describe-stacks \
 
 ### Post-Deployment Setup
 
-1. **Generate and Apply ConfigMaps**:
-   ```bash
-   cd ../../
-   ./generate-configmap.sh | kubectl apply -f -
-   ```
+CDK now deploys ArgoCD and SSM parameters automatically (when enabled). After CDK deployment:
 
-2. **Deploy Platform Services** (see `manifests/platform/README.md`):
-   - ArgoCD for GitOps
-   - CloudNativePG for PostgreSQL
-   - OpenTelemetry Collector
-   - Arize Phoenix for LLM observability
-   - External Secrets Operator
-   - Cert Manager
+```bash
+# Configure kubectl
+aws eks update-kubeconfig --name <cluster-name> --region us-east-1 --profile rem
 
-3. **Deploy Applications** (see `manifests/application/README.md`):
-   - REM API (FastAPI)
-   - REM MCP (FastMCP)
-   - File Processor workers
+# Deploy ArgoCD Applications (platform + rem-stack)
+rem cluster apply
+
+# Or with dry-run to preview
+rem cluster apply --dry-run
+```
+
+**What `rem cluster apply` does:**
+1. Creates ArgoCD repository secret (if private repo)
+2. Creates application namespace
+3. Deploys platform-apps (cert-manager, external-secrets, cloudnative-pg, etc.)
+4. Deploys rem-stack (API, workers, PostgreSQL)
+
+See `manifests/README.md` for the full deployment workflow.
 
 ## Stack Outputs
 
@@ -449,11 +458,12 @@ cdk-eks/
 - **OpenTelemetry**: Observability backbone with OTEL collector
 - **External Secrets Operator**: Secret management
 - **File processing**: S3 + SQS integration
+- **ArgoCD**: GitOps deployment (optional, deployed via Helm chart)
+- **SSM Parameters**: Automatic creation of secrets for External Secrets Operator
 
 ### ⚠️ Not Yet Implemented (from CLAUDE.md)
 
-- **ArgoCD**: GitOps deployment (defined in platform layer, not infra)
-- **Management cluster**: Separate cluster for ArgoCD/GitOps
+- **Management cluster**: Separate cluster for ArgoCD/GitOps (ArgoCD can be disabled on app cluster via `ENABLE_ARGOCD=false`)
 - **Multi-cluster**: Currently single cluster deployment
 - **Arize Phoenix**: LLM observability platform
 

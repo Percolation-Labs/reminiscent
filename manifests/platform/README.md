@@ -2,61 +2,37 @@
 
 Platform components deployed via ArgoCD using OCI Helm charts.
 
-## Quick Start: Zero-Touch Bootstrap
+## Quick Start
 
-Use the `rem` CLI for a streamlined deployment experience:
+Platform deployment is handled by CDK and the `rem cluster apply` command.
+
+**Prerequisites:**
+1. CDK infrastructure deployed with `ENABLE_ARGOCD=true` and `ENABLE_SSM_PARAMETERS=true`
+2. kubectl configured: `aws eks update-kubeconfig --name <cluster-name> --region us-east-1`
 
 ```bash
-# 1. Install rem CLI
-pip install remdb
-
-# 2. Set environment variables
-export ANTHROPIC_API_KEY=sk-ant-...
-export OPENAI_API_KEY=sk-proj-...
+# Set required environment variables
 export GITHUB_REPO_URL=https://github.com/YOUR_ORG/YOUR_REPO.git
 export GITHUB_PAT=ghp_...
 export GITHUB_USERNAME=your-username
 
-# 3. Validate prerequisites
-rem cluster validate --pre-argocd
-
-# 4. Create SSM parameters (reads from env vars)
-rem cluster setup-ssm
-
-# 5. Deploy ArgoCD applications
+# Deploy ArgoCD applications
 rem cluster apply
 ```
 
-**Alternative: Use .env file**
-```bash
-cp .env.example .env
-# Edit .env with your values
-source .env
-rem cluster validate --pre-argocd
-rem cluster setup-ssm
-rem cluster apply
-```
+**What happens:**
+1. CDK creates SSM parameters (API keys, passwords) during infrastructure deployment
+2. CDK deploys ArgoCD via Helm chart
+3. `rem cluster apply` creates ArgoCD applications for platform + rem-stack
 
-**Required environment variables:**
+**Required environment variables for `rem cluster apply`:**
 | Variable | Description |
 |----------|-------------|
 | `GITHUB_REPO_URL` | Your fork's URL (e.g., `https://github.com/YOUR_ORG/YOUR_REPO.git`) |
-| `ANTHROPIC_API_KEY` | Anthropic API key for Claude |
-| `OPENAI_API_KEY` | OpenAI API key |
 | `GITHUB_PAT` | GitHub Personal Access Token (repo scope) |
 | `GITHUB_USERNAME` | GitHub username |
 
-**Optional environment variables:**
-| Variable | Description |
-|----------|-------------|
-| `GOOGLE_CLIENT_ID` | Google OAuth client ID (placeholder if not set) |
-| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret (placeholder if not set) |
-| `AWS_PROFILE` | AWS profile to use (default: `rem`) |
-| `REM_NAMESPACE` | Kubernetes namespace (default: `rem`) |
-
-The `rem cluster` commands will:
-1. `setup-ssm`: Create SSM parameters (auto-generates PostgreSQL password, Phoenix keys, reads API keys from env)
-2. `apply`: Create ArgoCD repository secret, namespace, and deploy platform-apps + rem-stack
+**Note:** API keys (ANTHROPIC_API_KEY, OPENAI_API_KEY) are configured in CDK's `.env` file and stored in SSM during infrastructure deployment.
 
 ## Forking This Stack
 
@@ -108,9 +84,9 @@ Platform components deployed as ArgoCD Applications using the OCI repository pat
 
 ### Prerequisites
 
-1. **Infrastructure deployed** - see [../infra/eks-yaml/README.md](../infra/eks-yaml/README.md)
-2. **kubeconfig** configured: `export KUBECONFIG=~/.kube/rem-cluster-config`
-3. **Secrets** in AWS Parameter Store (see Configuration section below)
+1. **Infrastructure deployed** - see [../infra/cdk-eks/README.md](../infra/cdk-eks/README.md)
+2. **kubeconfig** configured: `aws eks update-kubeconfig --name <cluster-name> --region us-east-1`
+3. **Secrets** in AWS Parameter Store (created by CDK when `ENABLE_SSM_PARAMETERS=true`)
 
 ### Install Platform Operators (Manual - without ArgoCD)
 
@@ -201,43 +177,39 @@ Benefits:
 
 Before deploying platform layer:
 
-1. Infrastructure layer (Pulumi) must be complete
-2. ArgoCD must be installed in the cluster
-3. Environment variables from infra layer must be set
-4. ECR access configured for pulling images
+1. Infrastructure layer (CDK) must be complete with `ENABLE_ARGOCD=true`
+2. ArgoCD is installed by CDK (or install manually if disabled)
+3. SSM parameters created by CDK (or use `rem cluster setup-ssm` if disabled)
+4. kubectl configured for cluster access
 
 ## Configuration
 
 ### AWS Parameter Store Secrets
 
-**Recommended:** Use the bootstrap script which creates all SSM parameters automatically:
+SSM parameters are created automatically by CDK when `ENABLE_SSM_PARAMETERS=true` (default).
+
+**Parameters created by CDK:**
+
+| Parameter | Source |
+|-----------|--------|
+| `/rem/postgres/username` | Fixed: `remuser` |
+| `/rem/postgres/password` | Auto-generated |
+| `/rem/llm/anthropic-api-key` | From `.env`: `ANTHROPIC_API_KEY` |
+| `/rem/llm/openai-api-key` | From `.env`: `OPENAI_API_KEY` |
+| `/rem/phoenix/api-key` | Auto-generated |
+| `/rem/phoenix/secret` | Auto-generated |
+| `/rem/phoenix/admin-secret` | Auto-generated |
+| `/rem/auth/session-secret` | Auto-generated |
+| `/rem/auth/google-client-id` | From `.env`: `GOOGLE_CLIENT_ID` |
+| `/rem/auth/google-client-secret` | From `.env`: `GOOGLE_CLIENT_SECRET` |
+
+**Manual creation** (only if `ENABLE_SSM_PARAMETERS=false`):
+
 ```bash
-./scripts/bootstrap-argocd.sh
-```
-
-**Manual creation** (if not using bootstrap):
-
-```bash
-# PostgreSQL credentials (required)
-# IMPORTANT: Username MUST be "remuser" to match CNPG cluster owner spec
-aws ssm put-parameter --name /rem/postgres/username --value "remuser" --type String
-aws ssm put-parameter --name /rem/postgres/password --value "$(openssl rand -base64 24)" --type SecureString
-
-# LLM API keys (required)
-aws ssm put-parameter --name /rem/llm/anthropic-api-key --value "sk-ant-..." --type SecureString
-aws ssm put-parameter --name /rem/llm/openai-api-key --value "sk-..." --type SecureString
-
-# Phoenix secrets (required for observability)
-aws ssm put-parameter --name /rem/phoenix/api-key --value "$(openssl rand -base64 32)" --type SecureString
-aws ssm put-parameter --name /rem/phoenix/secret --value "$(openssl rand -base64 32)" --type SecureString
-aws ssm put-parameter --name /rem/phoenix/admin-secret --value "$(openssl rand -base64 32)" --type SecureString
-
-# Auth secrets
-aws ssm put-parameter --name /rem/auth/session-secret --value "$(openssl rand -base64 32)" --type SecureString
-
-# Optional: OAuth credentials (use "placeholder" if not using Google OAuth)
-aws ssm put-parameter --name /rem/auth/google-client-id --value "placeholder" --type String
-aws ssm put-parameter --name /rem/auth/google-client-secret --value "placeholder" --type SecureString
+# Use rem cluster setup-ssm command
+export ANTHROPIC_API_KEY=sk-ant-...
+export OPENAI_API_KEY=sk-proj-...
+rem cluster setup-ssm
 ```
 
 ### Pod Identity
