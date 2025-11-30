@@ -45,14 +45,14 @@ spec:
 
   # Triggers (SQS queue)
   # NOTE: KEDA doesn't support ConfigMap refs in trigger metadata
-  # This value MUST match rem-queues ConfigMap (FILE_PROCESSING_QUEUE_URL)
-  # Run: kubectl get configmap rem-queues -n rem-api -o jsonpath='{.data.FILE_PROCESSING_QUEUE_URL}'
-  # To regenerate: ./manifests/generate-configmap.sh | kubectl apply -f -
+  # Update queueURL from CDK stack output: FileProcessingQueueUrl
+  # aws cloudformation describe-stacks --stack-name REMEksClusterB --profile rem \
+  #   --query 'Stacks[0].Outputs[?OutputKey==`FileProcessingQueueUrl`].OutputValue' --output text
   triggers:
   - type: aws-sqs-queue
     metadata:
       # SQS Queue URL (from CDK stack output: FileProcessingQueueUrl)
-      queueURL: https://sqs.us-east-1.amazonaws.com/227209289001/rem-application-cluster-file-processing-staging
+      queueURL: https://sqs.us-east-1.amazonaws.com/852140462228/rem-cluster-b-file-processing-staging
       queueLength: "10"      # Target: 1 pod per 10 messages
       awsRegion: us-east-1
     authenticationRef:
