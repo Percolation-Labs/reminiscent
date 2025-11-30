@@ -31,9 +31,9 @@ metadata:
     app: file-processor
     component: rem-consumer
 spec:
-  # KEDA manages replicas - set initial count
-  # KEDA will override this based on queue depth (see keda-scaledobject.yaml)
-  replicas: 0  # Start at 0, KEDA scales up when messages arrive
+  # Fixed replica count (KEDA scaling disabled - see kustomization.yaml)
+  # When KEDA is enabled, set to 0 and let KEDA manage scaling
+  replicas: 1
 
   selector:
     matchLabels:
