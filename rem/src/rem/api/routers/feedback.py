@@ -8,15 +8,56 @@ Endpoints:
 
 Trace Integration:
 - Feedback can reference trace_id/span_id for OTEL integration
-- Phoenix sync attaches feedback as span annotations (async)
+- Phoenix sync attaches feedback as span annotations
+
+HTTP Status Codes:
+- 201: Feedback saved AND synced to Phoenix as annotation (phoenix_synced=true)
+- 200: Feedback accepted and saved to DB, but NOT synced to Phoenix
+       (missing trace_id/span_id, Phoenix disabled, or sync failed)
+
+IMPORTANT - Testing Requirements:
+    ╔════════════════════════════════════════════════════════════════════════════════════════════════╗
+    ║  1. Use 'rem' agent (NOT 'simulator') - only real agents capture traces                        ║
+    ║  2. Session IDs MUST be UUIDs - use $(uuidgen) or uuid.uuid4()                                 ║
+    ║  3. Ensure OTEL is enabled and collector is port-forwarded (4318)                              ║
+    ║  4. Ensure Phoenix is enabled and port-forwarded (6006)                                        ║
+    ║  5. Set PHOENIX_API_KEY env var for annotation sync:                                           ║
+    ║     kubectl get secret -n siggy rem-phoenix-api-key -o jsonpath='{.data.PHOENIX_API_KEY}' \    ║
+    ║       | base64 -d                                                                              ║
+    ╚════════════════════════════════════════════════════════════════════════════════════════════════╝
+
+Usage:
+    # 1. Send a chat message with X-Session-Id header
+    #    IMPORTANT: Use UUID for session_id, use 'rem' agent (NOT simulator!)
+    curl -X POST http://localhost:8000/api/v1/chat/completions \\
+        -H "Content-Type: application/json" \\
+        -H "X-Session-Id: $(uuidgen)" \\
+        -H "X-Agent-Schema: rem" \\
+        -d '{"messages": [{"role": "user", "content": "hello"}], "stream": true}'
+
+    # 2. Extract message_id from the 'metadata' SSE event in the response
+
+    # 3. Submit feedback referencing that message
+    curl -X POST http://localhost:8000/api/v1/messages/feedback \\
+        -H "Content-Type: application/json" \\
+        -d '{
+            "session_id": "<session-uuid>",
+            "message_id": "<message-id-from-metadata>",
+            "rating": 1,
+            "comment": "Great response!"
+        }'
+
+    # 4. Check response status:
+    #    - 201 = annotation synced to Phoenix (check Phoenix UI)
+    #    - 200 = feedback saved but not synced (check phoenix_synced field)
 """
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Request, Response
 from loguru import logger
 from pydantic import BaseModel, Field
 
 from ..deps import get_user_id_from_request
-from ...models.entities import Feedback, Message
+from ...models.entities import Feedback
 from ...services.postgres import Repository
 from ...settings import settings
 
@@ -73,9 +114,10 @@ class FeedbackResponse(BaseModel):
 # =============================================================================
 
 
-@router.post("/messages/feedback", response_model=FeedbackResponse, status_code=201)
+@router.post("/messages/feedback", response_model=FeedbackResponse)
 async def submit_feedback(
     request: Request,
+    response: Response,
     request_body: FeedbackCreateRequest,
     x_tenant_id: str = Header(alias="X-Tenant-Id", default="default"),
 ) -> FeedbackResponse:
@@ -89,8 +131,12 @@ async def submit_feedback(
     - Provided explicitly in the request
     - Auto-resolved from the message if message_id is provided
 
+    HTTP Status Codes:
+    - 201: Feedback saved AND synced to Phoenix (phoenix_synced=true)
+    - 200: Feedback accepted but NOT synced (missing trace info, disabled, or failed)
+
     Returns:
-        Created feedback object
+        Created feedback object with phoenix_synced indicating sync status
     """
     if not settings.postgres.enabled:
         raise HTTPException(status_code=503, detail="Database not enabled")
@@ -102,11 +148,44 @@ async def submit_feedback(
     span_id = request_body.span_id
 
     if request_body.message_id and (not trace_id or not span_id):
-        message_repo = Repository(Message, table_name="messages")
-        message = await message_repo.get_by_id(request_body.message_id, x_tenant_id)
-        if message:
-            trace_id = trace_id or message.trace_id
-            span_id = span_id or message.span_id
+        # Look up message by ID to get trace context
+        # Note: Messages are stored with tenant_id=user_id (not x_tenant_id header)
+        # so we query by ID only - UUIDs are globally unique
+        from ...services.postgres import PostgresService
+        import uuid
+
+        logger.info(f"Looking up trace context for message_id={request_body.message_id}")
+
+        # Convert message_id string to UUID for database query
+        try:
+            message_uuid = uuid.UUID(request_body.message_id)
+        except ValueError as e:
+            logger.warning(f"Invalid message_id format '{request_body.message_id}': {e}")
+            message_uuid = None
+
+        if message_uuid:
+            db = PostgresService()
+            # Ensure connection (same pattern as Repository)
+            if not db.pool:
+                await db.connect()
+
+            if db.pool:
+                query = """
+                    SELECT trace_id, span_id FROM messages
+                    WHERE id = $1 AND deleted_at IS NULL
+                    LIMIT 1
+                """
+                async with db.pool.acquire() as conn:
+                    row = await conn.fetchrow(query, message_uuid)
+                    logger.info(f"Database query result for message {request_body.message_id}: row={row}")
+                    if row:
+                        trace_id = trace_id or row["trace_id"]
+                        span_id = span_id or row["span_id"]
+                        logger.info(f"Found trace context for message {request_body.message_id}: trace_id={trace_id}, span_id={span_id}")
+                    else:
+                        logger.warning(f"No message found in database with id={request_body.message_id}")
+            else:
+                logger.warning(f"Database pool not available for message lookup after connect attempt")
 
     feedback = Feedback(
         session_id=request_body.session_id,
@@ -130,9 +209,43 @@ async def submit_feedback(
         f"message={request_body.message_id}, rating={request_body.rating}"
     )
 
-    # TODO: Async sync to Phoenix if trace_id/span_id available
-    if trace_id and span_id:
-        logger.debug(f"Feedback has trace info: trace={trace_id}, span={span_id}")
+    # Sync to Phoenix if trace_id/span_id available and Phoenix is enabled
+    phoenix_synced = False
+    phoenix_annotation_id = None
+
+    if trace_id and span_id and settings.phoenix.enabled:
+        try:
+            from ...services.phoenix import PhoenixClient
+
+            phoenix_client = PhoenixClient()
+            phoenix_annotation_id = phoenix_client.sync_user_feedback(
+                span_id=span_id,
+                rating=request_body.rating,
+                categories=request_body.categories,
+                comment=request_body.comment,
+                feedback_id=str(result.id),
+                trace_id=trace_id,
+            )
+
+            if phoenix_annotation_id:
+                phoenix_synced = True
+                # Update the feedback record with sync status
+                result.phoenix_synced = True
+                result.phoenix_annotation_id = phoenix_annotation_id
+                await repo.upsert(result)
+                logger.info(f"Feedback synced to Phoenix: annotation_id={phoenix_annotation_id}")
+            else:
+                logger.warning(f"Phoenix sync returned no annotation ID for feedback {result.id}")
+
+        except Exception as e:
+            logger.error(f"Failed to sync feedback to Phoenix: {e}")
+            # Don't fail the request if Phoenix sync fails
+    elif trace_id and span_id:
+        logger.debug(f"Feedback has trace info but Phoenix disabled: trace={trace_id}, span={span_id}")
+
+    # Set HTTP status code based on Phoenix sync result
+    # 201 = synced to Phoenix, 200 = accepted but not synced
+    response.status_code = 201 if phoenix_synced else 200
 
     return FeedbackResponse(
         id=str(result.id),

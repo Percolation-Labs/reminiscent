@@ -793,40 +793,72 @@ class PhoenixClient:
         score: float | None = None,
         explanation: str | None = None,
         metadata: dict[str, Any] | None = None,
+        trace_id: str | None = None,
     ) -> str | None:
-        """Add feedback annotation to a span.
+        """Add feedback annotation to a span via Phoenix REST API.
+
+        Uses direct HTTP POST to /v1/span_annotations for reliability
+        (Phoenix Python client API changes frequently).
 
         Args:
-            span_id: Span ID to annotate
+            span_id: Span ID to annotate (hex string)
             annotation_name: Name of the annotation (e.g., "correctness", "user_feedback")
             annotator_kind: Type of annotator ("HUMAN", "LLM", "CODE")
             label: Optional label (e.g., "correct", "incorrect", "helpful")
             score: Optional numeric score (0.0-1.0)
             explanation: Optional explanation text
             metadata: Optional additional metadata dict
+            trace_id: Optional trace ID (used if span lookup needed)
 
         Returns:
             Annotation ID if successful, None otherwise
         """
+        import httpx
+
         try:
-            result = self._client.add_span_annotation(  # type: ignore[attr-defined]
-                span_id=span_id,
-                name=annotation_name,
-                annotator_kind=annotator_kind,
-                label=label,
-                score=score,
-                explanation=explanation,
-                metadata=metadata,
+            # Build annotation payload for Phoenix REST API
+            annotation_data = {
+                "span_id": span_id,
+                "name": annotation_name,
+                "annotator_kind": annotator_kind,
+                "result": {
+                    "label": label,
+                    "score": score,
+                    "explanation": explanation,
+                },
+                "metadata": metadata or {},
+            }
+
+            # Add trace_id if provided
+            if trace_id:
+                annotation_data["trace_id"] = trace_id
+
+            # POST to Phoenix REST API
+            annotations_endpoint = f"{self.config.base_url}/v1/span_annotations"
+            headers = {}
+            if self.config.api_key:
+                headers["Authorization"] = f"Bearer {self.config.api_key}"
+
+            with httpx.Client(timeout=5.0) as client:
+                response = client.post(
+                    annotations_endpoint,
+                    json={"data": [annotation_data]},
+                    headers=headers,
+                )
+                response.raise_for_status()
+
+            logger.info(f"Added {annotator_kind} feedback to span {span_id}")
+            return span_id  # Return span_id as annotation reference
+
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                f"Failed to add span feedback (HTTP {e.response.status_code}): "
+                f"{e.response.text if hasattr(e, 'response') else 'N/A'}"
             )
-
-            annotation_id = getattr(result, "id", None) if result else None
-            logger.info(f"Added {annotator_kind} feedback to span {span_id} -> {annotation_id}")
-
-            return annotation_id
-
+            return None
         except Exception as e:
             logger.error(f"Failed to add span feedback: {e}")
-            raise
+            return None
 
     def sync_user_feedback(
         self,
@@ -835,6 +867,7 @@ class PhoenixClient:
         categories: list[str] | None = None,
         comment: str | None = None,
         feedback_id: str | None = None,
+        trace_id: str | None = None,
     ) -> str | None:
         """Sync user feedback to Phoenix as a span annotation.
 
@@ -847,6 +880,7 @@ class PhoenixClient:
             categories: List of feedback categories
             comment: Free-text comment
             feedback_id: Optional REM feedback ID for reference
+            trace_id: Optional trace ID for the span
 
         Returns:
             Phoenix annotation ID if successful
@@ -860,12 +894,18 @@ class PhoenixClient:
             ... )
         """
         # Convert rating to 0-1 score
+        # Rating scheme:
+        #   -1 = thumbs down → score 0.0
+        #    1 = thumbs up   → score 1.0
+        #  2-5 = star rating → normalized to 0-1 range
         score = None
         if rating is not None:
             if rating == -1:
                 score = 0.0
-            elif 1 <= rating <= 5:
-                score = rating / 5.0
+            elif rating == 1:
+                score = 1.0  # Thumbs up
+            elif 2 <= rating <= 5:
+                score = (rating - 1) / 4.0  # 2→0.25, 3→0.5, 4→0.75, 5→1.0
 
         # Use primary category as label
         label = categories[0] if categories else None
@@ -880,7 +920,7 @@ class PhoenixClient:
                 explanation = f"Categories: {cats_str}"
 
         # Build metadata
-        metadata = {
+        metadata: dict[str, Any] = {
             "rating": rating,
             "categories": categories or [],
         }
@@ -895,6 +935,7 @@ class PhoenixClient:
             score=score,
             explanation=explanation,
             metadata=metadata,
+            trace_id=trace_id,
         )
 
     def get_span_annotations(

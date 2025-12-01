@@ -265,6 +265,8 @@ async def stream_simulator_events(
             message_id=message_id,
             in_reply_to=in_reply_to,
             session_id=session_id,
+            # Session info
+            session_name="SSE Demo Session",
             # Quality indicators
             confidence=0.95,
             sources=["rem/api/routers/chat/sse_events.py", "rem/agentic/agents/sse_simulator.py"],

@@ -1,0 +1,161 @@
+# REM Database Listener Worker
+#
+# A lightweight, always-running worker that listens for PostgreSQL NOTIFY events
+# and dispatches them to configurable handlers (SQS, REST API, or custom jobs).
+#
+# Architecture:
+#   - Single replica (to avoid duplicate event processing)
+#   - Dedicated PostgreSQL connection for LISTEN (not from pool)
+#   - Automatic reconnection with exponential backoff
+#   - Graceful shutdown on SIGTERM
+#
+# Use Cases:
+#   - Sync data changes to external systems (Phoenix, webhooks)
+#   - Trigger async jobs without polling
+#   - Event-driven architectures with PostgreSQL as event source
+#
+# How it works:
+#   1. PostgreSQL trigger sends NOTIFY on data change
+#   2. This worker receives the notification
+#   3. Worker dispatches to configured handler (SQS/REST/custom)
+#   4. Handler processes the event asynchronously
+#
+# Configuration (via ConfigMap/ExternalSecret):
+#   DB_LISTENER__ENABLED=true
+#   DB_LISTENER__CHANNELS=feedback_sync,entity_update
+#   DB_LISTENER__HANDLER_TYPE=rest
+#   DB_LISTENER__REST_ENDPOINT=http://rem-api:8000/api/v1/internal/events
+#
+# References:
+#   - PostgreSQL NOTIFY: https://www.postgresql.org/docs/current/sql-notify.html
+#   - Brandur's Notifier pattern: https://brandur.org/notifier
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: db-listener
+  labels:
+    app: db-listener
+    component: rem-worker
+spec:
+  # Single replica - LISTEN/NOTIFY should not have duplicate consumers
+  # If you need HA, implement leader election or use a distributed queue
+  replicas: 1
+
+  # Recreate strategy ensures no duplicate listeners during rollout
+  strategy:
+    type: Recreate
+
+  selector:
+    matchLabels:
+      app: db-listener
+
+  template:
+    metadata:
+      labels:
+        app: db-listener
+        component: rem-worker
+
+    spec:
+      serviceAccountName: rem-app  # Uses rem-app Pod Identity (has DB access)
+
+      # Security context
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+
+      containers:
+      - name: listener
+        image: percolationlabs/rem:latest
+        imagePullPolicy: Always
+
+        # Run DB listener worker
+        command: ["python", "-m", "rem.workers.db_listener"]
+
+        # Environment variables from ConfigMaps
+        envFrom:
+        - configMapRef:
+            name: rem-config  # ENVIRONMENT, OTEL__, etc.
+        - configMapRef:
+            name: db-listener-config  # DB_LISTENER__ settings
+
+        env:
+        # Database connection (constructed from secrets)
+        - name: POSTGRES__CONNECTION_STRING
+          valueFrom:
+            secretKeyRef:
+              name: rem-postgres-credentials
+              key: connection_string
+
+        # Enable the listener
+        - name: DB_LISTENER__ENABLED
+          value: "true"
+
+        # Resource limits (listener is very lightweight)
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+
+        # Liveness probe (restart if worker crashes)
+        livenessProbe:
+          exec:
+            command: ["pgrep", "-f", "db_listener"]
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+        # Readiness probe (worker is ready after startup)
+        readinessProbe:
+          exec:
+            command: ["pgrep", "-f", "db_listener"]
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 2
+
+        # Graceful shutdown - let current notification complete
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh", "-c", "sleep 5"]
+
+        # Security context
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+
+        # Volume mounts for temp files (if needed)
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+
+      # Volumes
+      volumes:
+      - name: tmp
+        emptyDir: {}
+
+      # Affinity: prefer on-demand instances for stability
+      # (Unlike file-processor, this should be always available)
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: karpenter.sh/capacity-type
+                operator: In
+                values:
+                - on-demand
+
+      # Termination grace period (allow clean disconnect)
+      terminationGracePeriodSeconds: 30

@@ -158,6 +158,7 @@ def setup_instrumentation() -> None:
             base_exporter = GRPCExporter(
                 endpoint=settings.otel.collector_endpoint,
                 timeout=settings.otel.export_timeout,
+                insecure=settings.otel.insecure,
             )
         else:  # http
             base_exporter = HTTPExporter(

@@ -47,6 +47,7 @@ from pydantic_ai.messages import (
     ToolCallPart,
 )
 
+from .otel_utils import get_current_trace_context, get_tracer
 from .models import (
     ChatCompletionMessageDelta,
     ChatCompletionStreamChoice,
@@ -366,6 +367,8 @@ async def stream_openai_response(
                                     registered_sources = result_content.get("sources")
                                     registered_references = result_content.get("references")
                                     registered_flags = result_content.get("flags")
+                                    # Session naming
+                                    registered_session_name = result_content.get("session_name")
                                     # Risk assessment fields
                                     registered_risk_level = result_content.get("risk_level")
                                     registered_risk_score = result_content.get("risk_score")
@@ -376,6 +379,7 @@ async def stream_openai_response(
 
                                     logger.info(
                                         f"📊 Metadata registered: confidence={registered_confidence}, "
+                                        f"session_name={registered_session_name}, "
                                         f"risk_level={registered_risk_level}, sources={registered_sources}"
                                     )
 
@@ -398,6 +402,7 @@ async def stream_openai_response(
                                         in_reply_to=in_reply_to,
                                         session_id=session_id,
                                         agent_schema=agent_schema,
+                                        session_name=registered_session_name,
                                         confidence=registered_confidence,
                                         sources=registered_sources,
                                         model_version=model,
@@ -699,6 +704,40 @@ async def stream_openai_response_with_save(
     from ....services.session import SessionMessageStore
     from ....settings import settings
 
+    # Pre-generate message_id so it can be sent in metadata event
+    # This allows frontend to use it for feedback before DB persistence
+    message_id = str(uuid.uuid4())
+
+    # Create a span for this streaming chat completion so we can capture trace context
+    # This mirrors the non-streaming path in completions.py
+    # For async generators we can't use context manager, so we manually start/end the span
+    tracer = get_tracer()
+    span = None
+    trace_id, span_id = None, None
+
+    if tracer:
+        from opentelemetry import trace as otel_trace
+
+        span = tracer.start_span(
+            "chat_completion_stream",
+            attributes={
+                "session.id": session_id or "",
+                "user.id": user_id or "",
+                "model": model,
+                "agent.schema": agent_schema or "",
+                "message.id": message_id,
+            }
+        )
+        # Get trace context directly from the span we just created
+        # Note: start_span() returns a started span, so context should be valid
+        ctx = span.get_span_context()
+        if ctx and ctx.is_valid:
+            trace_id = format(ctx.trace_id, '032x')
+            span_id = format(ctx.span_id, '016x')
+            logger.info(f"Captured trace context for streaming: trace_id={trace_id}, span_id={span_id}")
+        else:
+            logger.warning(f"Span created but context invalid: ctx={ctx}, is_valid={ctx.is_valid if ctx else 'None'}")
+
     # Accumulate content during streaming
     accumulated_content = []
 
@@ -709,6 +748,7 @@ async def stream_openai_response_with_save(
         request_id=request_id,
         agent_schema=agent_schema,
         session_id=session_id,
+        message_id=message_id,
     ):
         yield chunk
 
@@ -730,10 +770,15 @@ async def stream_openai_response_with_save(
     # After streaming completes, save the assistant response
     if settings.postgres.enabled and session_id and accumulated_content:
         full_content = "".join(accumulated_content)
+        # Note: Streaming creates its own span (chat_completion_stream) for trace context.
+        # Non-streaming uses chat_completion span in completions.py.
         assistant_message = {
+            "id": message_id,  # Use pre-generated ID for consistency with metadata event
             "role": "assistant",
             "content": full_content,
             "timestamp": to_iso(utc_now()),
+            "trace_id": trace_id,
+            "span_id": span_id,
         }
         try:
             store = SessionMessageStore(user_id=user_id or settings.test.effective_user_id)
@@ -743,6 +788,10 @@ async def stream_openai_response_with_save(
                 user_id=user_id,
                 compress=True,  # Compress long assistant responses
             )
-            logger.debug(f"Saved assistant response to session {session_id} ({len(full_content)} chars)")
+            logger.debug(f"Saved assistant response {message_id} to session {session_id} ({len(full_content)} chars)")
         except Exception as e:
             logger.error(f"Failed to save assistant response: {e}", exc_info=True)
+
+    # End the span after streaming completes
+    if span:
+        span.end()

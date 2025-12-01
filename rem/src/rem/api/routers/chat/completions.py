@@ -1,13 +1,78 @@
 """
 OpenAI-compatible chat completions router for REM.
 
-Design Pattern:
-- Headers map to AgentContext (X-User-Id, X-Tenant-Id, X-Session-Id, X-Agent-Schema)
+Quick Start (Local Development)
+===============================
+
+NOTE: Local dev uses LOCAL databases (Postgres via Docker Compose on port 5050).
+      Do NOT port-forward databases. Only port-forward observability services.
+
+1. Port Forwarding (ONLY for observability testing):
+
+    # OTEL Collector (HTTP) - sends traces to Phoenix
+    kubectl port-forward -n observability svc/otel-collector-collector 4318:4318
+
+    # Phoenix UI - view traces at http://localhost:6006
+    kubectl port-forward -n siggy svc/phoenix 6006:6006
+
+2. Start API with OTEL enabled:
+
+    cd /path/to/remstack/rem
+    source .venv/bin/activate
+    OTEL__ENABLED=true uvicorn rem.api.main:app --host 0.0.0.0 --port 8000 --app-dir src
+
+3. Test Chat Request (use UUID for session_id):
+
+    SESSION_ID=$(python3 -c "import uuid; print(uuid.uuid4())")
+    curl -s -N -X POST http://localhost:8000/api/v1/chat/completions \\
+      -H 'Content-Type: application/json' \\
+      -H "X-Session-Id: $SESSION_ID" \\
+      -H 'X-Agent-Schema: rem' \\
+      -d '{"messages": [{"role": "user", "content": "Hello"}], "stream": true}'
+
+    # Note: Use 'rem' agent schema (default) for real LLM responses.
+    # The 'simulator' agent is for testing SSE events without LLM calls.
+
+4. Submit Feedback on Response:
+
+    The metadata SSE event contains message_id for feedback:
+        event: metadata
+        data: {"message_id": "66dd377a-...", "session_id": "...", ...}
+
+    Use session_id (UUID you generated) and message_id to submit feedback:
+
+    curl -X POST http://localhost:8000/api/v1/messages/feedback \\
+      -H 'Content-Type: application/json' \\
+      -H 'X-Tenant-Id: default' \\
+      -d '{
+        "session_id": "<your-uuid-session-id>",
+        "message_id": "<message-id-from-metadata>",
+        "rating": 1,
+        "categories": ["helpful"],
+        "comment": "Good response"
+      }'
+
+OTEL Architecture
+=================
+
+    REM API --[OTLP/HTTP]--> OTEL Collector --[relay]--> Phoenix
+             (port 4318)    (k8s: observability)         (k8s: siggy)
+
+Environment Variables:
+    OTEL__ENABLED=true              Enable OTEL tracing
+    OTEL__COLLECTOR_ENDPOINT        Default: http://localhost:4318
+    OTEL__PROTOCOL                  Default: http (use port 4318, not gRPC 4317)
+
+Design Pattern
+==============
+
+- Headers map to AgentContext (X-User-Id, X-Tenant-Id, X-Session-Id, X-Agent-Schema, X-Is-Eval)
 - ContextBuilder centralizes message construction with user profile + session history
 - Body.model is the LLM model for Pydantic AI
 - X-Agent-Schema header specifies which agent schema to use (defaults to 'rem')
 - Support for streaming (SSE) and non-streaming modes
 - Response format control (text vs json_object)
+- OpenAI-compatible body fields: metadata, store, reasoning_effort, etc.
 
 Context Building Flow:
 1. ContextBuilder.build_from_headers() extracts user_id, session_id from headers
@@ -25,9 +90,10 @@ Context Building Flow:
 Headers Mapping
     X-User-Id        → AgentContext.user_id
     X-Tenant-Id      → AgentContext.tenant_id
-    X-Session-Id     → AgentContext.session_id
+    X-Session-Id     → AgentContext.session_id (use UUID for new sessions)
     X-Model-Name     → AgentContext.default_model (overrides body.model)
     X-Agent-Schema   → AgentContext.agent_schema_uri (defaults to 'rem')
+    X-Is-Eval        → AgentContext.is_eval (sets session mode to EVALUATION)
 
 Default Agent:
     If X-Agent-Schema header is not provided, the system loads 'rem' schema,
@@ -42,6 +108,7 @@ Example Request:
     POST /api/v1/chat/completions
     X-Tenant-Id: acme-corp
     X-User-Id: user123
+    X-Session-Id: a1b2c3d4-e5f6-7890-abcd-ef1234567890  # UUID
     X-Agent-Schema: rem  # Optional, this is the default
 
     {
@@ -67,7 +134,9 @@ from loguru import logger
 from ....agentic.context import AgentContext
 from ....agentic.context_builder import ContextBuilder
 from ....agentic.providers.pydantic_ai import create_agent
+from ....models.entities.session import Session, SessionMode
 from ....services.audio.transcriber import AudioTranscriber
+from ....services.postgres.repository import Repository
 from ....services.session import SessionMessageStore, reload_session
 from ....settings import settings
 from ....utils.schema_loader import load_agent_schema, load_agent_schema_async
@@ -87,6 +156,105 @@ router = APIRouter(prefix="/api/v1", tags=["chat"])
 DEFAULT_AGENT_SCHEMA = "rem"
 
 
+def get_current_trace_context() -> tuple[str | None, str | None]:
+    """Get trace_id and span_id from current OTEL context.
+
+    Returns:
+        Tuple of (trace_id, span_id) as hex strings, or (None, None) if not available.
+    """
+    try:
+        from opentelemetry import trace
+        span = trace.get_current_span()
+        if span and span.get_span_context().is_valid:
+            ctx = span.get_span_context()
+            trace_id = format(ctx.trace_id, '032x')
+            span_id = format(ctx.span_id, '016x')
+            return trace_id, span_id
+    except Exception:
+        pass
+    return None, None
+
+
+def get_tracer():
+    """Get the OpenTelemetry tracer for chat completions."""
+    try:
+        from opentelemetry import trace
+        return trace.get_tracer("rem.chat.completions")
+    except Exception:
+        return None
+
+
+async def ensure_session_with_metadata(
+    session_id: str,
+    user_id: str | None,
+    tenant_id: str,
+    is_eval: bool,
+    request_metadata: dict[str, str] | None,
+    agent_schema: str | None = None,
+) -> None:
+    """
+    Ensure session exists and update with metadata/mode.
+
+    If X-Is-Eval header is true, sets session mode to EVALUATION.
+    Merges request metadata with existing session metadata.
+
+    Args:
+        session_id: Session identifier (maps to Session.name)
+        user_id: User identifier
+        tenant_id: Tenant identifier
+        is_eval: Whether this is an evaluation session
+        request_metadata: Metadata from request body to merge
+        agent_schema: Optional agent schema being used
+    """
+    if not settings.postgres.enabled:
+        return
+
+    try:
+        repo = Repository(Session, table_name="sessions")
+
+        # Try to load existing session by name (session_id is the name field)
+        existing_list = await repo.find(
+            filters={"name": session_id, "tenant_id": tenant_id},
+            limit=1,
+        )
+        existing = existing_list[0] if existing_list else None
+
+        if existing:
+            # Merge metadata if provided
+            merged_metadata = existing.metadata or {}
+            if request_metadata:
+                merged_metadata.update(request_metadata)
+
+            # Update session if eval flag or new metadata
+            needs_update = False
+            if is_eval and existing.mode != SessionMode.EVALUATION:
+                existing.mode = SessionMode.EVALUATION
+                needs_update = True
+            if request_metadata:
+                existing.metadata = merged_metadata
+                needs_update = True
+
+            if needs_update:
+                await repo.upsert(existing)
+                logger.debug(f"Updated session {session_id} (eval={is_eval}, metadata keys={list(merged_metadata.keys())})")
+        else:
+            # Create new session
+            session = Session(
+                name=session_id,
+                mode=SessionMode.EVALUATION if is_eval else SessionMode.NORMAL,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                agent_schema_uri=agent_schema,
+                metadata=request_metadata or {},
+            )
+            await repo.upsert(session)
+            logger.info(f"Created session {session_id} (eval={is_eval})")
+
+    except Exception as e:
+        # Non-critical - log but don't fail the request
+        logger.error(f"Failed to ensure session metadata: {e}", exc_info=True)
+
+
 @router.post("/chat/completions", response_model=None)
 async def chat_completions(body: ChatCompletionRequest, request: Request):
     """
@@ -102,6 +270,17 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
     | X-Tenant-Id         | Tenant identifier (multi-tenancy)    | AgentContext.tenant_id         | "default"     |
     | X-Session-Id        | Session/conversation identifier      | AgentContext.session_id        | None          |
     | X-Agent-Schema      | Agent schema name                    | AgentContext.agent_schema_uri  | "rem"         |
+    | X-Is-Eval           | Mark as evaluation session           | AgentContext.is_eval           | false         |
+
+    Additional OpenAI-compatible Body Fields:
+    - metadata: Key-value pairs merged with session metadata (max 16 keys)
+    - store: Whether to store for distillation/evaluation
+    - max_completion_tokens: Max tokens to generate (replaces max_tokens)
+    - seed: Seed for deterministic sampling
+    - top_p: Nucleus sampling probability
+    - logprobs: Return log probabilities
+    - reasoning_effort: low/medium/high for o-series models
+    - service_tier: auto/flex/priority/default
 
     Example Models:
     - anthropic:claude-sonnet-4-5-20250929 (Claude 4.5 Sonnet)
@@ -127,6 +306,12 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
     - If CHAT__AUTO_INJECT_USER_CONTEXT=true: User profile auto-loaded and injected
     - New messages saved to database with compression for session continuity
     - When Postgres is disabled, session management is skipped
+
+    Evaluation Sessions:
+    - Set X-Is-Eval: true header to mark session as evaluation
+    - Session mode will be set to EVALUATION
+    - Request metadata is merged with session metadata
+    - Useful for A/B testing, model comparison, and feedback collection
     """
     # Load agent schema: use header value from context or default
     # Extract AgentContext first to get schema name
@@ -150,6 +335,17 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
             headers=dict(request.headers),
             new_messages=new_messages,
         )
+
+        # Ensure session exists with metadata and eval mode if applicable
+        if context.session_id:
+            await ensure_session_with_metadata(
+                session_id=context.session_id,
+                user_id=context.user_id,
+                tenant_id=context.tenant_id,
+                is_eval=context.is_eval,
+                request_metadata=body.metadata,
+                agent_schema="simulator",
+            )
 
         # Get the last user message as prompt
         prompt = body.messages[-1].content if body.messages else "demo"
@@ -301,6 +497,17 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
 
     logger.info(f"Built context with {len(messages)} total messages (includes history + user context)")
 
+    # Ensure session exists with metadata and eval mode if applicable
+    if context.session_id:
+        await ensure_session_with_metadata(
+            session_id=context.session_id,
+            user_id=context.user_id,
+            tenant_id=context.tenant_id,
+            is_eval=context.is_eval,
+            request_metadata=body.metadata,
+            agent_schema=schema_name,
+        )
+
     # Create agent with schema and model override
     agent = await create_agent(
         context=context,
@@ -351,7 +558,26 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
         )
 
     # Non-streaming mode
-    result = await agent.run(prompt)
+    # Create a parent span to capture trace context for message storage
+    trace_id, span_id = None, None
+    tracer = get_tracer()
+
+    if tracer:
+        with tracer.start_as_current_span(
+            "chat_completion",
+            attributes={
+                "session.id": context.session_id or "",
+                "user.id": context.user_id or "",
+                "model": body.model,
+                "agent.schema": context.agent_schema_uri or DEFAULT_AGENT_SCHEMA,
+            }
+        ) as span:
+            # Capture trace context from the span we just created
+            trace_id, span_id = get_current_trace_context()
+            result = await agent.run(prompt)
+    else:
+        # No tracer available, run without tracing
+        result = await agent.run(prompt)
 
     # Determine content format based on response_format request
     if body.response_format and body.response_format.type == "json_object":
@@ -374,12 +600,16 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
             "role": "user",
             "content": body.messages[-1].content if body.messages else "",
             "timestamp": datetime.utcnow().isoformat(),
+            "trace_id": trace_id,
+            "span_id": span_id,
         }
 
         assistant_message = {
             "role": "assistant",
             "content": content,
             "timestamp": datetime.utcnow().isoformat(),
+            "trace_id": trace_id,
+            "span_id": span_id,
         }
 
         try:

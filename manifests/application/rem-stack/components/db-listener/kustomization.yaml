@@ -1,0 +1,38 @@
+# Database Listener Worker Component
+#
+# Lightweight worker for PostgreSQL LISTEN/NOTIFY event processing.
+# Runs as a single replica (to avoid duplicate event handling).
+#
+# Configuration:
+#   - db-listener-config ConfigMap contains DB_LISTENER__ settings
+#   - Override in environment overlays as needed
+#
+# Example overlay patch for production:
+#   configMapGenerator:
+#     - name: db-listener-config
+#       behavior: merge
+#       literals:
+#         - DB_LISTENER__CHANNELS=feedback_sync,entity_update
+#         - DB_LISTENER__HANDLER_TYPE=rest
+#         - DB_LISTENER__REST_ENDPOINT=http://rem-api:8000/api/v1/internal/events
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - deployment.yaml
+
+# Default configuration for db-listener
+# Override in environment overlays
+configMapGenerator:
+  - name: db-listener-config
+    literals:
+      # Channels to listen on (comma-separated)
+      - DB_LISTENER__CHANNELS=feedback_sync
+      # Handler type: 'sqs', 'rest', or 'custom'
+      - DB_LISTENER__HANDLER_TYPE=rest
+      # REST endpoint for handler_type=rest
+      - DB_LISTENER__REST_ENDPOINT=http://rem-api:8000/api/v1/internal/events
+      # Reconnection settings
+      - DB_LISTENER__RECONNECT_DELAY=1.0
+      - DB_LISTENER__MAX_RECONNECT_DELAY=60.0

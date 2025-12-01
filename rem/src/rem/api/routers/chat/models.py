@@ -1,14 +1,38 @@
 """
 OpenAI-compatible API models for chat completions.
 
-Design Pattern 
+Design Pattern:
 - Full OpenAI compatibility for drop-in replacement
 - Support for streaming (SSE) and non-streaming modes
 - Response format control (text vs json_object)
-- Headers map to AgentContext (X-User-Id, X-Tenant-Id, X-Agent-Schema, etc.)
+- Headers map to AgentContext for session/context control
+- Body fields for OpenAI-compatible parameters + metadata
+
+Headers (context control):
+    X-User-Id        → context.user_id (user identifier)
+    X-Tenant-Id      → context.tenant_id (multi-tenancy, default: "default")
+    X-Session-Id     → context.session_id (conversation continuity)
+    X-Agent-Schema   → context.agent_schema_uri (which agent to use, default: "rem")
+    X-Model-Name     → context.default_model (model override)
+    X-Chat-Is-Audio  → triggers audio transcription ("true"/"false")
+    X-Is-Eval        → context.is_eval (marks session as evaluation, sets mode=EVALUATION)
+
+Body Fields (OpenAI-compatible + extensions):
+    model            → LLM model (e.g., "openai:gpt-4.1", "anthropic:claude-sonnet-4-5-20250929")
+    messages         → Chat conversation history
+    temperature      → Sampling temperature (0-2)
+    max_tokens       → Max tokens (deprecated, use max_completion_tokens)
+    max_completion_tokens → Max tokens to generate
+    stream           → Enable SSE streaming
+    metadata         → Key-value pairs merged with session metadata (for evals/experiments)
+    store            → Whether to store for distillation/evaluation
+    seed             → Deterministic sampling seed
+    top_p            → Nucleus sampling probability
+    reasoning_effort → low/medium/high for o-series models
+    service_tier     → auto/flex/priority/default
 """
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -46,10 +70,17 @@ class ChatCompletionRequest(BaseModel):
     Compatible with OpenAI's /v1/chat/completions endpoint.
 
     Headers Map to AgentContext:
-    - X-User-Id → context.user_id
-    - X-Tenant-Id → context.tenant_id
-    - X-Session-Id → context.session_id
-    - X-Agent-Schema → context.agent_schema_uri
+        X-User-Id        → context.user_id
+        X-Tenant-Id      → context.tenant_id (default: "default")
+        X-Session-Id     → context.session_id
+        X-Agent-Schema   → context.agent_schema_uri (default: "rem")
+        X-Model-Name     → context.default_model
+        X-Chat-Is-Audio  → triggers audio transcription
+        X-Is-Eval        → context.is_eval (sets session mode=EVALUATION)
+
+    Body Fields for Metadata/Evals:
+        metadata         → Key-value pairs merged with session metadata
+        store            → Whether to store for distillation/evaluation
 
     Note: Model is specified in body.model (standard OpenAI field), not headers.
     """
@@ -72,6 +103,49 @@ class ChatCompletionRequest(BaseModel):
     response_format: ResponseFormat | None = Field(
         default=None,
         description="Response format. Set type='json_object' to enable JSON mode.",
+    )
+    # Additional OpenAI-compatible fields
+    metadata: dict[str, str] | None = Field(
+        default=None,
+        description="Key-value pairs attached to the request (max 16 keys, 64/512 char limits). "
+        "Merged with session metadata for persistence.",
+    )
+    store: bool | None = Field(
+        default=None,
+        description="Whether to store for distillation/evaluation purposes.",
+    )
+    max_completion_tokens: int | None = Field(
+        default=None,
+        ge=1,
+        description="Max tokens to generate (replaces deprecated max_tokens).",
+    )
+    seed: int | None = Field(
+        default=None,
+        description="Seed for deterministic sampling (best effort).",
+    )
+    top_p: float | None = Field(
+        default=None,
+        ge=0,
+        le=1,
+        description="Nucleus sampling probability. Use temperature OR top_p, not both.",
+    )
+    logprobs: bool | None = Field(
+        default=None,
+        description="Whether to return log probabilities for output tokens.",
+    )
+    top_logprobs: int | None = Field(
+        default=None,
+        ge=0,
+        le=20,
+        description="Number of most likely tokens to return at each position (requires logprobs=true).",
+    )
+    reasoning_effort: Literal["low", "medium", "high"] | None = Field(
+        default=None,
+        description="Reasoning effort for o-series models (low/medium/high).",
+    )
+    service_tier: Literal["auto", "flex", "priority", "default"] | None = Field(
+        default=None,
+        description="Service tier for processing (flex is 50% cheaper but slower).",
     )
 
 

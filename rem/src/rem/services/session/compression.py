@@ -170,12 +170,16 @@ class SessionMessageStore:
         entity_key = truncate_key(f"session-{session_id}-msg-{message_index}")
 
         # Create Message entity for assistant response
+        # Use pre-generated id from message dict if available (for frontend feedback)
         msg = Message(
+            id=message.get("id"),  # Use pre-generated ID if provided
             content=message.get("content", ""),
             message_type=message.get("role", "assistant"),
             session_id=session_id,
             tenant_id=self.user_id,  # Set tenant_id to user_id (application scoped to user)
             user_id=user_id or self.user_id,
+            trace_id=message.get("trace_id"),
+            span_id=message.get("span_id"),
             metadata={
                 "message_index": message_index,
                 "entity_key": entity_key,  # Store entity key for LOOKUP
@@ -284,11 +288,14 @@ class SessionMessageStore:
                 # Short assistant messages, user messages, and system messages stored as-is
                 # Store ALL messages in database for full audit trail
                 msg = Message(
+                    id=message.get("id"),  # Use pre-generated ID if provided
                     content=content,
                     message_type=message.get("role", "user"),
                     session_id=session_id,
                     tenant_id=self.user_id,  # Set tenant_id to user_id (application scoped to user)
                     user_id=user_id or self.user_id,
+                    trace_id=message.get("trace_id"),
+                    span_id=message.get("span_id"),
                     metadata={
                         "message_index": idx,
                         "timestamp": message.get("timestamp"),

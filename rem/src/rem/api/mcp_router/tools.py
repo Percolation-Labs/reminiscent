@@ -606,6 +606,8 @@ async def register_metadata(
     references: list[str] | None = None,
     sources: list[str] | None = None,
     flags: list[str] | None = None,
+    # Session naming
+    session_name: str | None = None,
     # Risk assessment fields (used by specialized agents)
     risk_level: str | None = None,
     risk_score: int | None = None,
@@ -638,6 +640,11 @@ async def register_metadata(
             "search results", "user context").
         flags: Optional flags for the response (e.g., "needs_review",
             "uncertain", "incomplete", "crisis_alert").
+
+        session_name: Short 1-3 phrase name describing the session topic.
+            Used by the UI to label conversations in the sidebar.
+            Examples: "Prescription Drug Questions", "AWS Setup Help",
+            "Python Code Review", "Travel Planning".
 
         risk_level: Risk level indicator (e.g., "green", "orange", "red").
             Used by mental health agents for C-SSRS style assessment.
@@ -705,6 +712,10 @@ async def register_metadata(
         "sources": sources,
         "flags": flags,
     }
+
+    # Add session name if provided
+    if session_name is not None:
+        result["session_name"] = session_name
 
     # Add risk assessment fields if provided
     if risk_level is not None:

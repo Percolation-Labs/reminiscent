@@ -33,14 +33,15 @@ Example .env file:
     AUTH__OIDC_CLIENT_ID=your-client-id
     AUTH__SESSION_SECRET=your-secret-key
 
-    # OpenTelemetry (disabled by default)
+    # OpenTelemetry (disabled by default - enable via env var when collector available)
+    # Standard OTLP collector ports: 4317 (gRPC), 4318 (HTTP)
     OTEL__ENABLED=false
     OTEL__SERVICE_NAME=rem-api
-    OTEL__COLLECTOR_ENDPOINT=http://localhost:4318
-    OTEL__PROTOCOL=http
+    OTEL__COLLECTOR_ENDPOINT=http://localhost:4317
+    OTEL__PROTOCOL=grpc
 
-    # Arize Phoenix (disabled by default)
-    PHOENIX__ENABLED=false
+    # Arize Phoenix (enabled by default - can be disabled via env var)
+    PHOENIX__ENABLED=true
     PHOENIX__COLLECTOR_ENDPOINT=http://localhost:6006/v1/traces
     PHOENIX__PROJECT_NAME=rem
 
@@ -241,6 +242,11 @@ class OTELSettings(BaseSettings):
         description="Export timeout in milliseconds",
     )
 
+    insecure: bool = Field(
+        default=True,
+        description="Use insecure (non-TLS) gRPC connection (default: True for local dev)",
+    )
+
 
 class PhoenixSettings(BaseSettings):
     """
@@ -267,8 +273,8 @@ class PhoenixSettings(BaseSettings):
     )
 
     enabled: bool = Field(
-        default=False,
-        description="Enable Phoenix integration (disabled by default for local dev)",
+        default=True,
+        description="Enable Phoenix integration (enabled by default)",
     )
 
     base_url: str = Field(
@@ -1240,6 +1246,110 @@ class GitSettings(BaseSettings):
     )
 
 
+class DBListenerSettings(BaseSettings):
+    """
+    PostgreSQL LISTEN/NOTIFY database listener settings.
+
+    The DB Listener is a lightweight worker that subscribes to PostgreSQL
+    NOTIFY events and dispatches them to external systems (SQS, REST, custom).
+
+    Architecture:
+        - Single-replica deployment (to avoid duplicate processing)
+        - Dedicated connection for LISTEN (not from connection pool)
+        - Automatic reconnection with exponential backoff
+        - Graceful shutdown on SIGTERM
+
+    Use Cases:
+        - Sync data changes to external systems (Phoenix, webhooks)
+        - Trigger async jobs without polling
+        - Event-driven architectures with PostgreSQL as event source
+
+    Example PostgreSQL trigger:
+        CREATE OR REPLACE FUNCTION notify_feedback_insert()
+        RETURNS TRIGGER AS $$
+        BEGIN
+            PERFORM pg_notify('feedback_sync', json_build_object(
+                'id', NEW.id,
+                'table', 'feedbacks',
+                'action', 'insert'
+            )::text);
+            RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+
+    Environment variables:
+        DB_LISTENER__ENABLED - Enable the listener worker (default: false)
+        DB_LISTENER__CHANNELS - Comma-separated PostgreSQL channels to listen on
+        DB_LISTENER__HANDLER_TYPE - Handler type: 'sqs', 'rest', or 'custom'
+        DB_LISTENER__SQS_QUEUE_URL - SQS queue URL (for handler_type=sqs)
+        DB_LISTENER__REST_ENDPOINT - REST endpoint URL (for handler_type=rest)
+        DB_LISTENER__RECONNECT_DELAY - Initial reconnect delay in seconds
+        DB_LISTENER__MAX_RECONNECT_DELAY - Maximum reconnect delay in seconds
+
+    References:
+        - PostgreSQL NOTIFY: https://www.postgresql.org/docs/current/sql-notify.html
+        - Brandur's Notifier: https://brandur.org/notifier
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="DB_LISTENER__",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable the DB Listener worker (disabled by default)",
+    )
+
+    channels: str = Field(
+        default="",
+        description=(
+            "Comma-separated list of PostgreSQL channels to LISTEN on. "
+            "Example: 'feedback_sync,entity_update,user_events'"
+        ),
+    )
+
+    handler_type: str = Field(
+        default="rest",
+        description=(
+            "Handler type for dispatching notifications. Options: "
+            "'sqs' (publish to SQS), 'rest' (POST to endpoint), 'custom' (Python handlers)"
+        ),
+    )
+
+    sqs_queue_url: str = Field(
+        default="",
+        description="SQS queue URL for handler_type='sqs'",
+    )
+
+    rest_endpoint: str = Field(
+        default="http://localhost:8000/api/v1/internal/events",
+        description=(
+            "REST endpoint URL for handler_type='rest'. "
+            "Receives POST with {channel, payload, source} JSON body."
+        ),
+    )
+
+    reconnect_delay: float = Field(
+        default=1.0,
+        description="Initial delay (seconds) between reconnection attempts",
+    )
+
+    max_reconnect_delay: float = Field(
+        default=60.0,
+        description="Maximum delay (seconds) between reconnection attempts (exponential backoff cap)",
+    )
+
+    @property
+    def channel_list(self) -> list[str]:
+        """Get channels as a list, filtering empty strings."""
+        if not self.channels:
+            return []
+        return [c.strip() for c in self.channels.split(",") if c.strip()]
+
+
 class TestSettings(BaseSettings):
     """
     Test environment settings.
@@ -1349,6 +1459,7 @@ class Settings(BaseSettings):
     s3: S3Settings = Field(default_factory=S3Settings)
     git: GitSettings = Field(default_factory=GitSettings)
     sqs: SQSSettings = Field(default_factory=SQSSettings)
+    db_listener: DBListenerSettings = Field(default_factory=DBListenerSettings)
     chunking: ChunkingSettings = Field(default_factory=ChunkingSettings)
     content: ContentSettings = Field(default_factory=ContentSettings)
     schema_search: SchemaSettings = Field(default_factory=SchemaSettings)

@@ -2,10 +2,18 @@
 Agent execution context and configuration.
 
 Design pattern for session context that can be constructed from:
-- HTTP headers (X-User-Id, X-Session-Id, X-Model-Name)
+- HTTP headers (X-User-Id, X-Session-Id, X-Model-Name, X-Is-Eval, etc.)
 - Direct instantiation for testing/CLI
 
-Key Design Pattern 
+Headers Mapping:
+    X-User-Id        → context.user_id
+    X-Tenant-Id      → context.tenant_id (default: "default")
+    X-Session-Id     → context.session_id
+    X-Agent-Schema   → context.agent_schema_uri (default: "rem")
+    X-Model-Name     → context.default_model
+    X-Is-Eval        → context.is_eval (marks session as evaluation)
+
+Key Design Pattern:
 - AgentContext is passed to agent factory, not stored in agents
 - Enables session tracking across API, CLI, and test execution
 - Supports header-based configuration override (model, schema URI)
@@ -64,6 +72,11 @@ class AgentContext(BaseModel):
     agent_schema_uri: str | None = Field(
         default=None,
         description="Agent schema URI (e.g., 'rem-agents-query-agent')",
+    )
+
+    is_eval: bool = Field(
+        default=False,
+        description="Whether this is an evaluation session (set via X-Is-Eval header)",
     )
 
     model_config = {"populate_by_name": True}
@@ -126,6 +139,7 @@ class AgentContext(BaseModel):
         - X-Session-Id: Session identifier
         - X-Model-Name: Model override
         - X-Agent-Schema: Agent schema URI
+        - X-Is-Eval: Whether this is an evaluation session (true/false)
 
         Args:
             headers: Dictionary of HTTP headers (case-insensitive)
@@ -138,12 +152,17 @@ class AgentContext(BaseModel):
                 "X-User-Id": "user123",
                 "X-Tenant-Id": "acme-corp",
                 "X-Session-Id": "sess-456",
-                "X-Model-Name": "anthropic:claude-opus-4-20250514"
+                "X-Model-Name": "anthropic:claude-opus-4-20250514",
+                "X-Is-Eval": "true"
             }
             context = AgentContext.from_headers(headers)
         """
         # Normalize header keys to lowercase for case-insensitive lookup
         normalized = {k.lower(): v for k, v in headers.items()}
+
+        # Parse X-Is-Eval header (accepts "true", "1", "yes" as truthy)
+        is_eval_str = normalized.get("x-is-eval", "").lower()
+        is_eval = is_eval_str in ("true", "1", "yes")
 
         return cls(
             user_id=normalized.get("x-user-id"),
@@ -151,4 +170,5 @@ class AgentContext(BaseModel):
             session_id=normalized.get("x-session-id"),
             default_model=normalized.get("x-model-name") or settings.llm.default_model,
             agent_schema_uri=normalized.get("x-agent-schema"),
+            is_eval=is_eval,
         )

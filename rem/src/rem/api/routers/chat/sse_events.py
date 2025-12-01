@@ -324,6 +324,12 @@ class MetadataEvent(BaseModel):
         description="Name of the agent schema used for this response (e.g., 'rem', 'query-assistant')"
     )
 
+    # Session info
+    session_name: str | None = Field(
+        default=None,
+        description="Short 1-3 phrase name for the session topic (e.g., 'Prescription Drug Questions', 'AWS Setup Help')"
+    )
+
     # Quality indicators
     confidence: float | None = Field(
         default=None, ge=0, le=1,
