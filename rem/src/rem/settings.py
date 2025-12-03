@@ -1482,10 +1482,20 @@ class Settings(BaseSettings):
     test: TestSettings = Field(default_factory=TestSettings)
 
 
+# Auto-load .env file from current directory if it exists
+# This happens BEFORE config file loading, so .env takes precedence
+from pathlib import Path
+from dotenv import load_dotenv
+
+_dotenv_path = Path(".env")
+if _dotenv_path.exists():
+    load_dotenv(_dotenv_path, override=False)  # Don't override existing env vars
+    logger.debug(f"Loaded environment from {_dotenv_path.resolve()}")
+
 # Load configuration from ~/.rem/config.yaml before initializing settings
 # This allows user configuration to be merged with environment variables
-# Set REM_SKIP_CONFIG_FILE=true to disable (useful for development with .env)
-if not os.getenv("REM_SKIP_CONFIG_FILE", "").lower() in ("true", "1", "yes"):
+# Set REM_SKIP_CONFIG=1 to disable (useful for development with .env)
+if not os.getenv("REM_SKIP_CONFIG", "").lower() in ("true", "1", "yes"):
     try:
         from rem.config import load_config, merge_config_to_env
 
