@@ -37,9 +37,8 @@ Cloud-native unified memory infrastructure for agentic AI systems built with Pyd
 
 Choose your path:
 
-- **Option 1: Package Users with Example Data** (Recommended for first-time users) - PyPI + example datasets
-- **Option 2: Package Users** (Recommended for non-developers) - PyPI package + dockerized database
-- **Option 3: Developers** - Clone repo, local development with uv
+- **Option 1: Package Users with Example Data** (Recommended) - PyPI + example datasets
+- **Option 2: Developers** - Clone repo, local development with uv
 
 ---
 
@@ -58,10 +57,6 @@ pip install "remdb[all]"
 git clone https://github.com/Percolation-Labs/remstack-lab.git
 cd remstack-lab
 
-# Optional: Set default LLM provider via environment variable
-# export LLM__DEFAULT_MODEL="openai:gpt-4.1-nano"  # Fast and cheap
-# export LLM__DEFAULT_MODEL="anthropic:claude-sonnet-4-5-20250929"  # High quality (default)
-
 # Start PostgreSQL with docker-compose
 curl -O https://gist.githubusercontent.com/percolating-sirsh/d117b673bc0edfdef1a5068ccd3cf3e5/raw/docker-compose.prebuilt.yml
 docker compose -f docker-compose.prebuilt.yml up -d postgres
@@ -77,7 +72,7 @@ rem db load datasets/quickstart/sample_data.yaml
 rem ask "What documents exist in the system?"
 rem ask "Show me meetings about API design"
 
-# Ingest files (PDF, DOCX, images, etc.) - note: requires remstack-lab
+# Ingest files (PDF, DOCX, images, etc.)
 rem process ingest datasets/formats/files/bitcoin_whitepaper.pdf --category research --tags bitcoin,whitepaper
 
 # Query ingested content
@@ -91,109 +86,18 @@ rem ask "What is the Bitcoin whitepaper about?"
 
 **Learn more**: [remstack-lab repository](https://github.com/Percolation-Labs/remstack-lab)
 
----
+### Using the API
 
-## Option 2: Package Users (No Example Data)
-
-**Best for**: Using REM as a service (API + CLI) without modifying code, bringing your own data.
-
-### Step 1: Start Database and API with Docker Compose
+Once configured, you can also use the OpenAI-compatible chat completions API:
 
 ```bash
-# Create a project directory
-mkdir my-rem-project && cd my-rem-project
-
-# Download docker-compose file from public gist
-curl -O https://gist.githubusercontent.com/percolating-sirsh/d117b673bc0edfdef1a5068ccd3cf3e5/raw/docker-compose.prebuilt.yml
-
-# IMPORTANT: Export API keys BEFORE running docker compose
-# Docker Compose reads env vars at startup - exporting them after won't work!
-
-# Required: OpenAI for embeddings (text-embedding-3-small)
-export OPENAI_API_KEY="sk-..."
-
-# Recommended: At least one chat completion provider
-export ANTHROPIC_API_KEY="sk-ant-..."           # Claude Sonnet 4.5 (high quality)
-export CEREBRAS_API_KEY="csk-..."               # Cerebras (fast, cheap inference)
-
-# Start PostgreSQL + API
+# Start the API server (if not using docker-compose for API)
 docker compose -f docker-compose.prebuilt.yml up -d
 
-# Verify services are running
-curl http://localhost:8000/health
-```
-
-This starts:
-- **PostgreSQL** with pgvector on port **5051** (connection: `postgresql://rem:rem@localhost:5051/rem`)
-- **REM API** on port **8000** with OpenAI-compatible chat completions + MCP server
-- Uses pre-built Docker image from Docker Hub (no local build required)
-
-### Step 2: Install and Configure CLI (REQUIRED)
-
-**This step is required** before you can use REM - it installs the database schema and configures your LLM API keys.
-
-```bash
-# Install remdb package from PyPI
-pip install remdb[all]
-
-# Configure REM (defaults to port 5051 for package users)
-rem configure --install --claude-desktop
-```
-
-The interactive wizard will:
-1. **Configure PostgreSQL**: Defaults to `postgresql://rem:rem@localhost:5051/rem` (prebuilt docker-compose)
-   - Just press Enter to accept defaults
-   - Custom database: Enter your own host/port/credentials
-2. **Configure LLM providers**: Enter your OpenAI/Anthropic API keys
-3. **Install database tables**: Creates schema, functions, indexes (**required for CLI/API to work**)
-4. **Register with Claude Desktop**: Adds REM MCP server to Claude
-
-Configuration saved to `~/.rem/config.yaml` (can edit with `rem configure --edit`)
-
-**Port Guide:**
-- **5051**: Package users with `docker-compose.prebuilt.yml` (pre-built image)
-- **5050**: Developers with `docker-compose.yml` (local build)
-- **Custom**: Your own PostgreSQL database
-
-**Next Steps:**
-- See [CLI Reference](#cli-reference) for all available commands
-- See [REM Query Dialect](#rem-query-dialect) for query examples
-- See [API Endpoints](#api-endpoints) for OpenAI-compatible API usage
-
-### Step 3: Load Sample Data (Optional but Recommended)
-
-**Option A: Clone example datasets** (Recommended - works with all README examples)
-
-```bash
-# Clone datasets repository
-git clone https://github.com/Percolation-Labs/remstack-lab.git
-
-# Load quickstart dataset
-rem db load --file remstack-lab/datasets/quickstart/sample_data.yaml
-
-# Test with sample queries
-rem ask "What documents exist in the system?"
-rem ask "Show me meetings about API design"
-rem ask "Who is Sarah Chen?"
-```
-
-**Option B: Bring your own data**
-
-```bash
-# Ingest your own files
-echo "REM is a bio-inspired memory system for agentic AI workloads." > test-doc.txt
-rem process ingest test-doc.txt --category documentation --tags rem,ai
-
-# Query your ingested data
-rem ask "What do you know about REM from my knowledge base?"
-```
-
-### Step 4: Test the API
-
-```bash
-# Test the OpenAI-compatible chat completions API
+# Test the API
 curl -X POST http://localhost:8000/api/v1/chat/completions \
   -H "Content-Type: application/json" \
+  -H "X-Session-Id: a1b2c3d4-e5f6-7890-abcd-ef1234567890" \
   -d '{
     "model": "anthropic:claude-sonnet-4-5-20250929",
     "messages": [{"role": "user", "content": "What documents did Sarah Chen author?"}],
@@ -201,15 +105,20 @@ curl -X POST http://localhost:8000/api/v1/chat/completions \
   }'
 ```
 
-**Available Commands:**
-- `rem ask` - Natural language queries to REM
-- `rem process ingest <file>` - Full ingestion pipeline (storage + parsing + embedding + database)
-- `rem process uri <file>` - READ-ONLY parsing (no database storage, useful for testing parsers)
-- `rem db load --file <yaml>` - Load structured datasets directly
+**Port Guide:**
+- **5051**: Package users with `docker-compose.prebuilt.yml` (pre-built image)
+- **5050**: Developers with `docker-compose.yml` (local build)
+
+**Next Steps:**
+- See [CLI Reference](#cli-reference) for all available commands
+- See [REM Query Dialect](#rem-query-dialect) for query examples
+- See [API Endpoints](#api-endpoints) for OpenAI-compatible API usage
+
+---
 
 ## Example Datasets
 
-🎯 **Recommended**: Clone [remstack-lab](https://github.com/Percolation-Labs/remstack-lab) for curated datasets organized by domain and format.
+Clone [remstack-lab](https://github.com/Percolation-Labs/remstack-lab) for curated datasets organized by domain and format.
 
 **What's included:**
 - **Quickstart**: Minimal dataset (3 users, 3 resources, 3 moments) - perfect for first-time users
@@ -336,7 +245,7 @@ rem ask research-assistant "Find documents about machine learning architecture"
 rem ask research-assistant "Summarize recent API design documents" --stream
 
 # With session continuity
-rem ask research-assistant "What did we discuss about ML?" --session-id abc-123
+rem ask research-assistant "What did we discuss about ML?" --session-id c3d4e5f6-a7b8-9012-cdef-345678901234
 ```
 
 ### Agent Schema Structure
@@ -388,14 +297,6 @@ rem process ingest my-agent.yaml --user-id tenant-a --category agents
 # Query with tenant context
 rem ask my-agent "test" --user-id tenant-a
 ```
-
-### Advanced: Ontology Extractors
-
-Custom agents can also be used as **ontology extractors** to extract structured knowledge from files. See [CLAUDE.md](../CLAUDE.md#ontology-extraction-pattern) for details on:
-- Multi-provider testing (`provider_configs`)
-- Semantic search configuration (`embedding_fields`)
-- File matching rules (`OntologyConfig`)
-- Dreaming workflow integration
 
 ### Troubleshooting
 
@@ -1149,7 +1050,7 @@ export API__RELOAD=true
 rem serve
 ```
 
-## Development (For Contributors)
+## Option 2: Development (For Contributors)
 
 **Best for**: Contributing to REM or customizing the codebase.
 
@@ -1445,45 +1346,156 @@ Successfully installed ... kreuzberg-4.0.0rc1 ... remdb-0.3.10
 
 REM wraps FastAPI - extend it exactly as you would any FastAPI app.
 
-```python
-import rem
-from rem import create_app
-from rem.models.core import CoreModel
+### Recommended Project Structure
 
-# 1. Register models (for schema generation)
-rem.register_models(MyModel, AnotherModel)
-
-# 2. Register schema paths (for custom agents/evaluators)
-rem.register_schema_path("./schemas")
-
-# 3. Create app
-app = create_app()
-
-# 4. Extend like normal FastAPI
-app.include_router(my_router)
-
-@app.mcp_server.tool()
-async def my_tool(query: str) -> dict:
-    """Custom MCP tool."""
-    return {"result": query}
-```
-
-### Project Structure
+REM auto-detects `./agents/` and `./models/` folders - no configuration needed:
 
 ```
 my-rem-app/
-├── my_app/
-│   ├── main.py           # Entry point (create_app + extensions)
-│   ├── models.py         # Custom models (inherit CoreModel)
-│   └── routers/          # Custom FastAPI routers
-├── schemas/
-│   ├── agents/           # Custom agent YAML schemas
-│   └── evaluators/       # Custom evaluator schemas
-├── sql/migrations/       # Custom SQL migrations
+├── agents/                 # Auto-detected for agent schemas
+│   ├── my-agent.yaml       # Custom agent (rem ask my-agent "query")
+│   └── another-agent.yaml
+├── models/                 # Auto-detected if __init__.py exists
+│   └── __init__.py         # Register models with @rem.register_model
+├── routers/                # Custom FastAPI routers
+│   └── custom.py
+├── main.py                 # Entry point
 └── pyproject.toml
 ```
 
-Generate this structure with: `rem scaffold my-app`
+### Quick Start
+
+```python
+# main.py
+from rem import create_app
+from fastapi import APIRouter
+
+# Create REM app (auto-detects ./agents/ and ./models/)
+app = create_app()
+
+# Add custom router
+router = APIRouter(prefix="/custom", tags=["custom"])
+
+@router.get("/hello")
+async def hello():
+    return {"message": "Hello from custom router!"}
+
+app.include_router(router)
+
+# Add custom MCP tool
+@app.mcp_server.tool()
+async def my_tool(query: str) -> dict:
+    """Custom MCP tool available to agents."""
+    return {"result": query}
+```
+
+### Custom Models (Auto-Detected)
+
+```python
+# models/__init__.py
+import rem
+from rem.models.core import CoreModel
+from pydantic import Field
+
+@rem.register_model
+class MyEntity(CoreModel):
+    """Custom entity - auto-registered for schema generation."""
+    name: str = Field(description="Entity name")
+    status: str = Field(default="active")
+```
+
+Run `rem db schema generate` to include your models in the database schema.
+
+### Custom Agents (Auto-Detected)
+
+```yaml
+# agents/my-agent.yaml
+type: object
+description: |
+  You are a helpful assistant that...
+
+properties:
+  answer:
+    type: string
+    description: Your response
+
+required:
+  - answer
+
+json_schema_extra:
+  kind: agent
+  name: my-agent
+  version: "1.0.0"
+  tools:
+    - search_rem
+```
+
+Test with: `rem ask my-agent "Hello!"`
+
+### Example Custom Router
+
+```python
+# routers/analytics.py
+from fastapi import APIRouter, Depends
+from rem.services.postgres import get_postgres_service
+
+router = APIRouter(prefix="/analytics", tags=["analytics"])
+
+@router.get("/stats")
+async def get_stats():
+    """Get database statistics."""
+    db = get_postgres_service()
+    if not db:
+        return {"error": "Database not available"}
+
+    await db.connect()
+    try:
+        result = await db.execute(
+            "SELECT COUNT(*) as count FROM resources"
+        )
+        return {"resource_count": result[0]["count"]}
+    finally:
+        await db.disconnect()
+
+@router.get("/recent")
+async def get_recent(limit: int = 10):
+    """Get recent resources."""
+    db = get_postgres_service()
+    if not db:
+        return {"error": "Database not available"}
+
+    await db.connect()
+    try:
+        result = await db.execute(
+            f"SELECT label, category, created_at FROM resources ORDER BY created_at DESC LIMIT {limit}"
+        )
+        return {"resources": result}
+    finally:
+        await db.disconnect()
+```
+
+Include in main.py:
+
+```python
+from routers.analytics import router as analytics_router
+app.include_router(analytics_router)
+```
+
+### Running the App
+
+```bash
+# Development (auto-reload)
+uv run uvicorn main:app --reload --port 8000
+
+# Or use rem serve
+uv run rem serve --reload
+
+# Test agent
+uv run rem ask my-agent "What can you help me with?"
+
+# Test custom endpoint
+curl http://localhost:8000/analytics/stats
+```
 
 ### Extension Points
 
