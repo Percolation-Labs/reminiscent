@@ -95,9 +95,16 @@ def load_config() -> dict[str, Any]:
     """
     Load configuration from ~/.rem/config.yaml.
 
+    Set REM_SKIP_CONFIG=1 to skip loading the config file (useful when using .env files).
+
     Returns:
-        Configuration dictionary (empty if file doesn't exist)
+        Configuration dictionary (empty if file doesn't exist or skipped)
     """
+    # Allow skipping config file via environment variable
+    if os.environ.get("REM_SKIP_CONFIG", "").lower() in ("1", "true", "yes"):
+        logger.debug("Skipping config file (REM_SKIP_CONFIG is set)")
+        return {}
+
     config_path = get_config_path()
 
     if not config_path.exists():
