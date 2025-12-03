@@ -7,21 +7,32 @@ Quick Start (Local Development)
 NOTE: Local dev uses LOCAL databases (Postgres via Docker Compose on port 5050).
       Do NOT port-forward databases. Only port-forward observability services.
 
-1. Port Forwarding (ONLY for observability testing):
+IMPORTANT: Session IDs MUST be UUIDs. Non-UUID session IDs will cause message
+           storage issues and feedback will not work correctly.
 
-    # OTEL Collector (HTTP) - sends traces to Phoenix
+1. Port Forwarding (REQUIRED for trace capture and Phoenix sync):
+
+    # Terminal 1: OTEL Collector (HTTP) - sends traces to Phoenix
     kubectl port-forward -n observability svc/otel-collector-collector 4318:4318
 
-    # Phoenix UI - view traces at http://localhost:6006
+    # Terminal 2: Phoenix UI - view traces at http://localhost:6006
     kubectl port-forward -n siggy svc/phoenix 6006:6006
 
-2. Start API with OTEL enabled:
+2. Get Phoenix API Key (REQUIRED for feedback->Phoenix sync):
+
+    export PHOENIX_API_KEY=$(kubectl get secret -n siggy rem-phoenix-api-key \\
+      -o jsonpath='{.data.PHOENIX_API_KEY}' | base64 -d)
+
+3. Start API with OTEL and Phoenix enabled:
 
     cd /path/to/remstack/rem
     source .venv/bin/activate
-    OTEL__ENABLED=true uvicorn rem.api.main:app --host 0.0.0.0 --port 8000 --app-dir src
+    OTEL__ENABLED=true \\
+    PHOENIX__ENABLED=true \\
+    PHOENIX_API_KEY="$PHOENIX_API_KEY" \\
+    uvicorn rem.api.main:app --host 0.0.0.0 --port 8000 --app-dir src
 
-3. Test Chat Request (use UUID for session_id):
+4. Test Chat Request (session_id MUST be a UUID):
 
     SESSION_ID=$(python3 -c "import uuid; print(uuid.uuid4())")
     curl -s -N -X POST http://localhost:8000/api/v1/chat/completions \\
@@ -33,11 +44,11 @@ NOTE: Local dev uses LOCAL databases (Postgres via Docker Compose on port 5050).
     # Note: Use 'rem' agent schema (default) for real LLM responses.
     # The 'simulator' agent is for testing SSE events without LLM calls.
 
-4. Submit Feedback on Response:
+5. Submit Feedback on Response:
 
-    The metadata SSE event contains message_id for feedback:
+    The metadata SSE event contains message_id and trace_id for feedback:
         event: metadata
-        data: {"message_id": "66dd377a-...", "session_id": "...", ...}
+        data: {"message_id": "728882f8-...", "trace_id": "e53c701c...", ...}
 
     Use session_id (UUID you generated) and message_id to submit feedback:
 
@@ -52,6 +63,9 @@ NOTE: Local dev uses LOCAL databases (Postgres via Docker Compose on port 5050).
         "comment": "Good response"
       }'
 
+    Expected response (201 = synced to Phoenix):
+        {"phoenix_synced": true, "trace_id": "e53c701c...", "span_id": "6432d497..."}
+
 OTEL Architecture
 =================
 
@@ -59,7 +73,9 @@ OTEL Architecture
              (port 4318)    (k8s: observability)         (k8s: siggy)
 
 Environment Variables:
-    OTEL__ENABLED=true              Enable OTEL tracing
+    OTEL__ENABLED=true              Enable OTEL tracing (required for trace capture)
+    PHOENIX__ENABLED=true           Enable Phoenix integration (required for feedback sync)
+    PHOENIX_API_KEY=<jwt>           Phoenix API key (required for feedback->Phoenix sync)
     OTEL__COLLECTOR_ENDPOINT        Default: http://localhost:4318
     OTEL__PROTOCOL                  Default: http (use port 4318, not gRPC 4317)
 

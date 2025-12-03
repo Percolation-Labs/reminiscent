@@ -692,6 +692,91 @@ class S3Settings(BaseSettings):
     )
 
 
+class DataLakeSettings(BaseSettings):
+    """
+    Data lake settings for experiment and dataset storage.
+
+    Data Lake Convention:
+        The data lake provides a standardized structure for storing datasets,
+        experiments, and calibration data in S3. Users bring their own bucket
+        and the version is pinned by default to v0 in the path.
+
+    S3 Path Structure:
+        s3://{bucket}/{version}/datasets/
+        ├── raw/                        # Raw source data + transformers
+        │   └── {dataset_name}/         # e.g., cns_drugs, codes, care
+        ├── tables/                     # Database table data (JSONL)
+        │   ├── resources/              # → resources table
+        │   │   ├── drugs/{category}/   # Psychotropic drugs
+        │   │   ├── care/stages/        # Treatment stages
+        │   │   └── crisis/             # Crisis resources
+        │   └── codes/                  # → codes table
+        │       ├── icd10/{category}/   # ICD-10 codes
+        │       └── cpt/                # CPT codes
+        └── calibration/                # Agent calibration
+            ├── experiments/            # Experiment configs + results
+            │   └── {agent}/{task}/     # e.g., siggy/risk-assessment
+            └── datasets/               # Shared evaluation datasets
+
+    Experiment Storage:
+        - Local: experiments/{agent}/{task}/experiment.yaml
+        - S3: s3://{bucket}/{version}/datasets/calibration/experiments/{agent}/{task}/
+
+    Environment variables:
+        DATA_LAKE__BUCKET_NAME - S3 bucket for data lake (required)
+        DATA_LAKE__VERSION - Path version prefix (default: v0)
+        DATA_LAKE__DATASETS_PREFIX - Datasets directory (default: datasets)
+        DATA_LAKE__EXPERIMENTS_PREFIX - Experiments subdirectory (default: experiments)
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="DATA_LAKE__",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    bucket_name: str | None = Field(
+        default=None,
+        description="S3 bucket for data lake storage (user-provided)",
+    )
+
+    version: str = Field(
+        default="v0",
+        description="API version for data lake paths",
+    )
+
+    datasets_prefix: str = Field(
+        default="datasets",
+        description="Root directory for datasets in the bucket",
+    )
+
+    experiments_prefix: str = Field(
+        default="experiments",
+        description="Subdirectory within calibration for experiments",
+    )
+
+    def get_base_uri(self) -> str | None:
+        """Get the base S3 URI for the data lake."""
+        if not self.bucket_name:
+            return None
+        return f"s3://{self.bucket_name}/{self.version}/{self.datasets_prefix}"
+
+    def get_experiment_uri(self, agent: str, task: str = "general") -> str | None:
+        """Get the S3 URI for an experiment."""
+        base = self.get_base_uri()
+        if not base:
+            return None
+        return f"{base}/calibration/{self.experiments_prefix}/{agent}/{task}"
+
+    def get_tables_uri(self, table: str = "resources") -> str | None:
+        """Get the S3 URI for a table directory."""
+        base = self.get_base_uri()
+        if not base:
+            return None
+        return f"{base}/tables/{table}"
+
+
 class ChunkingSettings(BaseSettings):
     """
     Document chunking settings for semantic text splitting.
@@ -1473,6 +1558,7 @@ class Settings(BaseSettings):
     migration: MigrationSettings = Field(default_factory=MigrationSettings)
     storage: StorageSettings = Field(default_factory=StorageSettings)
     s3: S3Settings = Field(default_factory=S3Settings)
+    data_lake: DataLakeSettings = Field(default_factory=DataLakeSettings)
     git: GitSettings = Field(default_factory=GitSettings)
     sqs: SQSSettings = Field(default_factory=SQSSettings)
     db_listener: DBListenerSettings = Field(default_factory=DBListenerSettings)

@@ -511,3 +511,73 @@ def validate_agent_schema(schema: dict[str, Any]) -> bool:
 
     logger.debug("Schema validation passed")
     return True
+
+
+def get_evaluator_schema_path(evaluator_name: str) -> Path | None:
+    """
+    Find the file path to an evaluator schema.
+
+    Searches standard locations for the evaluator schema YAML file:
+    - ./evaluators/{name}.yaml (local project)
+    - Custom schema paths from registry
+    - Package resources: schemas/evaluators/{name}.yaml
+
+    Args:
+        evaluator_name: Name of the evaluator (e.g., "mental-health-classifier")
+
+    Returns:
+        Path to the evaluator schema file, or None if not found
+
+    Example:
+        >>> path = get_evaluator_schema_path("mental-health-classifier")
+        >>> if path:
+        ...     print(f"Found evaluator at: {path}")
+    """
+    from ..registry import get_schema_paths
+
+    base_name = evaluator_name.lower().replace('.yaml', '').replace('.yml', '')
+
+    # 1. Try custom schema paths (from registry + auto-detected)
+    custom_paths = get_schema_paths()
+
+    # Auto-detect local folders
+    auto_detect_folders = ["./evaluators", "./schemas", "./agents"]
+    for auto_folder in auto_detect_folders:
+        auto_path = Path(auto_folder)
+        if auto_path.exists() and auto_path.is_dir():
+            resolved = str(auto_path.resolve())
+            if resolved not in custom_paths:
+                custom_paths.insert(0, resolved)
+
+    for custom_dir in custom_paths:
+        # Try various patterns within each custom directory
+        for pattern in [
+            f"{base_name}.yaml",
+            f"{base_name}.yml",
+            f"evaluators/{base_name}.yaml",
+        ]:
+            custom_path = Path(custom_dir) / pattern
+            if custom_path.exists():
+                logger.debug(f"Found evaluator schema: {custom_path}")
+                return custom_path
+
+    # 2. Try package resources
+    evaluator_search_paths = [
+        f"schemas/evaluators/{base_name}.yaml",
+        f"schemas/evaluators/rem/{base_name}.yaml",
+    ]
+
+    for search_path in evaluator_search_paths:
+        try:
+            schema_ref = importlib.resources.files("rem") / search_path
+            schema_path = Path(str(schema_ref))
+
+            if schema_path.exists():
+                logger.debug(f"Found evaluator schema in package: {schema_path}")
+                return schema_path
+        except Exception as e:
+            logger.debug(f"Could not check {search_path}: {e}")
+            continue
+
+    logger.warning(f"Evaluator schema not found: {evaluator_name}")
+    return None

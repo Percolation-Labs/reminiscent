@@ -318,6 +318,15 @@ class ExperimentConfig(BaseModel):
         )
     )
 
+    task: str = Field(
+        default="general",
+        description=(
+            "Task name for organizing experiments by purpose.\n"
+            "Used with agent name to form directory: {agent}/{task}/\n"
+            "Examples: 'risk-assessment', 'classification', 'general'"
+        )
+    )
+
     description: str = Field(
         description="Human-readable description of experiment purpose and goals"
     )
@@ -410,6 +419,24 @@ class ExperimentConfig(BaseModel):
 
         return v
 
+    @field_validator("task")
+    @classmethod
+    def validate_task(cls, v: str) -> str:
+        """Validate task name follows conventions."""
+        if not v:
+            return "general"  # Default value
+
+        if not v.islower():
+            raise ValueError("Task name must be lowercase")
+
+        if " " in v:
+            raise ValueError("Task name cannot contain spaces (use hyphens)")
+
+        if not all(c.isalnum() or c == "-" for c in v):
+            raise ValueError("Task name can only contain lowercase letters, numbers, and hyphens")
+
+        return v
+
     @field_validator("tags")
     @classmethod
     def validate_tags(cls, v: list[str]) -> list[str]:
@@ -420,6 +447,15 @@ class ExperimentConfig(BaseModel):
         """Get the experiment directory path."""
         return Path(base_path) / self.name
 
+    def get_agent_task_dir(self, base_path: str = ".experiments") -> Path:
+        """
+        Get the experiment directory path organized by agent/task.
+
+        Returns: Path like .experiments/{agent}/{task}/
+        This is the recommended structure for S3 export compatibility.
+        """
+        return Path(base_path) / self.agent_schema_ref.name / self.task
+
     def get_config_path(self, base_path: str = ".experiments") -> Path:
         """Get the path to experiment.yaml file."""
         return self.get_experiment_dir(base_path) / "experiment.yaml"
@@ -427,6 +463,22 @@ class ExperimentConfig(BaseModel):
     def get_readme_path(self, base_path: str = ".experiments") -> Path:
         """Get the path to README.md file."""
         return self.get_experiment_dir(base_path) / "README.md"
+
+    def get_evaluator_filename(self) -> str:
+        """
+        Get the evaluator filename with task prefix.
+
+        Returns: {agent_name}-{task}.yaml (e.g., siggy-risk-assessment.yaml)
+        """
+        return f"{self.agent_schema_ref.name}-{self.task}.yaml"
+
+    def get_s3_export_path(self, bucket: str, version: str = "v0") -> str:
+        """
+        Get the S3 path for exporting this experiment.
+
+        Returns: s3://{bucket}/{version}/datasets/calibration/experiments/{agent}/{task}/
+        """
+        return f"s3://{bucket}/{version}/datasets/calibration/experiments/{self.agent_schema_ref.name}/{self.task}"
 
     def to_yaml(self) -> str:
         """Export configuration as YAML string."""
@@ -483,6 +535,7 @@ class ExperimentConfig(BaseModel):
 ## Configuration
 
 **Status**: `{self.status.value}`
+**Task**: `{self.task}`
 **Tags**: {', '.join(f'`{tag}`' for tag in self.tags) if self.tags else 'None'}
 
 ## Agent Schema
@@ -494,6 +547,7 @@ class ExperimentConfig(BaseModel):
 ## Evaluator Schema
 
 - **Name**: `{self.evaluator_schema_ref.name}`
+- **File**: `{self.get_evaluator_filename()}`
 - **Type**: `{self.evaluator_schema_ref.type}`
 
 ## Datasets

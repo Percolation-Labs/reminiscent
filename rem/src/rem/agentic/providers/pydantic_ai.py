@@ -553,7 +553,7 @@ async def create_agent(
     if agent_schema:
         system_prompt = get_system_prompt(agent_schema)
         metadata = get_metadata(agent_schema)
-        mcp_server_configs = [s.model_dump() for s in metadata.mcp_servers] if hasattr(metadata, 'mcp_servers') else []
+        mcp_server_configs = [s.model_dump() for s in metadata.mcp_servers] if hasattr(metadata, 'mcp_servers') and metadata.mcp_servers else []
         resource_configs = metadata.resources if hasattr(metadata, 'resources') else []
 
         if metadata.system_prompt:
@@ -563,6 +563,10 @@ async def create_agent(
         metadata = None
         mcp_server_configs = []
         resource_configs = []
+
+    # Default to rem.mcp_server if no MCP servers configured
+    if not mcp_server_configs:
+        mcp_server_configs = [{"type": "local", "module": "rem.mcp_server", "id": "rem"}]
 
     # Extract temperature and max_iterations from schema metadata (with fallback to settings defaults)
     if metadata:

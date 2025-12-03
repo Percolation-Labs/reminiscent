@@ -226,10 +226,15 @@ def create_phoenix_evaluator(
     # Create appropriate Phoenix LLM wrapper based on provider
     llm: OpenAIModel | AnthropicModel
     if provider.lower() == "anthropic":
-        # Anthropic models don't support top_p parameter
+        # Anthropic's newer Claude models (claude-sonnet-4, claude-opus-4, etc.)
+        # don't allow both temperature and top_p to be specified together.
+        # Phoenix's AnthropicModel defaults top_p=1, so we explicitly set it
+        # to None to prevent it from being sent in the API request.
+        # The invocation_parameters() method only includes params that are not None.
         llm = AnthropicModel(
             model=phoenix_model_name,
             temperature=0.0,
+            top_p=None,  # type: ignore[arg-type] - None prevents param from being sent
         )
     else:
         # Default to OpenAI for other providers (gpt-4, etc.)
@@ -249,13 +254,178 @@ def create_phoenix_evaluator(
     return evaluator_config
 
 
+def _evaluate_expression(expression: str, context: dict[str, Any]) -> Any:
+    """Safely evaluate a simple expression with context variables.
+
+    Supports: arithmetic, comparisons, boolean logic, len()
+    """
+    try:
+        allowed_names = {
+            "len": len,
+            "True": True,
+            "False": False,
+            "true": True,
+            "false": False,
+        }
+        allowed_names.update(context)
+        return eval(expression, {"__builtins__": {}}, allowed_names)
+    except Exception as e:
+        logger.warning(f"Expression evaluation failed: {expression} - {e}")
+        return 0.0
+
+
+def _calculate_derived_scores(
+    response_json: dict[str, Any],
+    derived_scores_config: dict[str, Any],
+) -> dict[str, Any]:
+    """Calculate derived scores from evaluator output using config formulas.
+
+    Supports:
+    - weighted_sum: Weighted average of fields
+    - conditional_weighted: Different formulas based on conditions
+    - boolean_logic: Boolean expression evaluation
+    """
+    for score_name, score_config in derived_scores_config.items():
+        score_type = score_config.get("type")
+
+        if score_type == "weighted_sum":
+            weights = score_config.get("weights", {})
+            total = 0.0
+            for field, weight in weights.items():
+                field_value = response_json.get(field, 0.0)
+                if isinstance(field_value, (int, float)):
+                    total += field_value * weight
+            response_json[score_name] = total
+
+        elif score_type == "conditional_weighted":
+            conditions = score_config.get("conditions", [])
+            formula_to_use = None
+            for cond_config in conditions:
+                condition = cond_config.get("condition")
+                if condition is None:
+                    formula_to_use = cond_config.get("formula")
+                    break
+                field = condition.get("field")
+                operator = condition.get("operator")
+                value = condition.get("value")
+                field_value = response_json.get(field, 0.0)
+                condition_met = False
+                if operator == ">=":
+                    condition_met = field_value >= value
+                elif operator == ">":
+                    condition_met = field_value > value
+                elif operator == "<=":
+                    condition_met = field_value <= value
+                elif operator == "<":
+                    condition_met = field_value < value
+                elif operator == "==":
+                    condition_met = field_value == value
+                elif operator == "!=":
+                    condition_met = field_value != value
+                if condition_met:
+                    formula_to_use = cond_config.get("formula")
+                    break
+            if formula_to_use and formula_to_use.get("type") == "weighted_sum":
+                weights = formula_to_use.get("weights", {})
+                total = 0.0
+                for field, weight in weights.items():
+                    field_value = response_json.get(field, 0.0)
+                    if isinstance(field_value, (int, float)):
+                        total += field_value * weight
+                response_json[score_name] = total
+
+        elif score_type == "boolean_logic":
+            expression = score_config.get("expression", "")
+            result = _evaluate_expression(expression, response_json)
+            response_json[score_name] = result
+
+    return response_json
+
+
+def _create_phoenix_evaluations(
+    response_json: dict[str, Any],
+    evaluations_config: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Create Phoenix evaluation dicts from evaluator output using config.
+
+    Each evaluation becomes a column in Phoenix UI with name, label, score, explanation.
+    """
+    evaluations = []
+    for eval_config in evaluations_config:
+        eval_name = eval_config.get("name", "unnamed")
+        score_field = eval_config.get("score_field")
+        score_expression = eval_config.get("score_expression")
+        label_field = eval_config.get("label_field")
+        label_expression = eval_config.get("label_expression")
+        label_logic = eval_config.get("label_logic", [])
+        label_transform = eval_config.get("label_transform", {})
+        score_logic = eval_config.get("score_logic", {})
+        explanation_field = eval_config.get("explanation_field")
+
+        evaluation = {"name": eval_name}
+
+        # Get score
+        if score_expression:
+            evaluation["score"] = _evaluate_expression(score_expression, response_json)
+        elif score_field:
+            evaluation["score"] = response_json.get(score_field, 0.0)
+        elif score_logic and label_field:
+            label_value = response_json.get(label_field)
+            if isinstance(label_value, bool):
+                label_value = "true" if label_value else "false"
+            evaluation["score"] = score_logic.get(str(label_value), 0.0)
+        else:
+            evaluation["score"] = None
+
+        # Get label
+        if label_expression:
+            evaluation["label"] = str(_evaluate_expression(label_expression, response_json))
+        elif label_field:
+            label_value = response_json.get(label_field)
+            if isinstance(label_value, bool):
+                label_value = "true" if label_value else "false"
+            if label_transform:
+                evaluation["label"] = label_transform.get(str(label_value), str(label_value))
+            else:
+                evaluation["label"] = str(label_value)
+        elif label_logic and (score_field or score_expression):
+            score_value = evaluation.get("score", 0.0)
+            label = "unknown"
+            for logic in label_logic:
+                threshold = logic.get("threshold", 0.0)
+                operator = logic.get("operator", ">=")
+                if operator == ">=" and score_value >= threshold:
+                    label = logic.get("label", "unknown")
+                    break
+                elif operator == ">" and score_value > threshold:
+                    label = logic.get("label", "unknown")
+                    break
+            evaluation["label"] = label
+        else:
+            evaluation["label"] = None
+
+        # Get explanation
+        if explanation_field:
+            explanation_value = response_json.get(explanation_field, "")
+            if isinstance(explanation_value, list):
+                evaluation["explanation"] = ", ".join(str(x) for x in explanation_value) if explanation_value else "None"
+            else:
+                evaluation["explanation"] = str(explanation_value)
+        else:
+            evaluation["explanation"] = None
+
+        evaluations.append(evaluation)
+    return evaluations
+
+
 def create_evaluator_from_schema(
     evaluator_schema_path: str | Path | dict[str, Any],
     model_name: str | None = None,
 ) -> Callable[[Any], Any]:
     """Create an evaluator function from a schema file or dict.
 
-    The returned evaluator is a callable that Phoenix experiments can use.
+    Uses direct LLM call with JSON schema for structured output evaluation.
+    Supports phoenix_config for derived scores and evaluation column mappings.
 
     Args:
         evaluator_schema_path: Path to schema file, evaluator name, or schema dict
@@ -269,19 +439,9 @@ def create_evaluator_from_schema(
         ImportError: If arize-phoenix not installed
 
     Example:
-        >>> # From evaluator name (searches in schemas/evaluators/)
         >>> evaluator = create_evaluator_from_schema("rem-lookup-correctness")
-        >>>
-        >>> # From schema dict
-        >>> schema = {"description": "...", "properties": {...}}
-        >>> evaluator = create_evaluator_from_schema(schema)
-        >>>
-        >>> # Use in experiment
-        >>> result = evaluator({
-        ...     "input": {"query": "LOOKUP person:sarah-chen"},
-        ...     "output": {"label": "sarah-chen", "type": "person", ...},
-        ...     "expected": {"label": "sarah-chen", "type": "person", ...}
-        ... })
+        >>> result = evaluator(input={...}, output={...}, expected={...})
+        >>> # Returns: list of {"name": "...", "score": 0.95, "label": "...", "explanation": "..."}
     """
     if not _check_phoenix_available():
         raise ImportError(
@@ -292,8 +452,6 @@ def create_evaluator_from_schema(
     # Load schema if path/name provided
     if isinstance(evaluator_schema_path, (str, Path)):
         schema_path = Path(evaluator_schema_path)
-
-        # If it's a file path, load directly
         if schema_path.exists():
             logger.debug(f"Loading evaluator schema from {schema_path}")
             if schema_path.suffix in [".yaml", ".yml"]:
@@ -303,126 +461,161 @@ def create_evaluator_from_schema(
                 with open(schema_path) as f:
                     schema = json.load(f)
         else:
-            # Treat as evaluator name, search in schemas/evaluators/
             schema = load_evaluator_schema(str(evaluator_schema_path))
     else:
-        # Already a dict
         schema = evaluator_schema_path
 
-    # Extract model from schema's provider_configs if not explicitly provided
-    if model_name is None:
-        json_schema_extra = schema.get("json_schema_extra", {})
-        provider_configs = json_schema_extra.get("provider_configs", [])
-        if provider_configs:
-            # Use first provider config
-            first_provider = provider_configs[0]
-            provider_name = first_provider.get("provider_name", "openai")
-            schema_model_name = first_provider.get("model_name", "gpt-4o-mini")
-            # Format as "provider:model" if not OpenAI (OpenAI is default)
-            if provider_name == "openai":
-                model_name = schema_model_name
-            else:
-                model_name = f"{provider_name}:{schema_model_name}"
-            logger.debug(f"Using model from schema provider_configs: {model_name}")
+    # Extract schema components
+    output_schema = schema.get("properties", {})
 
-    # Create evaluator config
+    # Extract phoenix_config for derived scores and evaluations
+    phoenix_config = schema.get("phoenix_config", {})
+    derived_scores_config = phoenix_config.get("derived_scores", {})
+    evaluations_config = phoenix_config.get("evaluations", [])
+
+    # Create evaluator config (LLM wrapper, prompt, etc.)
     evaluator_config = create_phoenix_evaluator(
         evaluator_schema=schema,
         model_name=model_name,
     )
 
-    # Import llm_classify for evaluation
-    from phoenix.evals import llm_classify
-    import pandas as pd
+    import re
 
-    # Wrap for Phoenix experiment compatibility
-    def evaluator_fn(example: dict[str, Any]) -> dict[str, Any]:
-        """Evaluate a single example using Phoenix llm_classify.
+    def evaluator_fn(input: dict[str, Any], output: dict[str, Any], expected: dict[str, Any]) -> list[dict[str, Any]]:
+        """Evaluate using Phoenix's named parameter binding with structured LLM output.
 
-        Args:
-            example: Dict with 'input', 'output', 'expected' keys
-                - input: Agent input dict (e.g., {"query": "LOOKUP person:sarah-chen"})
-                - output: Agent output dict (what the agent returned)
-                - expected: Expected output dict (ground truth from dataset)
+        Phoenix automatically binds these parameters:
+        - input: Dataset input dict
+        - output: Task's return value (agent output)
+        - expected: Expected output dict (reference/ground truth)
 
         Returns:
-            Evaluation result with score, label, explanation
+            List of Phoenix evaluation dicts with name, score, label, explanation
         """
-        input_preview = str(example.get('input', ''))[:100]
-        logger.debug(f"Evaluating example: {input_preview}...")
+        logger.debug("Evaluating with structured output pattern")
 
-        # Phoenix llm_classify() expects a flat dict with string values
-        # Build evaluation input by flattening nested dicts
-        eval_input = {}
-
-        # Extract and flatten input fields
-        input_data = example.get("input", {})
-        if isinstance(input_data, dict):
-            for key, value in input_data.items():
-                eval_input[f"input_{key}"] = str(value) if value is not None else ""
+        # Extract question from input
+        if isinstance(input, dict):
+            question = input.get("input", input.get("text", str(input)))
         else:
-            eval_input["input"] = str(input_data) if input_data is not None else ""
+            question = str(input)
 
-        # Extract and flatten agent output fields
-        output_data = example.get("output", {})
-        if isinstance(output_data, dict):
-            for key, value in output_data.items():
-                eval_input[f"output_{key}"] = str(value) if value is not None else ""
+        # Serialize agent output
+        if isinstance(output, dict):
+            output_str = json.dumps(output, indent=2)
         else:
-            eval_input["output"] = str(output_data) if output_data is not None else ""
+            output_str = str(output)
 
-        # Extract and flatten expected fields (reference/ground truth)
-        expected_data = example.get("expected", {})
-        if isinstance(expected_data, dict):
-            for key, value in expected_data.items():
-                eval_input[f"expected_{key}"] = str(value) if value is not None else ""
-        elif expected_data:
-            eval_input["expected"] = str(expected_data)
+        # Get reference from expected
+        if isinstance(expected, dict):
+            reference = expected.get("reference", expected.get("expected_output",
+                         expected.get("ground_truth", str(expected))))
+        else:
+            reference = str(expected)
 
         try:
-            # Create single-row DataFrame for llm_classify
-            # Note: Phoenix's llm_classify requires pandas DataFrame (imported above)
-            df = pd.DataFrame([eval_input])
+            # Build user message
+            user_message = f"""Question/Input: {question}
 
-            # Call Phoenix llm_classify
-            results_df = llm_classify(
-                dataframe=df,
-                model=evaluator_config["llm"],
-                template=evaluator_config["prompt_template"],
-                rails=["correct", "partial", "incorrect"],  # Common labels
-                provide_explanation=True,
+Agent's Answer:
+{output_str}
+
+Expected Answer (Reference):
+{reference}
+
+Please evaluate the agent's answer according to the evaluation criteria."""
+
+            # Add JSON schema requirement to system prompt
+            system_prompt = evaluator_config["prompt_template"]
+            schema_instruction = f"\n\nYou MUST respond with valid JSON matching this schema:\n{json.dumps(output_schema, indent=2)}\n\nProvide ONLY the JSON response, no markdown code blocks or extra text."
+            system_with_schema = system_prompt + schema_instruction
+
+            # Phoenix LLM models expect a single prompt string
+            llm = evaluator_config["llm"]
+            full_prompt = f"{system_with_schema}\n\n{user_message}"
+            response_text = llm(full_prompt)
+
+            # Parse JSON response
+            try:
+                response_json = json.loads(response_text)
+            except json.JSONDecodeError:
+                json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response_text, re.DOTALL)
+                if json_match:
+                    response_json = json.loads(json_match.group(1))
+                else:
+                    raise ValueError(f"Could not parse JSON from LLM response: {response_text[:200]}")
+
+            logger.debug(f"LLM response parsed: {list(response_json.keys())}")
+
+            # Calculate derived scores using config
+            if derived_scores_config:
+                logger.debug(f"Calculating {len(derived_scores_config)} derived scores")
+                response_json = _calculate_derived_scores(response_json, derived_scores_config)
+
+            # Create Phoenix evaluations using config
+            if evaluations_config:
+                logger.debug(f"Creating {len(evaluations_config)} Phoenix evaluations")
+                evaluations = _create_phoenix_evaluations(response_json, evaluations_config)
+            else:
+                # Fallback: create evaluations from all numeric/boolean fields
+                logger.warning("No evaluations_config - creating default evaluations from schema")
+                evaluations = []
+                for field_name, field_value in response_json.items():
+                    if isinstance(field_value, (int, float)):
+                        evaluations.append({
+                            "name": field_name,
+                            "score": float(field_value),
+                            "label": "good" if field_value >= 0.5 else "poor",
+                            "explanation": None
+                        })
+                    elif isinstance(field_value, bool):
+                        evaluations.append({
+                            "name": field_name,
+                            "score": 1.0 if field_value else 0.0,
+                            "label": "pass" if field_value else "fail",
+                            "explanation": None
+                        })
+
+                # Always add overall if not present
+                if not any(e["name"] == "overall" for e in evaluations):
+                    overall_score = response_json.get("overall_score", 0.0)
+                    overall_pass = response_json.get("pass", False)
+                    evaluations.append({
+                        "name": "overall",
+                        "score": overall_score if isinstance(overall_score, (int, float)) else 0.0,
+                        "label": "pass" if overall_pass else "fail",
+                        "explanation": response_json.get("evaluation_notes", None)
+                    })
+
+            logger.debug(f"Created {len(evaluations)} evaluations")
+
+            # Phoenix run_experiment expects a single EvaluationResult, not a list.
+            # Return the overall score with detailed evaluations in metadata.
+            from phoenix.experiments.evaluators.base import EvaluationResult
+
+            overall_eval = next(
+                (e for e in evaluations if e["name"] == "overall"),
+                {"score": 0.0, "label": "unknown", "explanation": None}
             )
 
-            # Extract result (results_df is pandas DataFrame from Phoenix)
-            if not results_df.empty:
-                row = results_df.iloc[0]
-                label = row.get("label", "error")
-                explanation = row.get("explanation", "")
-
-                # Map labels to scores
-                score_map = {"correct": 1.0, "partial": 0.5, "incorrect": 0.0}
-                score = score_map.get(label, 0.0)
-
-                return {
-                    "label": label,
-                    "score": score,
-                    "explanation": explanation or "",
+            return EvaluationResult(
+                score=overall_eval.get("score"),
+                label=overall_eval.get("label"),
+                explanation=overall_eval.get("explanation"),
+                metadata={
+                    "evaluations": evaluations,
+                    "raw_response": response_json,
                 }
-            else:
-                logger.warning("llm_classify returned empty DataFrame")
-                return {
-                    "label": "error",
-                    "score": 0.0,
-                    "explanation": "Evaluator returned empty result",
-                }
+            )
 
         except Exception as e:
             logger.error(f"Evaluator error: {e}")
-            return {
-                "label": "error",
-                "score": 0.0,
-                "explanation": f"Evaluator failed: {str(e)}",
-            }
+            from phoenix.experiments.evaluators.base import EvaluationResult
+            return EvaluationResult(
+                score=0.0,
+                label="error",
+                explanation=f"Evaluator failed: {str(e)}",
+            )
 
     return evaluator_fn
 

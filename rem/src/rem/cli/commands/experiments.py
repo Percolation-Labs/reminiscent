@@ -63,6 +63,7 @@ def experiments():
 @experiments.command("create")
 @click.argument("name")
 @click.option("--agent", "-a", required=True, help="Agent schema name (e.g., 'cv-parser')")
+@click.option("--task", "-t", default="general", help="Task name for organizing experiments (e.g., 'risk-assessment')")
 @click.option("--evaluator", "-e", default="default", help="Evaluator schema name (default: 'default')")
 @click.option("--description", "-d", help="Experiment description")
 @click.option("--dataset-location", type=click.Choice(["git", "s3", "hybrid"]), default="git",
@@ -74,6 +75,7 @@ def experiments():
 def create(
     name: str,
     agent: str,
+    task: str,
     evaluator: str,
     description: Optional[str],
     dataset_location: str,
@@ -170,7 +172,8 @@ def create(
         # Create experiment config
         config = ExperimentConfig(
             name=name,
-            description=description or f"Evaluation experiment for {agent} agent",
+            task=task,
+            description=description or f"Evaluation experiment for {agent} agent ({task} task)",
             agent_schema_ref=SchemaReference(
                 name=agent,
                 version=None,  # Use latest by default
@@ -515,6 +518,159 @@ def show(name: str, base_path: Optional[str]):
 
 
 # =============================================================================
+# VIBES MODE HELPER
+# =============================================================================
+
+
+def _run_vibes_mode(
+    config: Any,
+    dataset_df: Any,
+    task_fn: Any,
+    base_path: str,
+    limit: Optional[int],
+    evaluator_schema_path: Path,
+) -> None:
+    """Run experiment in vibes mode - execute agent and export for AI evaluation.
+
+    Vibes mode runs the agent on each example and saves results to a JSONL file.
+    The AI assistant (e.g., Claude Code) then acts as the judge using the
+    evaluator schema to evaluate results.
+
+    Args:
+        config: ExperimentConfig object
+        dataset_df: Polars DataFrame with ground truth examples
+        task_fn: Function to run agent on each example
+        base_path: Base directory for experiments
+        limit: Optional limit on number of examples to process
+        evaluator_schema_path: Path to the evaluator schema YAML file
+    """
+    from rem.utils.date_utils import format_timestamp_for_experiment, utc_now, to_iso
+    import json
+
+    # Apply limit if specified
+    if limit:
+        dataset_df = dataset_df.head(limit)
+        click.echo(f"  (Limited to {limit} examples)")
+
+    # Create results directory
+    timestamp = format_timestamp_for_experiment()
+    results_dir = Path(base_path) / config.name / "results" / timestamp
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    click.echo(f"\n⏳ Running agent on {len(dataset_df)} examples...")
+    click.echo(f"   Results will be saved to: {results_dir}")
+    click.echo()
+
+    # Run agent on each example and collect results
+    results = []
+    records = dataset_df.to_dicts()
+
+    for i, record in enumerate(records, 1):
+        example_id = record.get("id", i)
+        click.echo(f"  [{i}/{len(records)}] Processing example {example_id}...", nl=False)
+
+        try:
+            # Prepare input for agent
+            input_text = record.get("text", record.get("input", record.get("query", "")))
+            example_input = {"query": input_text} if isinstance(input_text, str) else input_text
+
+            # Run agent
+            output = task_fn({"input": example_input})
+
+            result = {
+                "id": example_id,
+                "input": input_text,
+                "ground_truth": record.get("ground_truth", record.get("expected_output", "")),
+                "category": record.get("category", ""),
+                "agent_output": output,
+                "status": "success",
+            }
+            click.echo(" ✓")
+
+        except Exception as e:
+            result = {
+                "id": example_id,
+                "input": record.get("text", record.get("input", "")),
+                "ground_truth": record.get("ground_truth", record.get("expected_output", "")),
+                "category": record.get("category", ""),
+                "agent_output": None,
+                "status": "error",
+                "error": str(e),
+            }
+            click.echo(f" ✗ ({e})")
+
+        results.append(result)
+
+    # Save results to JSONL
+    results_file = results_dir / "vibes-results.jsonl"
+    with open(results_file, "w") as f:
+        for result in results:
+            f.write(json.dumps(result) + "\n")
+
+    # Copy evaluator schema to results dir for easy reference
+    import shutil
+    evaluator_copy = results_dir / "evaluator-schema.yaml"
+    shutil.copy(evaluator_schema_path, evaluator_copy)
+
+    # Save run metadata
+    run_info = {
+        "experiment": config.name,
+        "agent": config.agent_schema_ref.name,
+        "evaluator": config.evaluator_schema_ref.name,
+        "mode": "vibes",
+        "timestamp": timestamp,
+        "total_examples": len(records),
+        "successful": len([r for r in results if r["status"] == "success"]),
+        "failed": len([r for r in results if r["status"] == "error"]),
+        "completed_at": to_iso(utc_now()),
+    }
+
+    run_info_file = results_dir / "run-info.json"
+    with open(run_info_file, "w") as f:
+        json.dump(run_info, f, indent=2)
+
+    # Print summary and instructions
+    success_count = run_info["successful"]
+    fail_count = run_info["failed"]
+
+    click.echo(f"\n{'=' * 60}")
+    click.echo(f"VIBES MODE COMPLETE")
+    click.echo(f"{'=' * 60}")
+    click.echo(f"\nResults: {success_count} successful, {fail_count} failed")
+    click.echo(f"\nFiles saved to: {results_dir}/")
+    click.echo(f"  - vibes-results.jsonl    (agent outputs)")
+    click.echo(f"  - evaluator-schema.yaml  (evaluation criteria)")
+    click.echo(f"  - run-info.json          (run metadata)")
+
+    click.echo(f"\n{'=' * 60}")
+    click.echo(f"NEXT STEP: Ask your AI assistant to evaluate")
+    click.echo(f"{'=' * 60}")
+    click.echo(f"""
+Copy this prompt to Claude Code or your AI assistant:
+
+    Please evaluate the experiment results in:
+    {results_dir}/
+
+    Read the vibes-results.jsonl file and evaluate each example
+    using the evaluator schema in evaluator-schema.yaml.
+
+    For each example, provide:
+    1. extracted_classification
+    2. exact_match (vs ground_truth)
+    3. semantic_match
+    4. reasoning_quality_score
+    5. overall_score
+    6. pass/fail
+
+    Then provide summary metrics:
+    - Exact match accuracy
+    - Semantic match accuracy
+    - Average overall score
+    - Pass rate
+""")
+
+
+# =============================================================================
 # RUN COMMAND
 # =============================================================================
 
@@ -524,6 +680,8 @@ def show(name: str, base_path: Optional[str]):
 @click.option("--base-path", help="Base directory for experiments (default: EXPERIMENTS_HOME or 'experiments')")
 @click.option("--version", help="Git tag version to load (e.g., 'experiments/my-exp/v1.0.0')")
 @click.option("--dry-run", is_flag=True, help="Test on small subset without saving")
+@click.option("--only-vibes", is_flag=True, help="Run agent locally, export results for AI evaluation (no Phoenix)")
+@click.option("--limit", "-n", type=int, help="Limit number of examples to evaluate (useful with --only-vibes)")
 @click.option("--update-prompts", is_flag=True, help="Update prompts in Phoenix before running")
 @click.option("--phoenix-url", help="Phoenix server URL (overrides PHOENIX_BASE_URL env var)")
 @click.option("--phoenix-api-key", help="Phoenix API key (overrides PHOENIX_API_KEY env var)")
@@ -532,13 +690,44 @@ def run(
     base_path: Optional[str],
     version: Optional[str],
     dry_run: bool,
+    only_vibes: bool,
+    limit: Optional[int],
     update_prompts: bool,
     phoenix_url: Optional[str],
     phoenix_api_key: Optional[str],
 ):
-    """Run an experiment using Phoenix provider.
+    """Run an experiment using Phoenix provider or local vibes mode.
 
     Loads configuration, executes agent and evaluator, saves results.
+
+    Vibes Mode (--only-vibes):
+        Run agent locally without Phoenix infrastructure. Agent outputs are saved
+        to a JSONL file along with the evaluator schema. Your AI assistant (e.g.,
+        Claude Code) then acts as the judge to evaluate results.
+
+        This enables seamless switching between:
+        - Local evaluation: Quick iteration with AI-as-judge
+        - Phoenix evaluation: Production metrics and dashboards
+
+        Usage:
+            rem experiments run my-experiment --only-vibes
+            rem experiments run my-experiment --only-vibes --limit 5
+
+        The command will:
+        1. Run the agent on each ground-truth example
+        2. Save results to results/{timestamp}/vibes-results.jsonl
+        3. Print the evaluator prompt and schema
+        4. Instruct you to ask your AI assistant to evaluate
+
+        Example workflow with Claude Code:
+            $ rem experiments run mental-health-classifier --only-vibes --limit 3
+            # ... agent runs ...
+            # Results saved to: .experiments/mental-health-classifier/results/20241203-143022/
+
+            # Then ask Claude Code:
+            "Please evaluate the experiment results in
+             .experiments/mental-health-classifier/results/20241203-143022/
+             using the evaluator schema provided"
 
     Phoenix Connection:
         Commands respect PHOENIX_BASE_URL and PHOENIX_API_KEY environment variables.
@@ -561,6 +750,12 @@ def run(
     Examples:
         # Run experiment with latest schemas
         rem experiments run hello-world-validation
+
+        # Quick local evaluation (vibes mode)
+        rem experiments run hello-world-validation --only-vibes
+
+        # Vibes mode with limited examples
+        rem experiments run hello-world-validation --only-vibes --limit 5
 
         # Run specific version
         rem experiments run hello-world-validation \\
@@ -674,35 +869,47 @@ def run(
 
         click.echo(f"Loading evaluator: {evaluator_name} for agent {agent_name}")
 
-        # Try multiple evaluator path patterns (agent-specific, then generic)
-        evaluator_paths_to_try = [
-            f"{agent_name}/{evaluator_name}",  # e.g., hello-world/default
-            f"{agent_name}-{evaluator_name}",  # e.g., hello-world-default
-            evaluator_name,                     # e.g., default (generic)
-        ]
+        # Find evaluator schema file path
+        from rem.utils.schema_loader import get_evaluator_schema_path
 
+        evaluator_schema_path = get_evaluator_schema_path(evaluator_name)
+        if not evaluator_schema_path or not evaluator_schema_path.exists():
+            click.echo(f"Error: Could not find evaluator schema '{evaluator_name}'")
+            raise click.Abort()
+
+        click.echo(f"✓ Found evaluator schema: {evaluator_schema_path}")
+
+        # For Phoenix mode, also load evaluator function
         evaluator_fn = None
-        evaluator_load_error = None
+        if not only_vibes:
+            # Try multiple evaluator path patterns (agent-specific, then generic)
+            evaluator_paths_to_try = [
+                f"{agent_name}/{evaluator_name}",  # e.g., hello-world/default
+                f"{agent_name}-{evaluator_name}",  # e.g., hello-world-default
+                evaluator_name,                     # e.g., default (generic)
+            ]
 
-        for evaluator_path in evaluator_paths_to_try:
-            try:
-                evaluator_fn = create_evaluator_from_schema(
-                    evaluator_schema_path=evaluator_path,
-                    model_name=None,  # Use default from schema
-                )
-                click.echo(f"✓ Loaded evaluator schema: {evaluator_path}")
-                break
-            except FileNotFoundError as e:
-                evaluator_load_error = e
-                logger.debug(f"Evaluator not found at {evaluator_path}: {e}")
-                continue
-            except Exception as e:
-                evaluator_load_error = e
-                logger.warning(f"Failed to load evaluator from {evaluator_path}: {e}")
-                continue
+            evaluator_load_error = None
 
-        if evaluator_fn is None:
-            click.echo(f"Error: Could not load evaluator schema '{evaluator_name}'")
+            for evaluator_path in evaluator_paths_to_try:
+                try:
+                    evaluator_fn = create_evaluator_from_schema(
+                        evaluator_schema_path=evaluator_path,
+                        model_name=None,  # Use default from schema
+                    )
+                    click.echo(f"✓ Loaded evaluator function: {evaluator_path}")
+                    break
+                except FileNotFoundError as e:
+                    evaluator_load_error = e
+                    logger.debug(f"Evaluator not found at {evaluator_path}: {e}")
+                    continue
+                except Exception as e:
+                    evaluator_load_error = e
+                    logger.warning(f"Failed to load evaluator from {evaluator_path}: {e}")
+                    continue
+
+        if evaluator_fn is None and not only_vibes:
+            click.echo(f"Error: Could not load evaluator function '{evaluator_name}'")
             click.echo(f"  Tried paths: {evaluator_paths_to_try}")
             if evaluator_load_error:
                 click.echo(f"  Last error: {evaluator_load_error}")
@@ -768,6 +975,18 @@ def run(
         if update_prompts:
             # TODO: Implement prompt updating
             click.echo("⚠  --update-prompts not yet implemented")
+
+        # Vibes mode: run agent and export for AI evaluation
+        if only_vibes:
+            _run_vibes_mode(
+                config=config,
+                dataset_df=dataset_df,
+                task_fn=task_fn,
+                base_path=base_path,
+                limit=limit,
+                evaluator_schema_path=evaluator_schema_path,
+            )
+            return
 
         # Run experiment via Phoenix
         if not dry_run:
@@ -1302,5 +1521,177 @@ def trace_list(
 
     except Exception as e:
         logger.error(f"Failed to list traces: {e}")
+        click.echo(f"Error: {e}", err=True)
+        raise click.Abort()
+
+
+# =============================================================================
+# EXPORT COMMAND
+# =============================================================================
+
+
+@experiments.command("export")
+@click.argument("name")
+@click.option("--base-path", help="Base directory for experiments (default: EXPERIMENTS_HOME or 'experiments')")
+@click.option("--bucket", "-b", help="S3 bucket name (default: DATA_LAKE__BUCKET_NAME)")
+@click.option("--version", "-v", default="v0", help="Data lake version prefix (default: v0)")
+@click.option("--plan", is_flag=True, help="Show what would be exported without uploading")
+@click.option("--include-results", is_flag=True, help="Include results directory in export")
+def export(
+    name: str,
+    base_path: Optional[str],
+    bucket: Optional[str],
+    version: str,
+    plan: bool,
+    include_results: bool,
+):
+    """Export experiment to S3 data lake.
+
+    Exports experiment configuration, ground truth, and optionally results
+    to the S3 data lake following the convention:
+
+        s3://{bucket}/{version}/datasets/calibration/experiments/{agent}/{task}/
+
+    The export includes:
+    - experiment.yaml (configuration)
+    - README.md (documentation)
+    - ground-truth/ (evaluation datasets)
+    - seed-data/ (optional seed data)
+    - results/ (optional, with --include-results)
+
+    Examples:
+        # Preview what would be exported
+        rem experiments export my-experiment --plan
+
+        # Export to configured data lake bucket
+        rem experiments export my-experiment
+
+        # Export to specific bucket
+        rem experiments export my-experiment --bucket siggy-data
+
+        # Include results in export
+        rem experiments export my-experiment --include-results
+
+        # Export with custom version prefix
+        rem experiments export my-experiment --version v1
+    """
+    from rem.models.core.experiment import ExperimentConfig
+    from rem.settings import settings
+    from rem.services.fs.s3_provider import S3Provider
+    import os
+    import json
+
+    try:
+        # Resolve base path
+        if base_path is None:
+            base_path = os.getenv("EXPERIMENTS_HOME", "experiments")
+
+        # Load experiment configuration
+        config_path = Path(base_path) / name / "experiment.yaml"
+        if not config_path.exists():
+            click.echo(f"Experiment not found: {name}")
+            click.echo(f"  Looked in: {config_path}")
+            raise click.Abort()
+
+        config = ExperimentConfig.from_yaml(config_path)
+        click.echo(f"✓ Loaded experiment: {name}")
+
+        # Resolve bucket
+        if bucket is None:
+            bucket = settings.data_lake.bucket_name
+            if bucket is None:
+                click.echo("Error: No S3 bucket configured.")
+                click.echo("  Set DATA_LAKE__BUCKET_NAME environment variable or use --bucket option")
+                raise click.Abort()
+
+        # Build S3 paths
+        s3_base = config.get_s3_export_path(bucket, version)
+        exp_dir = config.get_experiment_dir(base_path)
+
+        # Collect files to export
+        files_to_export = []
+
+        # Always include these files
+        required_files = [
+            ("experiment.yaml", exp_dir / "experiment.yaml"),
+            ("README.md", exp_dir / "README.md"),
+        ]
+
+        for s3_name, local_path in required_files:
+            if local_path.exists():
+                files_to_export.append((s3_name, local_path))
+
+        # Include ground-truth directory
+        ground_truth_dir = exp_dir / "ground-truth"
+        if ground_truth_dir.exists():
+            for f in ground_truth_dir.rglob("*"):
+                if f.is_file():
+                    relative = f.relative_to(exp_dir)
+                    files_to_export.append((str(relative), f))
+
+        # Include seed-data directory
+        seed_data_dir = exp_dir / "seed-data"
+        if seed_data_dir.exists():
+            for f in seed_data_dir.rglob("*"):
+                if f.is_file():
+                    relative = f.relative_to(exp_dir)
+                    files_to_export.append((str(relative), f))
+
+        # Optionally include results
+        if include_results:
+            results_dir = exp_dir / "results"
+            if results_dir.exists():
+                for f in results_dir.rglob("*"):
+                    if f.is_file():
+                        relative = f.relative_to(exp_dir)
+                        files_to_export.append((str(relative), f))
+
+        # Display export plan
+        click.echo(f"\n{'=' * 60}")
+        click.echo(f"EXPORT {'PLAN' if plan else 'TO S3'}")
+        click.echo(f"{'=' * 60}")
+        click.echo(f"\nExperiment: {config.name}")
+        click.echo(f"Agent: {config.agent_schema_ref.name}")
+        click.echo(f"Task: {config.task}")
+        click.echo(f"Evaluator file: {config.get_evaluator_filename()}")
+        click.echo(f"\nDestination: {s3_base}/")
+        click.echo(f"\nFiles to export ({len(files_to_export)}):")
+
+        for s3_name, local_path in files_to_export:
+            s3_uri = f"{s3_base}/{s3_name}"
+            if plan:
+                click.echo(f"  {local_path}")
+                click.echo(f"    → {s3_uri}")
+            else:
+                click.echo(f"  {s3_name}")
+
+        if plan:
+            click.echo(f"\n[PLAN MODE] No files were uploaded.")
+            click.echo(f"Run without --plan to execute the export.")
+            return
+
+        # Execute export
+        click.echo(f"\n⏳ Uploading to S3...")
+        s3 = S3Provider()
+
+        uploaded = 0
+        for s3_name, local_path in files_to_export:
+            s3_uri = f"{s3_base}/{s3_name}"
+            try:
+                s3.copy(str(local_path), s3_uri)
+                uploaded += 1
+                click.echo(f"  ✓ {s3_name}")
+            except Exception as e:
+                click.echo(f"  ✗ {s3_name}: {e}")
+
+        click.echo(f"\n✓ Exported {uploaded}/{len(files_to_export)} files to {s3_base}/")
+
+        # Show next steps
+        click.echo(f"\nNext steps:")
+        click.echo(f"  - View in S3: aws s3 ls {s3_base}/ --recursive")
+        click.echo(f"  - Download: aws s3 sync {s3_base}/ ./{config.agent_schema_ref.name}/{config.task}/")
+
+    except Exception as e:
+        logger.error(f"Failed to export experiment: {e}")
         click.echo(f"Error: {e}", err=True)
         raise click.Abort()

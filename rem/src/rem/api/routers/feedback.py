@@ -7,8 +7,8 @@ Endpoints:
     POST /api/v1/messages/feedback - Submit feedback on a message
 
 Trace Integration:
-- Feedback can reference trace_id/span_id for OTEL integration
-- Phoenix sync attaches feedback as span annotations
+- Feedback auto-resolves trace_id/span_id from the message in the database
+- Phoenix sync attaches feedback as span annotations when trace info is available
 
 HTTP Status Codes:
 - 201: Feedback saved AND synced to Phoenix as annotation (phoenix_synced=true)
@@ -16,40 +16,47 @@ HTTP Status Codes:
        (missing trace_id/span_id, Phoenix disabled, or sync failed)
 
 IMPORTANT - Testing Requirements:
-    ╔════════════════════════════════════════════════════════════════════════════════════════════════╗
-    ║  1. Use 'rem' agent (NOT 'simulator') - only real agents capture traces                        ║
-    ║  2. Session IDs MUST be UUIDs - use $(uuidgen) or uuid.uuid4()                                 ║
-    ║  3. Ensure OTEL is enabled and collector is port-forwarded (4318)                              ║
-    ║  4. Ensure Phoenix is enabled and port-forwarded (6006)                                        ║
-    ║  5. Set PHOENIX_API_KEY env var for annotation sync:                                           ║
-    ║     kubectl get secret -n siggy rem-phoenix-api-key -o jsonpath='{.data.PHOENIX_API_KEY}' \    ║
-    ║       | base64 -d                                                                              ║
-    ╚════════════════════════════════════════════════════════════════════════════════════════════════╝
+    ╔════════════════════════════════════════════════════════════════════════════════════════════════════╗
+    ║  1. Use 'rem' agent (NOT 'simulator') - only real agents capture traces                            ║
+    ║  2. Session IDs MUST be UUIDs - use python3 -c "import uuid; print(uuid.uuid4())"                  ║
+    ║  3. Port-forward OTEL collector: kubectl port-forward -n observability                             ║
+    ║       svc/otel-collector-collector 4318:4318                                                       ║
+    ║  4. Port-forward Phoenix: kubectl port-forward -n siggy svc/phoenix 6006:6006                      ║
+    ║  5. Set environment variables when starting the API:                                               ║
+    ║       OTEL__ENABLED=true PHOENIX__ENABLED=true PHOENIX_API_KEY=<jwt> uvicorn ...                   ║
+    ║  6. Get PHOENIX_API_KEY:                                                                           ║
+    ║       kubectl get secret -n siggy rem-phoenix-api-key -o jsonpath='{.data.PHOENIX_API_KEY}'        ║
+    ║         | base64 -d                                                                                ║
+    ╚════════════════════════════════════════════════════════════════════════════════════════════════════╝
 
 Usage:
-    # 1. Send a chat message with X-Session-Id header
-    #    IMPORTANT: Use UUID for session_id, use 'rem' agent (NOT simulator!)
+    # 1. Send a chat message with X-Session-Id header (MUST be UUID!)
+    SESSION_ID=$(python3 -c "import uuid; print(uuid.uuid4())")
     curl -X POST http://localhost:8000/api/v1/chat/completions \\
         -H "Content-Type: application/json" \\
-        -H "X-Session-Id: $(uuidgen)" \\
+        -H "X-Session-Id: $SESSION_ID" \\
         -H "X-Agent-Schema: rem" \\
         -d '{"messages": [{"role": "user", "content": "hello"}], "stream": true}'
 
-    # 2. Extract message_id from the 'metadata' SSE event in the response
+    # 2. Extract message_id from the 'metadata' SSE event:
+    #    event: metadata
+    #    data: {"message_id": "728882f8-...", "trace_id": "e53c701c...", ...}
 
-    # 3. Submit feedback referencing that message
+    # 3. Submit feedback referencing that message (trace_id auto-resolved from DB)
     curl -X POST http://localhost:8000/api/v1/messages/feedback \\
         -H "Content-Type: application/json" \\
+        -H "X-Tenant-Id: default" \\
         -d '{
-            "session_id": "<session-uuid>",
+            "session_id": "'$SESSION_ID'",
             "message_id": "<message-id-from-metadata>",
             "rating": 1,
+            "categories": ["helpful"],
             "comment": "Great response!"
         }'
 
-    # 4. Check response status:
-    #    - 201 = annotation synced to Phoenix (check Phoenix UI)
-    #    - 200 = feedback saved but not synced (check phoenix_synced field)
+    # 4. Check response:
+    #    - 201 + phoenix_synced=true = annotation synced to Phoenix (check Phoenix UI at :6006)
+    #    - 200 + phoenix_synced=false = feedback saved but not synced (missing trace info)
 """
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response

@@ -356,6 +356,16 @@ class MetadataEvent(BaseModel):
         description="Token count for this response"
     )
 
+    # Trace context for observability (deterministic, captured from OTEL)
+    trace_id: str | None = Field(
+        default=None,
+        description="OTEL trace ID for correlating with Phoenix/observability systems"
+    )
+    span_id: str | None = Field(
+        default=None,
+        description="OTEL span ID for correlating with Phoenix/observability systems"
+    )
+
     # System flags
     flags: list[str] | None = Field(
         default=None,

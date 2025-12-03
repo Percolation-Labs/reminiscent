@@ -154,8 +154,10 @@ class MCPServerConfig(BaseModel):
     )
 
     id: str = Field(
+        default="mcp-server",
         description=(
             "Server identifier for logging and debugging. "
+            "Defaults to 'mcp-server' if not specified. "
             "Example: 'rem-local'"
         )
     )
@@ -228,7 +230,8 @@ class AgentSchemaMetadata(BaseModel):
         description=(
             "MCP server configurations for dynamic tool loading. "
             "Servers are loaded in-process at agent creation time. "
-            "All tools from configured servers become available to the agent."
+            "All tools from configured servers become available to the agent. "
+            "If not specified, defaults to rem.mcp_server (REM's built-in tools)."
         ),
     )
 
