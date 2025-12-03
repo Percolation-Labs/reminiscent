@@ -271,10 +271,20 @@ def load_agent_schema(
     # 2. Normalize name for package resource search (lowercase)
     base_name = cache_key
 
-    # 3. Try custom schema paths (from registry + SCHEMA__PATHS env var)
+    # 3. Try custom schema paths (from registry + SCHEMA__PATHS env var + auto-detected)
     from ..registry import get_schema_paths
 
     custom_paths = get_schema_paths()
+
+    # Auto-detect local folders if they exist (convention over configuration)
+    auto_detect_folders = ["./agents", "./schemas", "./evaluators"]
+    for auto_folder in auto_detect_folders:
+        auto_path = Path(auto_folder)
+        if auto_path.exists() and auto_path.is_dir():
+            resolved = str(auto_path.resolve())
+            if resolved not in custom_paths:
+                custom_paths.insert(0, resolved)
+                logger.debug(f"Auto-detected schema directory: {auto_folder}")
     for custom_dir in custom_paths:
         # Try various patterns within each custom directory
         for pattern in [
@@ -400,9 +410,20 @@ async def load_agent_schema_async(
 
     base_name = cache_key
 
-    # Try custom schema paths
+    # Try custom schema paths (from registry + SCHEMA__PATHS env var + auto-detected)
     from ..registry import get_schema_paths
     custom_paths = get_schema_paths()
+
+    # Auto-detect local folders if they exist (convention over configuration)
+    auto_detect_folders = ["./agents", "./schemas", "./evaluators"]
+    for auto_folder in auto_detect_folders:
+        auto_path = Path(auto_folder)
+        if auto_path.exists() and auto_path.is_dir():
+            resolved = str(auto_path.resolve())
+            if resolved not in custom_paths:
+                custom_paths.insert(0, resolved)
+                logger.debug(f"Auto-detected schema directory: {auto_folder}")
+
     for custom_dir in custom_paths:
         for pattern in [f"{base_name}.yaml", f"{base_name}.yml", f"agents/{base_name}.yaml"]:
             custom_path = Path(custom_dir) / pattern

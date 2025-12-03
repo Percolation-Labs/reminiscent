@@ -1057,10 +1057,26 @@ class ModelsSettings(BaseSettings):
 
     @property
     def module_list(self) -> list[str]:
-        """Get modules as a list, filtering empty strings."""
-        if not self.import_modules:
-            return []
-        return [m.strip() for m in self.import_modules.split(";") if m.strip()]
+        """
+        Get modules as a list, filtering empty strings.
+
+        Auto-detects ./models folder if it exists and is importable.
+        """
+        modules = []
+        if self.import_modules:
+            modules = [m.strip() for m in self.import_modules.split(";") if m.strip()]
+
+        # Auto-detect ./models if it exists and is a Python package (convention over configuration)
+        from pathlib import Path
+
+        models_path = Path("./models")
+        if models_path.exists() and models_path.is_dir():
+            # Check if it's a Python package (has __init__.py)
+            if (models_path / "__init__.py").exists():
+                if "models" not in modules:
+                    modules.insert(0, "models")
+
+        return modules
 
 
 class SchemaSettings(BaseSettings):
