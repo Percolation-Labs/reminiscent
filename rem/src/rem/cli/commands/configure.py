@@ -422,7 +422,6 @@ def configure_command(install: bool, claude_desktop: bool, show: bool, edit: boo
 
         try:
             import shutil
-            from pathlib import Path
             from fastmcp.mcp_config import update_config_file, StdioMCPServer
 
             # Find Claude Desktop config path
