@@ -513,18 +513,15 @@ def get_target_metadata() -> MetaData:
     """
     Get SQLAlchemy metadata for Alembic autogenerate.
 
-    This is the main entry point used by alembic/env.py.
+    This is the main entry point used by alembic/env.py and rem db diff.
+
+    Uses the model registry as the source of truth, which includes:
+    - Core REM models (Resource, Message, User, etc.)
+    - User-registered models via @rem.register_model decorator
 
     Returns:
-        SQLAlchemy MetaData object representing current Pydantic models
+        SQLAlchemy MetaData object representing all registered Pydantic models
     """
-    import rem
-
-    package_root = Path(rem.__file__).parent.parent.parent
-    models_dir = package_root / "src" / "rem" / "models" / "entities"
-
-    if not models_dir.exists():
-        logger.error(f"Models directory not found: {models_dir}")
-        return MetaData()
-
-    return build_sqlalchemy_metadata_from_pydantic(models_dir)
+    # build_sqlalchemy_metadata_from_pydantic uses the registry internally,
+    # so no directory path is needed (the parameter is kept for backwards compat)
+    return build_sqlalchemy_metadata_from_pydantic()
