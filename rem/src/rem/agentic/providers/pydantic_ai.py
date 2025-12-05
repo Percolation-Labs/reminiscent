@@ -564,9 +564,37 @@ async def create_agent(
         mcp_server_configs = []
         resource_configs = []
 
-    # Default to rem.mcp_server if no MCP servers configured
+    # Auto-detect local MCP server if not explicitly configured
+    # This makes mcp_servers config optional - agents get tools automatically
     if not mcp_server_configs:
-        mcp_server_configs = [{"type": "local", "module": "rem.mcp_server", "id": "rem"}]
+        import importlib
+        import os
+        import sys
+
+        # Ensure current working directory is in sys.path for local imports
+        cwd = os.getcwd()
+        if cwd not in sys.path:
+            sys.path.insert(0, cwd)
+
+        # Try common local MCP server module paths first
+        auto_detect_modules = [
+            "tools.mcp_server",  # Convention: tools/mcp_server.py
+            "mcp_server",        # Alternative: mcp_server.py in root
+        ]
+        for module_path in auto_detect_modules:
+            try:
+                mcp_module = importlib.import_module(module_path)
+                if hasattr(mcp_module, "mcp"):
+                    logger.info(f"Auto-detected local MCP server: {module_path}")
+                    mcp_server_configs = [{"type": "local", "module": module_path, "id": "auto-detected"}]
+                    break
+            except ImportError:
+                continue
+
+        # Fall back to REM's default MCP server if no local server found
+        if not mcp_server_configs:
+            logger.debug("No local MCP server found, using REM default")
+            mcp_server_configs = [{"type": "local", "module": "rem.mcp_server", "id": "rem"}]
 
     # Extract temperature and max_iterations from schema metadata (with fallback to settings defaults)
     if metadata:
@@ -612,50 +640,97 @@ async def create_agent(
             search_rem_suffix += f"Example: `SEARCH \"your query\" FROM {default_table} LIMIT 10`"
 
     # Add tools from MCP server (in-process, no subprocess)
-    if mcp_server_configs:
-        for server_config in mcp_server_configs:
-            server_type = server_config.get("type")
-            server_id = server_config.get("id", "mcp-server")
+    # Track loaded MCP servers for resource resolution
+    loaded_mcp_server = None
 
-            if server_type == "local":
-                # Import MCP server directly (in-process)
-                module_path = server_config.get("module", "rem.mcp_server")
+    for server_config in mcp_server_configs:
+        server_type = server_config.get("type")
+        server_id = server_config.get("id", "mcp-server")
 
-                try:
-                    # Dynamic import of MCP server module
-                    import importlib
-                    mcp_module = importlib.import_module(module_path)
-                    mcp_server = mcp_module.mcp
+        if server_type == "local":
+            # Import MCP server directly (in-process)
+            module_path = server_config.get("module", "rem.mcp_server")
 
-                    # Extract tools from MCP server (get_tools is async)
-                    from ..mcp.tool_wrapper import create_mcp_tool_wrapper
+            try:
+                # Dynamic import of MCP server module
+                import importlib
+                mcp_module = importlib.import_module(module_path)
+                mcp_server = mcp_module.mcp
 
-                    # Await async get_tools() call
-                    mcp_tools_dict = await mcp_server.get_tools()
+                # Store the loaded server for resource resolution
+                loaded_mcp_server = mcp_server
 
-                    for tool_name, tool_func in mcp_tools_dict.items():
-                        # Add description suffix to search_rem tool if schema specifies a default table
-                        tool_suffix = search_rem_suffix if tool_name == "search_rem" else None
+                # Extract tools from MCP server (get_tools is async)
+                from ..mcp.tool_wrapper import create_mcp_tool_wrapper
 
-                        wrapped_tool = create_mcp_tool_wrapper(
-                            tool_name,
-                            tool_func,
-                            user_id=context.user_id if context else None,
-                            description_suffix=tool_suffix,
-                        )
-                        tools.append(wrapped_tool)
-                        logger.debug(f"Loaded MCP tool: {tool_name}" + (" (with schema suffix)" if tool_suffix else ""))
+                # Await async get_tools() call
+                mcp_tools_dict = await mcp_server.get_tools()
 
-                    logger.info(f"Loaded {len(mcp_tools_dict)} tools from MCP server: {server_id} (in-process)")
+                for tool_name, tool_func in mcp_tools_dict.items():
+                    # Add description suffix to search_rem tool if schema specifies a default table
+                    tool_suffix = search_rem_suffix if tool_name == "search_rem" else None
 
-                except Exception as e:
-                    logger.error(f"Failed to load MCP server {server_id}: {e}", exc_info=True)
-            else:
-                logger.warning(f"Unsupported MCP server type: {server_type}")
+                    wrapped_tool = create_mcp_tool_wrapper(
+                        tool_name,
+                        tool_func,
+                        user_id=context.user_id if context else None,
+                        description_suffix=tool_suffix,
+                    )
+                    tools.append(wrapped_tool)
+                    logger.debug(f"Loaded MCP tool: {tool_name}" + (" (with schema suffix)" if tool_suffix else ""))
 
+                logger.info(f"Loaded {len(mcp_tools_dict)} tools from MCP server: {server_id} (in-process)")
+
+            except Exception as e:
+                logger.error(f"Failed to load MCP server {server_id}: {e}", exc_info=True)
+        else:
+            logger.warning(f"Unsupported MCP server type: {server_type}")
+
+    # Convert resources to tools (MCP convenience syntax)
+    # Resources declared in agent YAML become callable tools - eliminates
+    # the artificial MCP distinction between tools and resources
+    #
+    # Supports both concrete and template URIs:
+    # - Concrete: "rem://schemas" -> no-param tool
+    # - Template: "patient-profile://field/{field_key}" -> tool with field_key param
+    from ..mcp.tool_wrapper import create_resource_tool
+
+    # Collect all resource URIs from both resources section AND tools section
+    resource_uris = []
+
+    # From resources section (legacy format)
     if resource_configs:
-        # TODO: Convert resources to tools (MCP convenience syntax)
-        pass
+        for resource_config in resource_configs:
+            if hasattr(resource_config, 'uri'):
+                uri = resource_config.uri
+                usage = resource_config.description or ""
+            else:
+                uri = resource_config.get("uri", "")
+                usage = resource_config.get("description", "")
+            if uri:
+                resource_uris.append((uri, usage))
+
+    # From tools section - detect URIs (anything with ://)
+    # This allows unified syntax: resources as tools
+    tool_configs = metadata.tools if metadata and hasattr(metadata, 'tools') else []
+    for tool_config in tool_configs:
+        if hasattr(tool_config, 'name'):
+            tool_name = tool_config.name
+            tool_desc = tool_config.description or ""
+        else:
+            tool_name = tool_config.get("name", "")
+            tool_desc = tool_config.get("description", "")
+
+        # Auto-detect resource URIs (anything with :// scheme)
+        if "://" in tool_name:
+            resource_uris.append((tool_name, tool_desc))
+
+    # Create tools from collected resource URIs
+    # Pass the loaded MCP server so resources can be resolved from it
+    for uri, usage in resource_uris:
+        resource_tool = create_resource_tool(uri, usage, mcp_server=loaded_mcp_server)
+        tools.append(resource_tool)
+        logger.debug(f"Loaded resource as tool: {uri}")
 
     # Create dynamic result_type from schema if not provided
     # Note: use_structured_output is set earlier from metadata.structured_output

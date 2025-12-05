@@ -74,7 +74,7 @@ class OntologyConfig(CoreModel):
             priority=200,  # Higher priority = runs first
             enabled=True,
             provider_name="openai",  # Override default provider
-            model_name="gpt-4o",
+            model_name="gpt-4.1",
             tenant_id="acme-corp",
             tags=["legal", "procurement"]
         )

@@ -1,0 +1,1192 @@
+# REM (Resources Entities Moments) - Complete Configuration Guide
+
+This document provides comprehensive instructions for configuring and using REM,
+a bio-inspired memory infrastructure for AI agents. Point your AI assistant here
+for detailed context on the REM framework.
+
+---
+
+## Table of Contents
+
+1. [Architecture Overview](#architecture-overview)
+2. [CLI Reference](#cli-reference)
+3. [Environment Variables Reference](#environment-variables-reference)
+4. [REM Query Dialect](#rem-query-dialect)
+5. [Agent Schema Configuration](#agent-schema-configuration)
+6. [API Usage](#api-usage)
+7. [Database & Migrations](#database--migrations)
+8. [AWS & Kubernetes Recipes](#aws--kubernetes-recipes)
+9. [Observability](#observability)
+10. [Design Principles](#design-principles)
+
+---
+
+## Architecture Overview
+
+REM mirrors human memory systems through three complementary layers:
+
+### Resources
+Chunked, embedded content from documents, files, and conversations. Stored with
+semantic embeddings for vector search, entity references, and knowledge graph edges.
+
+### Entities
+Domain knowledge nodes with natural language labels (not UUIDs). Examples:
+"sarah-chen", "tidb-migration-spec". Enables conversational queries without
+requiring internal ID knowledge.
+
+### Moments
+Temporal narratives (meetings, coding sessions, conversations) with time boundaries,
+present persons, speakers, emotion tags, and topic tags. Enable chronological
+memory retrieval.
+
+### Core Design Principle
+Multi-index organization (vectors + graph + time + key-value) supporting iterated
+retrieval where LLMs conduct multi-turn database conversations.
+
+### Memory Evolution Stages
+
+| Stage | Answerability | Description |
+|-------|---------------|-------------|
+| 0     | 0%            | Raw resources only, all queries fail |
+| 1     | 20%           | Entity extraction complete, LOOKUP/FUZZY work |
+| 2     | 50%           | Moments extracted, temporal queries work |
+| 3     | 80%           | Affinity graph built, SEARCH/TRAVERSE available |
+| 4     | 100%          | Mature graph, all query types fully functional |
+
+---
+
+## CLI Reference
+
+### Top-Level Commands
+
+```bash
+rem --help                 # Show all commands
+rem --version              # Show version
+rem -v <command>           # Verbose mode
+```
+
+### `rem serve` - Start API Server
+
+```bash
+rem serve                        # Start with defaults from config
+rem serve --host 0.0.0.0         # Bind to all interfaces
+rem serve --port 8000            # Custom port
+rem serve --reload               # Development mode with auto-reload
+rem serve --workers 4            # Production mode (4 workers)
+rem serve --log-level debug      # Set log level
+```
+
+### `rem ask` - Query Agents
+
+```bash
+# Simple query (uses default 'rem' agent)
+rem ask "What documents did I upload?"
+
+# Explicit agent
+rem ask contract-analyzer "Analyze this contract"
+
+# With options
+rem ask my-agent "Hello" \
+  --model anthropic:claude-sonnet-4-5-20250929 \
+  --temperature 0.7 \
+  --stream
+
+# Process file input
+rem ask contract-analyzer -i contract.pdf -o output.yaml
+
+# Continue session
+rem ask my-agent "Follow up question" --session-id <uuid>
+
+# Show only generated query (for query-agent)
+rem ask query-agent "Find Sarah's documents" --plan
+```
+
+**Options:**
+- `-m, --model TEXT` - LLM model (default: from settings)
+- `-t, --temperature FLOAT` - Temperature (default: 0.5)
+- `--max-turns INTEGER` - Max agent turns (default: 10)
+- `--stream / --no-stream` - Enable streaming
+- `--user-id TEXT` - User ID for context
+- `--session-id TEXT` - Session ID for continuity
+- `-i, --input-file PATH` - Read from file (PDF, TXT, Markdown)
+- `-o, --output-file PATH` - Write output to YAML file
+- `--plan` - Output only the generated plan/query
+
+### `rem db` - Database Operations
+
+```bash
+# Migrations
+rem db migrate               # Apply all migrations (001_install + 002_install_models)
+rem db status                # Show migration status
+
+# Schema management
+rem db schema generate       # Regenerate 002_install_models.sql from Pydantic models
+rem db diff                  # Compare models vs database (detect drift)
+rem db diff --check          # CI mode: exit 1 if drift detected
+
+# Direct SQL
+rem db apply <file.sql>              # Apply SQL file
+rem db apply --dry-run <file.sql>    # Preview without executing
+rem db apply --no-log <file.sql>     # Apply without audit logging
+
+# Data loading
+rem db load <file.yaml>      # Load data from YAML file
+
+# Cache maintenance
+rem db rebuild-cache         # Rebuild KV_STORE cache from entity tables
+```
+
+### `rem cluster` - Kubernetes Deployment
+
+```bash
+# Initialize
+rem cluster init             # Create cluster config file
+
+# Generate manifests
+rem cluster generate         # Generate ArgoCD apps, ConfigMaps, SQL init
+
+# AWS SSM
+rem cluster setup-ssm        # Create required SSM parameters in AWS
+
+# Validation
+rem cluster validate         # Validate deployment prerequisites
+
+# Environment management
+rem cluster env check              # Validate .env for staging
+rem cluster env check --env prod   # Validate for production
+rem cluster env generate           # Generate ConfigMap from .env
+rem cluster env diff               # Compare .env with cluster ConfigMap
+
+# Deploy
+rem cluster apply            # Deploy ArgoCD applications
+```
+
+### `rem configure` - Interactive Setup
+
+```bash
+rem configure                # Interactive configuration wizard
+rem configure --install      # Configure + install database tables
+rem configure --show         # View current configuration
+rem configure --edit         # Edit configuration file
+```
+
+### `rem mcp` - MCP Server
+
+```bash
+# Stdio mode (for Claude Desktop)
+rem mcp
+
+# HTTP mode (for testing)
+rem mcp --http --port 8001
+```
+
+### `rem dreaming` - Memory Indexing
+
+```bash
+rem dreaming full            # Run complete dreaming workflow
+rem dreaming moments         # Extract temporal narratives from resources
+rem dreaming affinity        # Build semantic relationships
+rem dreaming user-model      # Update user model from recent activity
+rem dreaming custom          # Run custom extractor
+```
+
+### `rem experiments` - Evaluation
+
+```bash
+rem experiments list         # List all experiments
+rem experiments show <name>  # Show experiment details
+rem experiments create       # Create new experiment config
+rem experiments run <name>   # Run experiment with Phoenix or local vibes
+
+# Dataset management
+rem experiments dataset list
+rem experiments dataset create
+
+# Prompt management
+rem experiments prompt list
+rem experiments prompt show
+
+# Trace retrieval
+rem experiments trace list
+rem experiments trace show
+
+# Export to S3
+rem experiments export <name>
+```
+
+### `rem process` - File Processing
+
+```bash
+# Ingest file (storage + parsing + embedding)
+rem process ingest <file>
+
+# Process files with custom extractor
+rem process files <dir> --extractor my_extractor
+
+# Process URI (read-only, no storage)
+rem process uri <uri>
+```
+
+### `rem session` - Session Management
+
+```bash
+rem session show             # Show user profile and session messages
+rem session show --user-id <id>
+rem session show --session-id <uuid>
+```
+
+### `rem dev` - Development Utilities
+
+```bash
+rem dev                      # Development tools and utilities
+```
+
+### `rem scaffold` - Project Generation
+
+```bash
+rem scaffold                 # Generate new REM-based project structure
+```
+
+---
+
+## Environment Variables Reference
+
+### API Server Settings
+
+```bash
+API__HOST=0.0.0.0              # Host to bind (0.0.0.0 for Docker, 127.0.0.1 for local)
+API__PORT=8000                 # Port to listen on
+API__RELOAD=true               # Enable auto-reload for development
+API__WORKERS=1                 # Number of worker processes (use >1 in production)
+API__LOG_LEVEL=info            # Logging level (debug, info, warning, error)
+```
+
+### LLM Provider Settings
+
+```bash
+# Default model (format: provider:model-id)
+LLM__DEFAULT_MODEL=anthropic:claude-sonnet-4-20250514
+LLM__DEFAULT_TEMPERATURE=0.5   # 0.0-0.3: analytical, 0.7-1.0: creative
+LLM__MAX_RETRIES=10            # Max agent request retries
+LLM__DEFAULT_MAX_ITERATIONS=20 # Max iterations per agent.run()
+
+# Specialized models
+LLM__EVALUATOR_MODEL=gpt-4.1   # Model for LLM-as-judge evaluation
+LLM__QUERY_AGENT_MODEL=cerebras:qwen-3-32b  # Fast model for NL->REM query
+
+# API Keys (set BOTH prefixed AND unprefixed for pydantic-ai compatibility)
+LLM__OPENAI_API_KEY=sk-proj-...
+OPENAI_API_KEY=sk-proj-...     # Same value - required by pydantic-ai
+LLM__ANTHROPIC_API_KEY=sk-ant-...
+ANTHROPIC_API_KEY=sk-ant-...   # Same value - required by pydantic-ai
+
+# Embeddings
+LLM__EMBEDDING_PROVIDER=openai
+LLM__EMBEDDING_MODEL=text-embedding-3-small
+```
+
+### PostgreSQL Database Settings
+
+```bash
+POSTGRES__ENABLED=true
+POSTGRES__CONNECTION_STRING=postgresql://rem:rem@localhost:5432/rem
+POSTGRES__POOL_MIN_SIZE=5
+POSTGRES__POOL_MAX_SIZE=20
+POSTGRES__POOL_TIMEOUT=30      # Connection timeout in seconds
+POSTGRES__STATEMENT_TIMEOUT=30000  # Statement timeout in milliseconds
+```
+
+### Authentication Settings
+
+```bash
+AUTH__ENABLED=true             # Enable OAuth endpoints and middleware
+AUTH__ALLOW_ANONYMOUS=true     # Allow rate-limited anonymous access
+AUTH__MCP_REQUIRES_AUTH=true   # Require auth for MCP endpoints
+AUTH__SESSION_SECRET=          # Secret for session cookie signing (generate with secrets.token_hex(32))
+
+# Google OAuth
+AUTH__GOOGLE__CLIENT_ID=
+AUTH__GOOGLE__CLIENT_SECRET=
+AUTH__GOOGLE__REDIRECT_URI=http://localhost:8000/api/auth/google/callback
+AUTH__GOOGLE__HOSTED_DOMAIN=   # Restrict to Google Workspace domain
+
+# Microsoft Entra ID OAuth
+AUTH__MICROSOFT__CLIENT_ID=
+AUTH__MICROSOFT__CLIENT_SECRET=
+AUTH__MICROSOFT__REDIRECT_URI=http://localhost:8000/api/auth/microsoft/callback
+AUTH__MICROSOFT__TENANT=common # Tenant ID or common/organizations/consumers
+```
+
+### OpenTelemetry (OTEL) Settings
+
+```bash
+OTEL__ENABLED=false            # Enable OTEL instrumentation
+OTEL__SERVICE_NAME=rem-api     # Service name for traces
+OTEL__COLLECTOR_ENDPOINT=http://localhost:4318  # OTLP endpoint
+OTEL__PROTOCOL=http            # OTLP protocol (http or grpc)
+OTEL__EXPORT_TIMEOUT=10000     # Export timeout in milliseconds
+OTEL__INSECURE=true            # Use insecure gRPC connection
+```
+
+### Arize Phoenix Settings
+
+```bash
+PHOENIX__ENABLED=true          # Enable Phoenix integration
+PHOENIX__BASE_URL=http://localhost:6006
+PHOENIX__API_KEY=              # Phoenix API key for cloud instances
+PHOENIX__COLLECTOR_ENDPOINT=http://localhost:6006/v1/traces
+PHOENIX__PROJECT_NAME=rem      # Project name for trace organization
+```
+
+### S3 Storage Settings
+
+```bash
+STORAGE__PROVIDER=local        # Storage provider: 'local' or 's3'
+STORAGE__BASE_PATH=~/.rem/fs   # Base path for local filesystem storage
+
+S3__BUCKET_NAME=rem-io-development
+S3__VERSION=v1                 # API version for paths
+S3__UPLOADS_PREFIX=uploads
+S3__PARSED_PREFIX=parsed
+S3__REGION=us-east-1
+S3__ENDPOINT_URL=              # Custom endpoint for MinIO, LocalStack
+S3__ACCESS_KEY_ID=             # Not needed with IRSA in EKS
+S3__SECRET_ACCESS_KEY=         # Not needed with IRSA in EKS
+S3__USE_SSL=true
+```
+
+### Data Lake Settings
+
+```bash
+DATA_LAKE__BUCKET_NAME=        # S3 bucket for data lake (user-provided)
+DATA_LAKE__VERSION=v0          # API version for paths
+DATA_LAKE__DATASETS_PREFIX=datasets
+DATA_LAKE__EXPERIMENTS_PREFIX=experiments
+```
+
+### Migration Settings
+
+```bash
+MIGRATION__AUTO_UPGRADE=true   # Auto-run migrations on startup
+MIGRATION__MODE=permissive     # Migration safety mode: permissive, additive, strict
+MIGRATION__ALLOW_DROP_COLUMNS=false
+MIGRATION__ALLOW_DROP_TABLES=false
+MIGRATION__ALLOW_ALTER_COLUMNS=true
+MIGRATION__ALLOW_RENAME_COLUMNS=true
+MIGRATION__ALLOW_RENAME_TABLES=true
+MIGRATION__UNSAFE_ALTER_WARNING=true
+```
+
+### Chat Settings
+
+```bash
+CHAT__AUTO_INJECT_USER_CONTEXT=false  # Auto-inject user profile (default: use REM LOOKUP)
+```
+
+### Content Processing Settings
+
+```bash
+CONTENT__IMAGE_VLLM_SAMPLE_RATE=0.0  # Vision LLM sampling rate (0.0-1.0)
+CONTENT__IMAGE_VLLM_PROVIDER=anthropic
+CONTENT__CLIP_PROVIDER=jina
+CONTENT__CLIP_MODEL=jina-clip-v2
+CONTENT__JINA_API_KEY=         # Jina AI API key for CLIP embeddings
+```
+
+### Chunking Settings
+
+```bash
+CHUNKING__CHUNK_SIZE=1500      # Target chunk size in characters
+CHUNKING__OVERLAP=200          # Overlap between chunks
+CHUNKING__MIN_CHUNK_SIZE=100   # Minimum chunk size
+CHUNKING__MAX_CHUNK_SIZE=2500  # Maximum chunk size
+```
+
+### Schema Search Settings
+
+```bash
+SCHEMA__PATHS=                 # Semicolon-separated directories to search for schemas
+MODELS__IMPORT_MODULES=        # Semicolon-separated Python modules to import
+```
+
+### Git Provider Settings (for schema/experiment syncing)
+
+```bash
+GIT__ENABLED=false
+GIT__DEFAULT_REPO_URL=         # ssh:// or https:// Git URL
+GIT__DEFAULT_BRANCH=main
+GIT__SSH_KEY_PATH=/etc/git-secret/ssh
+GIT__KNOWN_HOSTS_PATH=/etc/git-secret/known_hosts
+GIT__PERSONAL_ACCESS_TOKEN=    # PAT for HTTPS auth
+GIT__CACHE_DIR=/tmp/rem-git-cache
+GIT__SHALLOW_CLONE=true
+GIT__VERIFY_SSL=true
+```
+
+### SQS Settings
+
+```bash
+SQS__QUEUE_URL=                # SQS queue URL for file processing
+SQS__REGION=us-east-1
+SQS__MAX_MESSAGES=10           # Max messages per batch (1-10)
+SQS__WAIT_TIME_SECONDS=20      # Long polling wait time
+SQS__VISIBILITY_TIMEOUT=300    # Visibility timeout in seconds
+```
+
+### DB Listener Settings (PostgreSQL LISTEN/NOTIFY)
+
+```bash
+DB_LISTENER__ENABLED=false
+DB_LISTENER__CHANNELS=         # Comma-separated PostgreSQL channels
+DB_LISTENER__HANDLER_TYPE=rest # Handler type: sqs, rest, custom
+DB_LISTENER__SQS_QUEUE_URL=
+DB_LISTENER__REST_ENDPOINT=http://localhost:8000/api/v1/internal/events
+DB_LISTENER__RECONNECT_DELAY=1.0
+DB_LISTENER__MAX_RECONNECT_DELAY=60.0
+```
+
+### Global Settings
+
+```bash
+TEAM=rem                       # Team/project name for observability
+ENVIRONMENT=development        # Environment: development, staging, production
+DOMAIN=                        # Public domain for OAuth discovery
+ROOT_PATH=                     # Root path for reverse proxy
+REM_SKIP_CONFIG=true           # Skip loading ~/.rem/config.yaml
+```
+
+---
+
+## REM Query Dialect
+
+REM queries follow a structured dialect for memory retrieval. The query agent
+converts natural language to these structured queries.
+
+### Grammar
+
+```
+Query ::= LookupQuery | FuzzyQuery | SearchQuery | SqlQuery | TraverseQuery
+```
+
+### LOOKUP Query
+
+O(1) entity retrieval by natural language key.
+
+```
+LOOKUP <key:string|list[string]>
+```
+
+**Examples:**
+```
+LOOKUP "Sarah"
+LOOKUP ["Sarah", "Mike", "Emily"]
+LOOKUP "Project Alpha"
+```
+
+**Python API:**
+```python
+RemQuery(
+    query_type=QueryType.LOOKUP,
+    parameters=LookupParameters(key="Sarah")
+)
+```
+
+### FUZZY Query
+
+Trigram-based fuzzy text search (pg_trgm).
+
+```
+FUZZY <text:string> [THRESHOLD <t:float>] [LIMIT <n:int>]
+```
+
+**Example:**
+```
+FUZZY "sara" THRESHOLD 0.5 LIMIT 10
+```
+
+**Python API:**
+```python
+RemQuery(
+    query_type=QueryType.FUZZY,
+    parameters=FuzzyParameters(query_text="sara", threshold=0.5, limit=5)
+)
+```
+
+### SEARCH Query
+
+Vector similarity search using embeddings (pgvector).
+
+```
+SEARCH <text:string> [TABLE <table:string>] [WHERE <clause:string>] [LIMIT <n:int>]
+```
+
+**Examples:**
+```
+SEARCH "database migration" TABLE resources LIMIT 10
+SEARCH "team discussion" TABLE moments WHERE "moment_type='meeting'" LIMIT 5
+SEARCH "project updates" WHERE "created_at >= '2024-01-01'" LIMIT 20
+SEARCH "AI research" WHERE "tags @> ARRAY['machine-learning']" LIMIT 10
+```
+
+**Python API:**
+```python
+RemQuery(
+    query_type=QueryType.SEARCH,
+    parameters=SearchParameters(
+        query_text="database migration to TiDB",
+        table_name="resources",
+        limit=10
+    )
+)
+```
+
+### SQL Query
+
+Direct SQL execution with PostgreSQL dialect (tenant-isolated).
+
+```
+SQL <table:string> [WHERE <clause:string>] [ORDER BY <order:string>] [LIMIT <n:int>]
+```
+
+**Examples:**
+```
+SQL moments WHERE "moment_type='meeting'" ORDER BY starts_timestamp DESC LIMIT 10
+SQL resources WHERE "metadata->>'status' = 'published'" LIMIT 20
+SQL moments WHERE "tags && ARRAY['urgent', 'bug']" ORDER BY created_at DESC
+```
+
+**PostgreSQL Features Supported:**
+- JSONB operators: `->`, `->>`, `@>`, `?`, `?|`, `?&`
+- Array operators: `&&`, `@>`, `<@`
+- Pattern matching: `LIKE`, `ILIKE`, `~`, `~*`
+- All standard SQL features
+
+**Python API:**
+```python
+RemQuery(
+    query_type=QueryType.SQL,
+    parameters=SQLParameters(
+        table_name="moments",
+        where_clause="moment_type='meeting'",
+        order_by="starts_timestamp DESC",
+        limit=10
+    )
+)
+```
+
+### TRAVERSE Query
+
+Recursive graph traversal following edges between entities.
+
+```
+TRAVERSE [<edge_types:list>] WITH <initial_query:Query> [DEPTH <d:int>] [ORDER BY <order:string>] [LIMIT <n:int>]
+```
+
+**Examples:**
+```
+TRAVERSE manages WITH LOOKUP "Sally" DEPTH 1
+TRAVERSE WITH LOOKUP "Sally" DEPTH 0  (PLAN mode: edge analysis only)
+TRAVERSE manages,reports-to WITH LOOKUP "Sarah" DEPTH 2 LIMIT 5
+```
+
+**Python API:**
+```python
+RemQuery(
+    query_type=QueryType.TRAVERSE,
+    parameters=TraverseParameters(
+        initial_query="Project X",
+        max_depth=2,
+        edge_types=["depends_on", "related_to"]
+    )
+)
+```
+
+### Query Availability by Evolution Stage
+
+| Query Type | Stage 0 | Stage 1 | Stage 2 | Stage 3 | Stage 4 |
+|------------|---------|---------|---------|---------|---------|
+| LOOKUP     | No      | Yes     | Yes     | Yes     | Yes     |
+| FUZZY      | No      | Yes     | Yes     | Yes     | Yes     |
+| SEARCH     | No      | No      | No      | Yes     | Yes     |
+| SQL        | No      | Yes     | Yes     | Yes     | Yes     |
+| TRAVERSE   | No      | No      | No      | Yes     | Yes     |
+
+### System Fields (CoreModel)
+
+All REM entities have these system fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| id | UUID/string | Unique identifier |
+| created_at | timestamp | Entity creation time |
+| updated_at | timestamp | Last modification time |
+| deleted_at | timestamp | Soft deletion time (null if active) |
+| tenant_id | string | Optional, for multi-tenant SaaS |
+| user_id | string | Owner user identifier |
+| graph_edges | JSONB array | Knowledge graph edges |
+| metadata | JSONB object | Flexible metadata storage |
+| tags | array[string] | Entity tags |
+
+### Main Tables
+
+**Resources table:**
+- name, uri, content, timestamp, category, related_entities
+
+**Moments table:**
+- name, moment_type, category, starts_timestamp, ends_timestamp
+- present_persons, emotion_tags, topic_tags, summary
+
+**Files table:**
+- name, uri, mime_type, size_bytes, processing_status, category
+
+### Recommended Filtering Fields
+
+- **Temporal:** created_at, updated_at, timestamp, starts_timestamp, ends_timestamp
+- **Categorical:** category, moment_type, mime_type, processing_status
+- **Arrays:** tags, emotion_tags, topic_tags (use && or @> operators)
+- **Text:** name, content, summary (use ILIKE for pattern matching)
+
+---
+
+## Agent Schema Configuration
+
+Agent schemas are JSON Schema documents that define both behavior AND structured output.
+
+### Agent Schema Structure
+
+```yaml
+type: object
+description: |
+  SYSTEM PROMPT: This description becomes the agent's system prompt.
+  Explain the agent's purpose, capabilities, and behavioral guidelines here.
+
+properties:
+  answer:
+    type: string
+    description: The query answer with supporting evidence
+  confidence:
+    type: number
+    minimum: 0
+    maximum: 1
+    description: Confidence score for the answer
+  sources:
+    type: array
+    items:
+      type: string
+    description: Entity keys used as evidence
+
+required:
+  - answer
+  - confidence
+
+json_schema_extra:
+  kind: agent
+  name: my-agent
+  version: "1.0.0"
+  tools:
+    - name: lookup_entity
+      mcp_server: rem
+    - name: search_knowledge
+      mcp_server: rem
+  resources:
+    - uri_pattern: "rem://resources/.*"
+      mcp_server: rem
+```
+
+### Key Schema Sections
+
+**description** - System Prompt:
+The top-level description contains the system prompt defining:
+- Agent's role and purpose
+- Behavioral guidelines
+- Task-specific instructions
+- Output formatting requirements
+
+**properties** - Structured Output Fields:
+Each property has a JSON Schema type, description, and validation constraints.
+
+**json_schema_extra** - REM Extensions:
+- `fully_qualified_name`: Python module path
+- `name`: Human-readable agent name
+- `short_name`: URL-safe identifier
+- `version`: Semantic version
+- `tools`: MCP tools available to the agent
+- `resources`: MCP resources accessible to the agent
+- `tags`: Categorization tags
+
+### Agent Context Headers
+
+| Header | Field | Example |
+|--------|-------|---------|
+| X-User-Id | user_id | user123 |
+| X-Tenant-Id | tenant_id | acme-corp |
+| X-Session-Id | session_id | sess-456 |
+| X-Model-Name | default_model | anthropic:claude-sonnet-4-5-20250929 |
+| X-Agent-Schema | agent_schema_uri | rem-agents-query-agent |
+
+### Creating Custom Agents
+
+1. Create YAML file in `agents/` folder:
+
+```yaml
+# agents/my-agent.yaml
+type: object
+description: |
+  You are a helpful assistant that...
+
+properties:
+  answer:
+    type: string
+    description: Your response
+
+required:
+  - answer
+
+json_schema_extra:
+  kind: agent
+  name: my-agent
+  version: "1.0.0"
+```
+
+2. Run it:
+```bash
+rem ask my-agent "Hello!"
+```
+
+---
+
+## API Usage
+
+### Chat Completions Endpoint
+
+```
+POST /api/v1/chat/completions
+```
+
+**Request Headers:**
+
+| Header | Description | Default |
+|--------|-------------|---------|
+| X-User-Id | User identifier | None |
+| X-Tenant-Id | Tenant identifier | "default" |
+| X-Session-Id | Session/conversation ID (UUID) | None |
+| X-Agent-Schema | Agent schema name | "rem" |
+
+**Request Body:**
+
+```json
+{
+  "model": "anthropic:claude-sonnet-4-20250514",
+  "messages": [
+    {"role": "user", "content": "Your message here"}
+  ],
+  "stream": true
+}
+```
+
+### SSE Event Types
+
+| Event Type | Description | UI Display |
+|------------|-------------|------------|
+| (text content) | Standard text chunks (OpenAI-compatible) | Main response area |
+| reasoning | Model thinking/chain-of-thought | Collapsible section |
+| progress | Step indicators | Progress bar |
+| tool_call | Tool invocations | Tool status panel |
+| action_request | User input solicitation | Buttons, forms |
+| metadata | System metadata | Hidden or badge |
+| error | Error notification | Error toast |
+| done | Stream completion | Cleanup signal |
+
+### Session Management
+
+1. **First Message:** Client sends without X-Session-Id
+2. **Subsequent Messages:** Client sends with X-Session-Id
+3. **Compression:** Long responses (>400 chars) compressed with REM LOOKUP hints
+
+### Example Usage
+
+```bash
+# Simple chat
+curl -X POST http://localhost:8000/api/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-User-Id: sarah@example.com" \
+  -d '{"model": "anthropic:claude-sonnet-4-20250514", "messages": [{"role": "user", "content": "What is REM?"}]}'
+
+# Streaming chat
+curl -X POST http://localhost:8000/api/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-User-Id: sarah@example.com" \
+  -d '{"model": "anthropic:claude-sonnet-4-20250514", "messages": [{"role": "user", "content": "Explain REM"}], "stream": true}'
+
+# Multi-turn conversation
+curl -X POST http://localhost:8000/api/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-User-Id: sarah@example.com" \
+  -H "X-Session-Id: 550e8400-e29b-41d4-a716-446655440000" \
+  -d '{"model": "openai:gpt-4o", "messages": [{"role": "user", "content": "What are moments?"}]}'
+```
+
+---
+
+## Database & Migrations
+
+### Schema Management Workflow
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Source of Truth                          │
+│                                                             │
+│   Pydantic Models (CoreModel subclasses)                   │
+│   └── rem/models/entities/*.py                             │
+│                                                             │
+│   Model Registry                                            │
+│   └── Core models auto-registered                          │
+│   └── Custom models via @rem.register_model                │
+└─────────────────────────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│                 rem db schema generate                      │
+│                                                             │
+│   Generates SQL from registry → 002_install_models.sql     │
+└─────────────────────────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│                      rem db diff                            │
+│                                                             │
+│   Compares models ↔ database using Alembic autogenerate    │
+│   Shows: + additions, - removals, ~ modifications          │
+└─────────────────────────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    rem db apply                             │
+│                                                             │
+│   Executes SQL directly against database                    │
+│   Optionally logs to rem_migrations (audit only)           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Local Database (Docker Compose)
+
+```bash
+# Start local database
+docker compose up -d postgres
+
+# Run migrations
+rem db migrate
+
+# Check migration status
+rem db status
+
+# Connection string
+POSTGRES__CONNECTION_STRING=postgresql://rem:rem@localhost:5432/rem
+```
+
+### Adding Custom Models
+
+Register custom models in `models/__init__.py`:
+
+```python
+import rem
+from rem.models.core import CoreModel
+from pydantic import Field
+
+@rem.register_model
+class MyCustomEntity(CoreModel):
+    name: str = Field(description="Entity name")
+    custom_field: str
+
+# Or with options:
+@rem.register_model(table_name="custom_table")
+class AnotherEntity(CoreModel):
+    title: str
+```
+
+Generate and apply schema:
+```bash
+rem db schema generate
+rem db diff              # Check what changed
+rem db apply rem/sql/migrations/002_install_models.sql
+```
+
+### Typical Workflows
+
+**Initial Setup:**
+```bash
+rem db schema generate
+rem db apply rem/sql/migrations/001_install.sql
+rem db apply rem/sql/migrations/002_install_models.sql
+rem db diff  # Verify no drift
+```
+
+**Adding a New Entity:**
+```bash
+# 1. Create model in models/
+# 2. Register with @rem.register_model
+rem db schema generate
+rem db diff
+rem db apply rem/sql/migrations/002_install_models.sql
+```
+
+**CI/CD Pipeline:**
+```bash
+rem db diff --check  # Fail build if schema drift detected
+```
+
+---
+
+## AWS & Kubernetes Recipes
+
+### EKS Cluster Access
+
+```bash
+# Set AWS profile
+export AWS_PROFILE=<your-profile>
+
+# Update kubeconfig for EKS cluster
+aws eks update-kubeconfig --name <cluster-name> --region <region>
+
+# Verify access
+kubectl get nodes
+```
+
+### Port Forwarding to Services
+
+```bash
+# PostgreSQL (CloudNativePG)
+kubectl port-forward -n <namespace> svc/<postgres-service>-rw 5433:5432
+
+# Phoenix (Observability)
+kubectl port-forward -n <namespace> svc/phoenix 6006:6006
+
+# OTEL Collector
+kubectl port-forward -n observability svc/otel-collector-collector 4318:4318
+
+# REM API (if deployed)
+kubectl port-forward -n <namespace> svc/rem-api 8000:8000
+```
+
+### Database Credentials from Secrets
+
+```bash
+# Get secret keys
+kubectl get secret <db-credentials-secret> -n <namespace> -o jsonpath='{.data}' | jq -r 'keys[]'
+
+# Decode username
+kubectl get secret <db-credentials-secret> -n <namespace> \
+  -o jsonpath='{.data.username}' | base64 -d
+
+# Decode password
+kubectl get secret <db-credentials-secret> -n <namespace> \
+  -o jsonpath='{.data.password}' | base64 -d
+```
+
+### SSM Parameter Setup
+
+```bash
+# Setup required SSM parameters for cluster deployment
+rem cluster setup-ssm
+
+# This creates parameters like:
+# /rem/<env>/database/connection-string
+# /rem/<env>/llm/openai-api-key
+# /rem/<env>/llm/anthropic-api-key
+# /rem/<env>/auth/session-secret
+```
+
+### Cluster Deployment
+
+```bash
+# 1. Initialize cluster config
+rem cluster init
+
+# 2. Edit cluster.yaml with your settings
+
+# 3. Validate prerequisites
+rem cluster validate
+
+# 4. Generate manifests
+rem cluster generate
+
+# 5. Deploy ArgoCD applications
+rem cluster apply
+```
+
+### Environment Validation
+
+```bash
+# Validate .env for staging deployment
+rem cluster env check
+
+# Validate for production
+rem cluster env check --env prod
+
+# Generate ConfigMap from .env
+rem cluster env generate
+
+# Compare local .env with cluster ConfigMap
+rem cluster env diff
+```
+
+### S3/IRSA Setup
+
+REM uses IRSA (IAM Roles for Service Accounts) for S3 access in EKS:
+
+```bash
+# S3 bucket naming convention
+# rem-io-{environment}: rem-io-development, rem-io-staging, rem-io-production
+
+# Path convention for uploads
+# s3://{bucket}/{version}/uploads/{user_id}/{yyyy}/{mm}/{dd}/{filename}
+
+# Path convention for parsed content
+# s3://{bucket}/{version}/parsed/{user_id}/{yyyy}/{mm}/{dd}/{filename}/{resource}
+```
+
+### CloudNativePG Operations
+
+```bash
+# Check cluster status
+kubectl get cluster -n <namespace>
+
+# Check pods
+kubectl get pods -n <namespace> -l cnpg.io/cluster=<cluster-name>
+
+# Get connection info
+kubectl get secret <cluster-name>-app -n <namespace> -o yaml
+
+# Connect via port-forward
+kubectl port-forward -n <namespace> svc/<cluster-name>-rw 5433:5432
+psql postgresql://user:pass@localhost:5433/dbname
+```
+
+### ArgoCD Application Deployment
+
+```bash
+# List applications
+kubectl get applications -n argocd
+
+# Sync an application
+argocd app sync <app-name>
+
+# Check application status
+argocd app get <app-name>
+```
+
+---
+
+## Observability
+
+### OpenTelemetry Setup
+
+```bash
+# Enable OTEL
+OTEL__ENABLED=true
+OTEL_COLLECTOR_ENDPOINT=http://localhost:4318
+OTEL_SERVICE_NAME=rem-api
+
+# Port forward to OTEL collector
+kubectl port-forward -n observability svc/otel-collector-collector 4318:4318
+```
+
+### Arize Phoenix Setup
+
+```bash
+# Enable Phoenix
+PHOENIX__ENABLED=true
+PHOENIX__BASE_URL=http://localhost:6006
+PHOENIX__PROJECT_NAME=rem
+
+# Access Phoenix UI
+kubectl port-forward -n <namespace> svc/phoenix 6006:6006
+# Open http://localhost:6006
+```
+
+---
+
+## Design Principles
+
+### 1. JSON Schema as Source of Truth
+All agent definitions start as JSON Schema documents, enabling framework-agnostic
+deployment and standard tooling support.
+
+### 2. MCP Only for Tools
+REM agents exclusively use Model Context Protocol (MCP) for tool and resource
+integration, providing standardization and interoperability.
+
+### 3. Hybrid Adjacency List
+REM uses a hybrid pattern combining:
+- Primary storage in PostgreSQL tables (schema validation, constraints)
+- Graph overlay via JSONB `graph_edges` column
+- High-speed KV cache for O(1) key lookups
+
+### 4. Iterated Retrieval
+REM supports multi-turn LLM-database conversations where each query informs
+the next, enabling emergent information discovery.
+
+### 5. Memory Evolution
+Memory quality improves over time through background "dreaming" workflows that
+extract entities, build moments, and create semantic graph edges.
+
+### 6. Observable by Default
+OTEL instrumentation is built into agent factories for production-ready
+distributed tracing.
+
+### 7. Test with User-Known Information
+Query tests use natural language identifiers ("Sarah", "Project Alpha") rather
+than internal representations, mimicking real user interactions.
+
+### 8. Code-as-Source-of-Truth for Schema
+Pydantic models define the database schema. Only two migration files are used:
+001_install.sql (core infrastructure) and 002_install_models.sql (auto-generated).
+
+---
+
+## Quick Reference
+
+### Key Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| /health | Health check |
+| /docs | OpenAPI documentation |
+| /api/v1/chat/completions | Chat completions (OpenAI-compatible) |
+| /api/v1/mcp | MCP server endpoint |
+| /api/v1/agents | List available agents |
+| /api/v1/models | List available models |
+
+### Model Format
+
+Models are specified as `provider:model-id`:
+- `anthropic:claude-sonnet-4-20250514`
+- `anthropic:claude-sonnet-4-5-20250929`
+- `openai:gpt-4o`
+- `openai:gpt-4o-mini`
+- `cerebras:qwen-3-32b`
+- `cerebras:llama-3.3-70b`
+
+### Configuration File
+
+`~/.rem/config.yaml`:
+
+```yaml
+postgres:
+  connection_string: postgresql://user:pass@localhost:5432/rem
+
+llm:
+  default_model: anthropic:claude-sonnet-4-5-20250929
+  openai_api_key: sk-...
+  anthropic_api_key: sk-ant-...
+
+s3:
+  bucket_name: rem-storage
+  region: us-east-1
+```
+
+**Precedence**: Environment variables > Config file > Defaults
+
+---
+
+*Generated for REM v0.3.x - Last updated: December 2024*

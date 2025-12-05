@@ -1,6 +1,6 @@
 [project]
 name = "remdb"
-version = "0.3.135"
+version = "0.3.142"
 description = "Resources Entities Moments - Bio-inspired memory system for agentic AI workloads"
 readme = "README.md"
 authors = [
@@ -12,10 +12,12 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.11,<3.14"
 
 dependencies = [
     # Core Framework
@@ -153,7 +155,7 @@ markers = [
 ]
 
 [tool.ruff]
-target-version = "py312"
+target-version = "py311"
 line-length = 100
 
 [tool.ruff.lint]
@@ -177,7 +179,7 @@ ignore = [
 
 [tool.mypy]
 plugins = ["pydantic.mypy"]
-python_version = "3.12"
+python_version = "3.11"
 strict = false
 
 # Pragmatic type checking - focus on real bugs, not noise

@@ -43,7 +43,7 @@ rem-dreaming full --user-id=user-123 --rem-api-url=http://localhost:8000
 Environment Variables:
 - REM_API_URL: REM API endpoint (default: http://rem-api:8000)
 - REM_EMBEDDING_PROVIDER: Embedding provider (default: text-embedding-3-small)
-- REM_DEFAULT_MODEL: LLM model (default: gpt-4o)
+- REM_DEFAULT_MODEL: LLM model (default: gpt-4.1)
 - REM_LOOKBACK_HOURS: Default lookback window (default: 24)
 - OPENAI_API_KEY: OpenAI API key
 
@@ -83,7 +83,7 @@ def get_worker() -> DreamingWorker:
         embedding_provider=os.getenv(
             "REM_EMBEDDING_PROVIDER", "text-embedding-3-small"
         ),
-        default_model=os.getenv("REM_DEFAULT_MODEL", "gpt-4o"),
+        default_model=os.getenv("REM_DEFAULT_MODEL", "gpt-4.1"),
         lookback_hours=int(os.getenv("REM_LOOKBACK_HOURS", "24")),
     )
 

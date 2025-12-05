@@ -101,6 +101,7 @@ secrets/
 *.key
 *.crt
 credentials.json
+.pypirc
 
 # Build artifacts
 *.pyc

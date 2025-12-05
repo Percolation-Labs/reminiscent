@@ -106,7 +106,7 @@ class ImageAnalyzer:
             elif provider == VisionProvider.GEMINI:
                 model = "gemini-2.0-flash-exp"
             elif provider == VisionProvider.OPENAI:
-                model = "gpt-4o"
+                model = "gpt-4.1"
 
         self.model = model
         self.base_url = base_url

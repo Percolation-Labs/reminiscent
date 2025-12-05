@@ -915,6 +915,21 @@ def run(
                 click.echo(f"  Last error: {evaluator_load_error}")
             raise click.Abort()
 
+        # Validate evaluator credentials before running expensive agent tasks
+        if evaluator_fn is not None and not only_vibes:
+            from rem.agentic.providers.phoenix import validate_evaluator_credentials
+
+            click.echo("Validating evaluator credentials...")
+            is_valid, error_msg = validate_evaluator_credentials()
+            if not is_valid:
+                click.echo(click.style(f"\n⚠️  Evaluator validation failed: {error_msg}", fg="yellow"))
+                click.echo("\nOptions:")
+                click.echo("  1. Fix the credentials issue and re-run")
+                click.echo("  2. Run with --only-vibes to skip LLM evaluation")
+                click.echo("  3. Use --evaluator-model to specify a different model")
+                raise click.Abort()
+            click.echo("✓ Evaluator credentials validated")
+
         # Load dataset using Polars
         import polars as pl
 
@@ -1286,7 +1301,7 @@ def prompt():
 @click.option("--system-prompt", "-s", required=True, help="System prompt text")
 @click.option("--description", "-d", help="Prompt description")
 @click.option("--model-provider", default="OPENAI", help="Model provider (OPENAI, ANTHROPIC)")
-@click.option("--model-name", "-m", help="Model name (e.g., gpt-4o, claude-sonnet-4-5)")
+@click.option("--model-name", "-m", help="Model name (e.g., gpt-4.1, claude-sonnet-4-5)")
 @click.option("--type", "-t", "prompt_type", default="Agent", help="Prompt type (Agent or Evaluator)")
 def prompt_create(
     name: str,
@@ -1302,7 +1317,7 @@ def prompt_create(
         # Create agent prompt
         rem experiments prompt create hello-world \\
             --system-prompt "You are a helpful assistant." \\
-            --model-name gpt-4o
+            --model-name gpt-4.1
 
         # Create evaluator prompt
         rem experiments prompt create correctness-evaluator \\
@@ -1320,7 +1335,7 @@ def prompt_create(
     try:
         # Set default model if not specified
         if not model_name:
-            model_name = "gpt-4o" if model_provider == "OPENAI" else "claude-sonnet-4-5-20250929"
+            model_name = "gpt-4.1" if model_provider == "OPENAI" else "claude-sonnet-4-5-20250929"
 
         # Get config
         phoenix_client = PhoenixClient()

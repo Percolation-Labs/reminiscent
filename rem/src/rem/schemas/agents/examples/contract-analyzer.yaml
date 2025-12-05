@@ -308,7 +308,7 @@ json_schema_extra:
   - provider_name: anthropic
     model_name: claude-sonnet-4-5-20250929
   - provider_name: openai
-    model_name: gpt-4o
+    model_name: gpt-4.1
   embedding_fields:
   - contract_title
   - contract_type

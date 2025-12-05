@@ -57,9 +57,9 @@ pip install "remdb[all]"
 git clone https://github.com/Percolation-Labs/remstack-lab.git
 cd remstack-lab
 
-# Start PostgreSQL with docker-compose
+# Start services (PostgreSQL, Phoenix observability)
 curl -O https://gist.githubusercontent.com/percolating-sirsh/d117b673bc0edfdef1a5068ccd3cf3e5/raw/docker-compose.prebuilt.yml
-docker compose -f docker-compose.prebuilt.yml up -d postgres
+docker compose -f docker-compose.prebuilt.yml up -d
 
 # Configure REM (creates ~/.rem/config.yaml and installs database schema)
 # Add --claude-desktop to register with Claude Desktop app
@@ -91,7 +91,7 @@ rem ask "What is the Bitcoin whitepaper about?"
 Once configured, you can also use the OpenAI-compatible chat completions API:
 
 ```bash
-# Start the API server (if not using docker-compose for API)
+# Start all services (PostgreSQL, Phoenix, API)
 docker compose -f docker-compose.prebuilt.yml up -d
 
 # Test the API

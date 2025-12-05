@@ -94,6 +94,82 @@ def _check_phoenix_available() -> bool:
     return PHOENIX_AVAILABLE
 
 
+def validate_evaluator_credentials(
+    model_name: str | None = None,
+) -> tuple[bool, str | None]:
+    """Validate that the evaluator's LLM provider has working credentials.
+
+    Performs a minimal API call to verify credentials before running experiments.
+    This prevents running expensive agent tasks only to have evaluations fail.
+
+    Args:
+        model_name: Model to validate (defaults to claude-sonnet-4-5-20250929)
+
+    Returns:
+        Tuple of (success: bool, error_message: str | None)
+        - (True, None) if credentials are valid
+        - (False, "error description") if validation fails
+
+    Example:
+        >>> success, error = validate_evaluator_credentials()
+        >>> if not success:
+        ...     print(f"Evaluator validation failed: {error}")
+        ...     return
+    """
+    if not _check_phoenix_available():
+        return False, "arize-phoenix package not installed"
+
+    from phoenix.evals import OpenAIModel, AnthropicModel
+
+    # Default model (check env var first)
+    if model_name is None:
+        import os
+        model_name = os.environ.get("EVALUATOR_MODEL", "claude-sonnet-4-5-20250929")
+
+    # Parse provider
+    if ":" in model_name:
+        provider, phoenix_model_name = model_name.split(":", 1)
+    else:
+        if model_name.startswith("claude"):
+            provider = "anthropic"
+        else:
+            provider = "openai"
+        phoenix_model_name = model_name
+
+    try:
+        # Create LLM wrapper
+        if provider.lower() == "anthropic":
+            llm = AnthropicModel(
+                model=phoenix_model_name,
+                temperature=0.0,
+                top_p=None,
+            )
+        else:
+            llm = OpenAIModel(model=phoenix_model_name, temperature=0.0)
+
+        # Test with minimal prompt
+        logger.info(f"Validating evaluator credentials for {provider}:{phoenix_model_name}")
+        response = llm("Say 'ok' if you can read this.")
+
+        if response and len(response) > 0:
+            logger.info(f"Evaluator credentials validated successfully for {provider}")
+            return True, None
+        else:
+            return False, f"Empty response from {provider} model"
+
+    except Exception as e:
+        error_msg = str(e)
+        # Extract meaningful error from common API errors
+        if "credit balance is too low" in error_msg.lower():
+            return False, f"Anthropic API credits exhausted. Add credits at https://console.anthropic.com/settings/billing"
+        elif "api key" in error_msg.lower() or "authentication" in error_msg.lower():
+            return False, f"{provider.capitalize()} API key missing or invalid. Set ANTHROPIC_API_KEY or OPENAI_API_KEY environment variable."
+        elif "rate limit" in error_msg.lower():
+            return False, f"{provider.capitalize()} rate limit exceeded. Wait and retry."
+        else:
+            return False, f"{provider.capitalize()} API error: {error_msg[:200]}"
+
+
 # =============================================================================
 # NAME SANITIZATION
 # =============================================================================
@@ -207,8 +283,9 @@ def create_phoenix_evaluator(
 
     # Default model (use Claude Sonnet 4.5 for evaluators)
     if model_name is None:
-        model_name = "claude-sonnet-4-5-20250929"
-        logger.debug(f"Using default evaluator model: {model_name}")
+        import os
+        model_name = os.environ.get("EVALUATOR_MODEL", "claude-sonnet-4-5-20250929")
+        logger.debug(f"Using evaluator model: {model_name}")
 
     logger.info(f"Creating Phoenix evaluator: {evaluator_name} with model={model_name}")
 
@@ -589,33 +666,26 @@ Please evaluate the agent's answer according to the evaluation criteria."""
 
             logger.debug(f"Created {len(evaluations)} evaluations")
 
-            # Phoenix run_experiment expects a single EvaluationResult, not a list.
-            # Return the overall score with detailed evaluations in metadata.
-            from phoenix.experiments.evaluators.base import EvaluationResult
-
+            # Phoenix client expects a dict with score, label, explanation
+            # (not the old EvaluationResult class)
             overall_eval = next(
                 (e for e in evaluations if e["name"] == "overall"),
                 {"score": 0.0, "label": "unknown", "explanation": None}
             )
 
-            return EvaluationResult(
-                score=overall_eval.get("score"),
-                label=overall_eval.get("label"),
-                explanation=overall_eval.get("explanation"),
-                metadata={
-                    "evaluations": evaluations,
-                    "raw_response": response_json,
-                }
-            )
+            return {
+                "score": overall_eval.get("score", 0.0),
+                "label": overall_eval.get("label", "unknown"),
+                "explanation": overall_eval.get("explanation"),
+            }
 
         except Exception as e:
             logger.error(f"Evaluator error: {e}")
-            from phoenix.experiments.evaluators.base import EvaluationResult
-            return EvaluationResult(
-                score=0.0,
-                label="error",
-                explanation=f"Evaluator failed: {str(e)}",
-            )
+            return {
+                "score": 0.0,
+                "label": "error",
+                "explanation": f"Evaluator failed: {str(e)}",
+            }
 
     return evaluator_fn
 

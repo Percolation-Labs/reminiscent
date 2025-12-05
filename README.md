@@ -176,6 +176,7 @@ remstack/
 
 ## Documentation
 
+- **AI Assistant Guide**: [llms.txt](llms.txt) | [Gist](https://gist.github.com/percolating-sirsh/73c19cfe9fd19554f55dfd051d16aef0) - Complete CLI reference, env vars, query dialect, AWS recipes
 - **Python Package**: [rem/README.md](rem/README.md) - Installation, CLI, API, development
 - **Infrastructure**: [manifests/infra/cdk-eks/README.md](manifests/infra/cdk-eks/README.md) - EKS cluster with CDK
 - **Platform**: [manifests/platform/README.md](manifests/platform/README.md) - ArgoCD, CloudNativePG, Phoenix

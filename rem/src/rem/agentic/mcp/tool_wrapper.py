@@ -107,27 +107,138 @@ def create_mcp_tool_wrapper(
         return Tool(tool_func)
 
 
-def create_resource_tool(uri: str, usage: str) -> Tool:
+def create_resource_tool(uri: str, usage: str = "", mcp_server: Any = None) -> Tool:
     """
     Build a Tool instance from an MCP resource URI.
 
-    This is a placeholder for now. A real implementation would create a
-    tool that reads the content of the resource URI.
+    Creates a tool that fetches the resource content when called.
+    Resources declared in agent YAML become callable tools - this eliminates
+    the artificial MCP distinction between tools and resources.
+
+    Supports both:
+    - Concrete URIs: "rem://schemas" -> tool with no parameters
+    - Template URIs: "patient-profile://field/{field_key}" -> tool with field_key parameter
 
     Args:
-        uri: The resource URI (e.g., "rem://resources/some-id").
-        usage: The description of how to use the tool.
+        uri: The resource URI (concrete or template with {variable} placeholders).
+        usage: The description of what this resource provides.
+        mcp_server: Optional FastMCP server instance to resolve resources from.
+            If provided, resources are resolved from this server's registry.
+            If not provided, falls back to REM's built-in load_resource().
 
     Returns:
-        A Pydantic AI Tool instance.
+        A Pydantic AI Tool instance that fetches the resource.
+
+    Example:
+        # Concrete URI -> no-param tool
+        tool = create_resource_tool("rem://schemas", "List all agent schemas")
+
+        # Template URI -> parameterized tool
+        tool = create_resource_tool("patient-profile://field/{field_key}", "Get field definition", mcp_server=mcp)
+        # Agent calls: get_patient_profile_field(field_key="safety.suicidality")
     """
-    # Placeholder function that would read the resource
-    def read_resource():
-        """Reads content from a resource URI."""
-        return f"Content of {uri}"
+    import json
+    import re
 
-    read_resource.__name__ = f"read_{uri.replace('://', '_').replace('/', '_')}"
-    read_resource.__doc__ = usage
+    # Extract template variables from URI (e.g., {field_key}, {domain_name})
+    template_vars = re.findall(r'\{([^}]+)\}', uri)
 
-    logger.info(f"Built resource tool: {read_resource.__name__} (uri: {uri})")
-    return Tool(read_resource)
+    # Parse URI to create function name (strip template vars for cleaner name)
+    clean_uri = re.sub(r'\{[^}]+\}', '', uri)
+    parts = clean_uri.replace("://", "_").replace("-", "_").replace("/", "_").replace(".", "_")
+    parts = re.sub(r'_+', '_', parts).strip('_')  # Clean up multiple underscores
+    func_name = f"get_{parts}"
+
+    # Build description including parameter info
+    description = usage or f"Fetch {uri} resource"
+    if template_vars:
+        param_desc = ", ".join(template_vars)
+        description = f"{description}\n\nParameters: {param_desc}"
+
+    if template_vars:
+        # Template URI -> create parameterized tool
+        async def wrapper(**kwargs: Any) -> str:
+            """Fetch MCP resource with substituted parameters."""
+            import asyncio
+            import inspect
+
+            # Try to resolve from MCP server's resource templates first
+            if mcp_server is not None:
+                try:
+                    # Get resource templates from MCP server
+                    templates = await mcp_server.get_resource_templates()
+                    if uri in templates:
+                        template = templates[uri]
+                        # Call the template's underlying function directly
+                        # The fn expects the template variables as kwargs
+                        fn_result = template.fn(**kwargs)
+                        # Handle both sync and async functions
+                        if inspect.iscoroutine(fn_result):
+                            fn_result = await fn_result
+                        if isinstance(fn_result, str):
+                            return fn_result
+                        return json.dumps(fn_result, indent=2)
+                except Exception as e:
+                    logger.warning(f"Failed to resolve resource {uri} from MCP server: {e}")
+
+            # Fallback: substitute template variables and use load_resource
+            resolved_uri = uri
+            for var in template_vars:
+                if var in kwargs:
+                    resolved_uri = resolved_uri.replace(f"{{{var}}}", str(kwargs[var]))
+                else:
+                    return json.dumps({"error": f"Missing required parameter: {var}"})
+
+            from rem.api.mcp_router.resources import load_resource
+            result = await load_resource(resolved_uri)
+            if isinstance(result, str):
+                return result
+            return json.dumps(result, indent=2)
+
+        # Build parameter annotations for Pydantic AI
+        wrapper.__name__ = func_name
+        wrapper.__doc__ = description
+        # Add type hints for parameters
+        wrapper.__annotations__ = {var: str for var in template_vars}
+        wrapper.__annotations__['return'] = str
+
+        logger.info(f"Built parameterized resource tool: {func_name} (uri: {uri}, params: {template_vars})")
+    else:
+        # Concrete URI -> no-param tool
+        async def wrapper(**kwargs: Any) -> str:
+            """Fetch MCP resource and return contents."""
+            import asyncio
+            import inspect
+
+            if kwargs:
+                logger.warning(f"Resource tool {func_name} called with unexpected kwargs: {list(kwargs.keys())}")
+
+            # Try to resolve from MCP server's resources first
+            if mcp_server is not None:
+                try:
+                    resources = await mcp_server.get_resources()
+                    if uri in resources:
+                        resource = resources[uri]
+                        # Call the resource's underlying function
+                        fn_result = resource.fn()
+                        if inspect.iscoroutine(fn_result):
+                            fn_result = await fn_result
+                        if isinstance(fn_result, str):
+                            return fn_result
+                        return json.dumps(fn_result, indent=2)
+                except Exception as e:
+                    logger.warning(f"Failed to resolve resource {uri} from MCP server: {e}")
+
+            # Fallback to load_resource
+            from rem.api.mcp_router.resources import load_resource
+            result = await load_resource(uri)
+            if isinstance(result, str):
+                return result
+            return json.dumps(result, indent=2)
+
+        wrapper.__name__ = func_name
+        wrapper.__doc__ = description
+
+        logger.info(f"Built resource tool: {func_name} (uri: {uri})")
+
+    return Tool(wrapper)

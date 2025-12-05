@@ -129,7 +129,7 @@ class Ontology(CoreModel):
             file_id="file-uuid-456",
             agent_schema_id="contract-parser-v2",
             provider_name="openai",
-            model_name="gpt-4o",
+            model_name="gpt-4.1",
             extracted_data={
                 "contract_type": "supplier_agreement",
                 "parties": [

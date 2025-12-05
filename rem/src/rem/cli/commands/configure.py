@@ -110,7 +110,7 @@ def prompt_llm_config(use_defaults: bool = False) -> dict:
     config = {}
 
     # Default values
-    default_model = "anthropic:claude-sonnet-4-5-20250929"
+    default_model = "openai:gpt-4.1"
     default_temperature = 0.5
 
     if use_defaults:
@@ -124,9 +124,9 @@ def prompt_llm_config(use_defaults: bool = False) -> dict:
         # Default model
         click.echo("\nDefault LLM model (format: provider:model-id)")
         click.echo("Examples:")
+        click.echo("  - openai:gpt-4.1")
         click.echo("  - anthropic:claude-sonnet-4-5-20250929")
-        click.echo("  - openai:gpt-4o")
-        click.echo("  - openai:gpt-4o-mini")
+        click.echo("  - openai:gpt-4.1-mini")
 
         config["default_model"] = click.prompt(
             "Default model", default=default_model
