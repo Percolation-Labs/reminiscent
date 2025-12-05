@@ -21,8 +21,8 @@ Example .env file:
     LLM__OPENAI_API_KEY=sk-...
     LLM__ANTHROPIC_API_KEY=sk-ant-...
 
-    # Database (port 5050 for Docker Compose)
-    POSTGRES__CONNECTION_STRING=postgresql://rem:rem@localhost:5050/rem
+    # Database (port 5051 for Docker Compose prebuilt, 5050 for local dev)
+    POSTGRES__CONNECTION_STRING=postgresql://rem:rem@localhost:5051/rem
     POSTGRES__POOL_MIN_SIZE=5
     POSTGRES__POOL_MAX_SIZE=20
     POSTGRES__STATEMENT_TIMEOUT=30000
@@ -464,9 +464,10 @@ class PostgresSettings(BaseSettings):
     )
 
     connection_string: str = Field(
-        default="postgresql://rem:rem@localhost:5050/rem",
-        description="PostgreSQL connection string (default uses Docker Compose port 5050)",
+        default="postgresql://rem:rem@localhost:5051/rem",
+        description="PostgreSQL connection string (default uses Docker Compose prebuilt port 5051)",
     )
+
 
     pool_size: int = Field(
         default=10,
@@ -1060,6 +1061,8 @@ class APISettings(BaseSettings):
         API__RELOAD - Enable auto-reload for development
         API__WORKERS - Number of worker processes (production)
         API__LOG_LEVEL - Logging level (debug, info, warning, error)
+        API__API_KEY_ENABLED - Enable X-API-Key header authentication
+        API__API_KEY - API key for X-API-Key authentication
     """
 
     model_config = SettingsConfigDict(
@@ -1092,6 +1095,23 @@ class APISettings(BaseSettings):
     log_level: str = Field(
         default="info",
         description="Logging level (debug, info, warning, error, critical)",
+    )
+
+    api_key_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable X-API-Key header authentication for API endpoints. "
+            "When enabled, requests must include X-API-Key header with valid key. "
+            "This provides simple API key auth independent of OAuth."
+        ),
+    )
+
+    api_key: str | None = Field(
+        default=None,
+        description=(
+            "API key for X-API-Key authentication. Required when api_key_enabled=true. "
+            "Generate with: python -c \"import secrets; print(secrets.token_urlsafe(32))\""
+        ),
     )
 
 
