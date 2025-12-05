@@ -22,6 +22,7 @@ from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from loguru import logger
 from sqlalchemy import create_engine, text
+from sqlalchemy.dialects import postgresql
 
 from ...settings import settings
 from .pydantic_to_sqlalchemy import get_target_metadata
@@ -472,6 +473,18 @@ class DiffService:
 
         return "\n".join(lines) + "\n"
 
+    def _compile_type(self, col_type) -> str:
+        """Compile SQLAlchemy type to PostgreSQL DDL string.
+
+        SQLAlchemy types like ARRAY(Text) need dialect-specific compilation
+        to render correctly (e.g., "TEXT[]" instead of just "ARRAY").
+        """
+        try:
+            return col_type.compile(dialect=postgresql.dialect())
+        except Exception:
+            # Fallback to string representation if compilation fails
+            return str(col_type)
+
     def _op_to_sql(self, op: ops.MigrateOperation) -> list[str]:
         """Convert operation to SQL statements."""
         lines = []
@@ -481,7 +494,8 @@ class DiffService:
             for col in op.columns:
                 if hasattr(col, 'name') and hasattr(col, 'type'):
                     nullable = "" if getattr(col, 'nullable', True) else " NOT NULL"
-                    cols.append(f"    {col.name} {col.type}{nullable}")
+                    type_str = self._compile_type(col.type)
+                    cols.append(f"    {col.name} {type_str}{nullable}")
             col_str = ",\n".join(cols)
             lines.append(f"CREATE TABLE IF NOT EXISTS {op.table_name} (\n{col_str}\n);")
 
@@ -491,14 +505,16 @@ class DiffService:
         elif isinstance(op, ops.AddColumnOp):
             col = op.column
             nullable = "" if getattr(col, 'nullable', True) else " NOT NULL"
-            lines.append(f"ALTER TABLE {op.table_name} ADD COLUMN IF NOT EXISTS {col.name} {col.type}{nullable};")
+            type_str = self._compile_type(col.type)
+            lines.append(f"ALTER TABLE {op.table_name} ADD COLUMN IF NOT EXISTS {col.name} {type_str}{nullable};")
 
         elif isinstance(op, ops.DropColumnOp):
             lines.append(f"ALTER TABLE {op.table_name} DROP COLUMN IF EXISTS {op.column_name};")
 
         elif isinstance(op, ops.AlterColumnOp):
             if op.modify_type is not None:
-                lines.append(f"ALTER TABLE {op.table_name} ALTER COLUMN {op.column_name} TYPE {op.modify_type};")
+                type_str = self._compile_type(op.modify_type)
+                lines.append(f"ALTER TABLE {op.table_name} ALTER COLUMN {op.column_name} TYPE {type_str};")
             if op.modify_nullable is not None:
                 if op.modify_nullable:
                     lines.append(f"ALTER TABLE {op.table_name} ALTER COLUMN {op.column_name} DROP NOT NULL;")
