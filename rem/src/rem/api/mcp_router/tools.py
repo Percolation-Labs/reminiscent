@@ -1040,3 +1040,93 @@ async def get_schema(
     logger.info(f"Retrieved schema for table '{table_name}' with {len(column_defs)} columns")
 
     return result
+
+
+@mcp_tool_error_handler
+async def save_agent(
+    name: str,
+    description: str,
+    properties: dict[str, Any] | None = None,
+    required: list[str] | None = None,
+    tools: list[str] | None = None,
+    tags: list[str] | None = None,
+    version: str = "1.0.0",
+    user_id: str | None = None,
+) -> dict[str, Any]:
+    """
+    Save an agent schema to REM, making it available for use.
+
+    This tool creates or updates an agent definition in the user's schema space.
+    The agent becomes immediately available for conversations.
+
+    **Default Tools**: All agents automatically get `search_rem` and `register_metadata`
+    tools unless explicitly overridden.
+
+    Args:
+        name: Agent name in kebab-case (e.g., "code-reviewer", "sales-assistant").
+            Must be unique within the user's schema space.
+        description: The agent's system prompt. This is the full instruction set
+            that defines the agent's behavior, personality, and capabilities.
+            Use markdown formatting for structure.
+        properties: Output schema properties as a dict. Each property should have:
+            - type: "string", "number", "boolean", "array", "object"
+            - description: What this field captures
+            Example: {"answer": {"type": "string", "description": "Response to user"}}
+            If not provided, defaults to a simple {"answer": {"type": "string"}} schema.
+        required: List of required property names. Defaults to ["answer"] if not provided.
+        tools: List of tool names the agent can use. Defaults to ["search_rem", "register_metadata"].
+        tags: Optional tags for categorizing the agent.
+        version: Semantic version string (default: "1.0.0").
+        user_id: User identifier for scoping. Uses authenticated user if not provided.
+
+    Returns:
+        Dict with:
+        - status: "success" or "error"
+        - agent_name: Name of the saved agent
+        - version: Version saved
+        - message: Human-readable status
+
+    Examples:
+        # Create a simple agent
+        save_agent(
+            name="greeting-bot",
+            description="You are a friendly greeter. Say hello warmly.",
+            properties={"answer": {"type": "string", "description": "Greeting message"}},
+            required=["answer"]
+        )
+
+        # Create agent with structured output
+        save_agent(
+            name="sentiment-analyzer",
+            description="Analyze sentiment of text provided by the user.",
+            properties={
+                "answer": {"type": "string", "description": "Analysis explanation"},
+                "sentiment": {"type": "string", "enum": ["positive", "negative", "neutral"]},
+                "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+            },
+            required=["answer", "sentiment"],
+            tags=["analysis", "nlp"]
+        )
+    """
+    from ...agentic.agents.agent_manager import save_agent as _save_agent
+
+    # Get user_id from context if not provided
+    user_id = AgentContext.get_user_id_or_default(user_id, source="save_agent")
+
+    # Delegate to agent_manager
+    result = await _save_agent(
+        name=name,
+        description=description,
+        user_id=user_id,
+        properties=properties,
+        required=required,
+        tools=tools,
+        tags=tags,
+        version=version,
+    )
+
+    # Add helpful message for Slack users
+    if result.get("status") == "success":
+        result["message"] = f"Agent '{name}' saved. Use `/custom-agent {name}` to chat with it."
+
+    return result

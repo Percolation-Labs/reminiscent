@@ -666,10 +666,11 @@ class ContentService:
         # IMPORTANT: category field distinguishes agents from evaluators
         # - kind=agent → category="agent" (AI agents with tools/resources)
         # - kind=evaluator → category="evaluator" (LLM-as-a-Judge evaluators)
-        # Schemas (agents/evaluators) default to system tenant for shared access
+        # User-scoped schemas: if user_id provided, scope to user's tenant
+        # System schemas: if no user_id, use "system" tenant for shared access
         schema_entity = Schema(
-            tenant_id="system",
-            user_id=None,
+            tenant_id=user_id or "system",
+            user_id=user_id,
             name=name,
             spec=schema_data,
             category=kind,  # Maps kind → category for database filtering

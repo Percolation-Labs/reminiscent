@@ -182,6 +182,7 @@ def create_mcp_server(is_local: bool = False) -> FastMCP:
         list_schema,
         read_resource,
         register_metadata,
+        save_agent,
         search_rem,
     )
 
@@ -191,6 +192,7 @@ def create_mcp_server(is_local: bool = False) -> FastMCP:
     mcp.tool()(register_metadata)
     mcp.tool()(list_schema)
     mcp.tool()(get_schema)
+    mcp.tool()(save_agent)
 
     # File ingestion tool (with local path support for local servers)
     # Wrap to inject is_local parameter
