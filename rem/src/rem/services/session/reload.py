@@ -6,8 +6,14 @@ allowing conversations to be resumed across multiple API calls.
 Design Pattern:
 - Session identified by session_id from X-Session-Id header
 - All messages for session loaded in chronological order
-- Optional decompression of long assistant messages via REM LOOKUP
+- Long assistant messages compressed on load with REM LOOKUP hints
+- Tool messages (register_metadata, etc.) are NEVER compressed
 - Gracefully handles missing database (returns empty history)
+
+Message Types on Reload:
+- user: Returned as-is
+- tool: Returned as-is with metadata (tool_call_id, tool_name, tool_arguments)
+- assistant: Compressed on load if long (>400 chars), with REM LOOKUP for recovery
 """
 
 from loguru import logger
@@ -19,7 +25,7 @@ from rem.settings import settings
 async def reload_session(
     session_id: str,
     user_id: str,
-    decompress_messages: bool = False,
+    compress_on_load: bool = True,
 ) -> list[dict]:
     """
     Reload all messages for a session from the database.
@@ -27,7 +33,8 @@ async def reload_session(
     Args:
         session_id: Session/conversation identifier
         user_id: User identifier for data isolation
-        decompress_messages: Whether to decompress long messages via REM LOOKUP
+        compress_on_load: Whether to compress long assistant messages (default: True)
+                         Tool messages are NEVER compressed.
 
     Returns:
         List of message dicts in chronological order (oldest first)
@@ -41,7 +48,7 @@ async def reload_session(
         history = await reload_session(
             session_id=context.session_id,
             user_id=context.user_id,
-            decompress_messages=False,  # Use compressed versions for efficiency
+            compress_on_load=True,  # Compress long assistant messages
         )
 
         # Combine with new user message
@@ -60,14 +67,14 @@ async def reload_session(
         # Create message store for this session
         store = SessionMessageStore(user_id=user_id)
 
-        # Load messages (optionally decompressed)
+        # Load messages (assistant messages compressed on load, tool messages never compressed)
         messages = await store.load_session_messages(
-            session_id=session_id, user_id=user_id, decompress=decompress_messages
+            session_id=session_id, user_id=user_id, compress_on_load=compress_on_load
         )
 
         logger.debug(
             f"Reloaded {len(messages)} messages for session {session_id} "
-            f"(decompressed={decompress_messages})"
+            f"(compress_on_load={compress_on_load})"
         )
 
         return messages

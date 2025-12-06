@@ -3,13 +3,18 @@ File utilities for consistent file handling throughout REM.
 
 Provides context managers and helpers for temporary file operations,
 ensuring proper cleanup and consistent patterns.
+
+Also provides DataFrame I/O utilities using Polars with automatic
+format detection based on file extension.
 """
 
 import tempfile
 from contextlib import contextmanager
+from io import BytesIO
 from pathlib import Path
-from typing import Generator, Optional
+from typing import Generator, Optional, Union
 
+import polars as pl
 from loguru import logger
 
 
@@ -165,3 +170,154 @@ def safe_delete(path: Path) -> bool:
     except Exception as e:
         logger.warning(f"Failed to delete {path}: {e}")
         return False
+
+
+# Extension to Polars reader mapping
+_EXTENSION_READERS = {
+    ".csv": pl.read_csv,
+    ".tsv": lambda p, **kw: pl.read_csv(p, separator="\t", **kw),
+    ".parquet": pl.read_parquet,
+    ".pq": pl.read_parquet,
+    ".json": pl.read_json,
+    ".jsonl": pl.read_ndjson,
+    ".ndjson": pl.read_ndjson,
+    ".avro": pl.read_avro,
+    ".xlsx": pl.read_excel,
+    ".xls": pl.read_excel,
+    ".ods": pl.read_ods,
+    ".ipc": pl.read_ipc,
+    ".arrow": pl.read_ipc,
+    ".feather": pl.read_ipc,
+}
+
+# Extension to Polars writer mapping
+_EXTENSION_WRITERS = {
+    ".csv": "write_csv",
+    ".tsv": "write_csv",  # with separator="\t"
+    ".parquet": "write_parquet",
+    ".pq": "write_parquet",
+    ".json": "write_json",
+    ".jsonl": "write_ndjson",
+    ".ndjson": "write_ndjson",
+    ".avro": "write_avro",
+    ".xlsx": "write_excel",
+    ".ipc": "write_ipc",
+    ".arrow": "write_ipc",
+    ".feather": "write_ipc",
+}
+
+
+def read_dataframe(
+    source: Union[str, Path, bytes],
+    filename: Optional[str] = None,
+    **kwargs,
+) -> pl.DataFrame:
+    """
+    Read a DataFrame from a file, inferring format from extension.
+
+    Supports all Polars-compatible formats:
+    - CSV (.csv), TSV (.tsv)
+    - Parquet (.parquet, .pq)
+    - JSON (.json), JSONL/NDJSON (.jsonl, .ndjson)
+    - Avro (.avro)
+    - Excel (.xlsx, .xls)
+    - OpenDocument (.ods)
+    - Arrow IPC (.ipc, .arrow, .feather)
+
+    Args:
+        source: File path (str/Path) or bytes content
+        filename: Required when source is bytes, to determine format
+        **kwargs: Additional arguments passed to the Polars reader
+
+    Returns:
+        Polars DataFrame
+
+    Raises:
+        ValueError: If format cannot be determined or is unsupported
+
+    Examples:
+        >>> df = read_dataframe("data.csv")
+        >>> df = read_dataframe("data.parquet")
+        >>> df = read_dataframe(csv_bytes, filename="data.csv")
+    """
+    # Determine the file extension
+    if isinstance(source, bytes):
+        if not filename:
+            raise ValueError("filename is required when source is bytes")
+        ext = Path(filename).suffix.lower()
+        # For bytes, we need to wrap in BytesIO
+        file_like = BytesIO(source)
+    else:
+        path = Path(source)
+        ext = path.suffix.lower()
+        file_like = path
+
+    # Get the appropriate reader
+    reader = _EXTENSION_READERS.get(ext)
+    if reader is None:
+        supported = ", ".join(sorted(_EXTENSION_READERS.keys()))
+        raise ValueError(
+            f"Unsupported file format: {ext}. "
+            f"Supported formats: {supported}"
+        )
+
+    try:
+        return reader(file_like, **kwargs)
+    except Exception as e:
+        logger.error(f"Failed to read DataFrame from {ext} format: {e}")
+        raise
+
+
+def write_dataframe(
+    df: pl.DataFrame,
+    dest: Union[str, Path],
+    **kwargs,
+) -> None:
+    """
+    Write a DataFrame to a file, inferring format from extension.
+
+    Supports most Polars-writable formats:
+    - CSV (.csv), TSV (.tsv)
+    - Parquet (.parquet, .pq)
+    - JSON (.json), JSONL/NDJSON (.jsonl, .ndjson)
+    - Avro (.avro)
+    - Excel (.xlsx)
+    - Arrow IPC (.ipc, .arrow, .feather)
+
+    Args:
+        df: Polars DataFrame to write
+        dest: Destination file path
+        **kwargs: Additional arguments passed to the Polars writer
+
+    Raises:
+        ValueError: If format cannot be determined or is unsupported
+
+    Examples:
+        >>> write_dataframe(df, "output.csv")
+        >>> write_dataframe(df, "output.parquet")
+        >>> write_dataframe(df, "output.jsonl")
+    """
+    path = Path(dest)
+    ext = path.suffix.lower()
+
+    writer_method = _EXTENSION_WRITERS.get(ext)
+    if writer_method is None:
+        supported = ", ".join(sorted(_EXTENSION_WRITERS.keys()))
+        raise ValueError(
+            f"Unsupported file format for writing: {ext}. "
+            f"Supported formats: {supported}"
+        )
+
+    # Ensure parent directory exists
+    ensure_parent_exists(path)
+
+    # Handle TSV special case
+    if ext == ".tsv":
+        kwargs.setdefault("separator", "\t")
+
+    try:
+        writer = getattr(df, writer_method)
+        writer(path, **kwargs)
+    except Exception as e:
+        logger.error(f"Failed to write DataFrame to {ext} format: {e}")
+        raise

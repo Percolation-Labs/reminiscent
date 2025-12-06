@@ -184,13 +184,15 @@ class ContextBuilder:
             # Add system context hint
             messages.append(ContextMessage(role="system", content=context_hint))
 
-            # ALWAYS load session history (if session_id provided) with compression
+            # ALWAYS load session history (if session_id provided)
+            # - Long assistant messages are compressed on load with REM LOOKUP hints
+            # - Tool messages are never compressed (contain structured metadata)
             if context.session_id and settings.postgres.enabled:
                 store = SessionMessageStore(user_id=context.user_id or "default")
                 session_history = await store.load_session_messages(
                     session_id=context.session_id,
                     user_id=context.user_id,
-                    decompress=False,  # Use compressed versions with REM LOOKUP hints
+                    compress_on_load=True,  # Compress long assistant messages
                 )
 
                 # Convert to ContextMessage format
@@ -202,7 +204,7 @@ class ContextBuilder:
                         )
                     )
 
-                logger.debug(f"Loaded {len(session_history)} compressed messages for session {context.session_id}")
+                logger.debug(f"Loaded {len(session_history)} messages for session {context.session_id}")
 
             # Add new messages from request
             if new_messages:

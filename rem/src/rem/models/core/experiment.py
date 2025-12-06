@@ -138,16 +138,12 @@ class DatasetReference(BaseModel):
 
     path: str = Field(
         description=(
-            "Path to dataset:\n"
+            "Path to dataset. Format is inferred from file extension.\n"
+            "Supported: .csv, .tsv, .parquet, .json, .jsonl, .xlsx, .ods, .avro, .ipc\n"
             "- Git: Relative path from experiment root (e.g., 'datasets/ground_truth.csv')\n"
-            "- S3: Full S3 URI (e.g., 's3://bucket/experiments/my-exp/datasets/ground_truth.csv')\n"
+            "- S3: Full S3 URI (e.g., 's3://bucket/experiments/my-exp/datasets/data.parquet')\n"
             "- Hybrid: S3 URI for data, Git path for schema"
         )
-    )
-
-    format: Literal["csv", "jsonl", "parquet", "json"] = Field(
-        default="csv",
-        description="Dataset file format"
     )
 
     schema_path: str | None = Field(
@@ -262,8 +258,7 @@ class ExperimentConfig(BaseModel):
     datasets:
       ground_truth:
         location: git
-        path: datasets/ground_truth.csv
-        format: csv
+        path: datasets/ground_truth.csv  # format inferred from extension
     results:
       location: git
       base_path: results/
@@ -288,12 +283,10 @@ class ExperimentConfig(BaseModel):
       ground_truth:
         location: s3
         path: s3://rem-prod/experiments/cv-parser-production/datasets/ground_truth.parquet
-        format: parquet
         schema_path: datasets/schema.yaml  # Schema in Git for documentation
       test_cases:
         location: s3
         path: s3://rem-prod/experiments/cv-parser-production/datasets/test_cases.jsonl
-        format: jsonl
     results:
       location: hybrid
       base_path: s3://rem-prod/experiments/cv-parser-production/results/
@@ -558,7 +551,6 @@ class ExperimentConfig(BaseModel):
 
 - **Location**: `{dataset.location.value}`
 - **Path**: `{dataset.path}`
-- **Format**: `{dataset.format}`
 """
             if dataset.description:
                 readme += f"- **Description**: {dataset.description}\n"
@@ -629,7 +621,6 @@ EXAMPLE_SMALL_EXPERIMENT = ExperimentConfig(
         "ground_truth": DatasetReference(
             location=DatasetLocation.GIT,
             path="datasets/ground_truth.csv",
-            format="csv",
             description="10 manually curated test cases"
         )
     },
@@ -659,7 +650,6 @@ EXAMPLE_LARGE_EXPERIMENT = ExperimentConfig(
         "ground_truth": DatasetReference(
             location=DatasetLocation.S3,
             path="s3://rem-prod/experiments/cv-parser-production/datasets/ground_truth.parquet",
-            format="parquet",
             schema_path="datasets/schema.yaml",
             description="10,000 CV/resume pairs with ground truth extractions"
         )

@@ -1471,6 +1471,114 @@ class DBListenerSettings(BaseSettings):
         return [c.strip() for c in self.channels.split(",") if c.strip()]
 
 
+class EmailSettings(BaseSettings):
+    """
+    Email service settings for SMTP.
+
+    Supports passwordless login via email codes and transactional emails.
+    Uses Gmail SMTP with App Passwords by default.
+
+    Generate app password at: https://myaccount.google.com/apppasswords
+
+    Environment variables:
+        EMAIL__ENABLED - Enable email service (default: false)
+        EMAIL__SMTP_HOST - SMTP server host (default: smtp.gmail.com)
+        EMAIL__SMTP_PORT - SMTP server port (default: 587 for TLS)
+        EMAIL__SENDER_EMAIL - Sender email address
+        EMAIL__SENDER_NAME - Sender display name
+        EMAIL__APP_PASSWORD - Gmail app password (from secrets)
+        EMAIL__USE_TLS - Use TLS encryption (default: true)
+        EMAIL__LOGIN_CODE_EXPIRY_MINUTES - Login code expiry (default: 10)
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="EMAIL__",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable email service (requires app_password to be set)",
+    )
+
+    smtp_host: str = Field(
+        default="smtp.gmail.com",
+        description="SMTP server host",
+    )
+
+    smtp_port: int = Field(
+        default=587,
+        description="SMTP server port (587 for TLS, 465 for SSL)",
+    )
+
+    sender_email: str = Field(
+        default="",
+        description="Sender email address",
+    )
+
+    sender_name: str = Field(
+        default="REM",
+        description="Sender display name",
+    )
+
+    app_password: str | None = Field(
+        default=None,
+        description="Gmail app password for SMTP authentication",
+    )
+
+    use_tls: bool = Field(
+        default=True,
+        description="Use TLS encryption for SMTP",
+    )
+
+    login_code_expiry_minutes: int = Field(
+        default=10,
+        description="Login code expiry in minutes",
+    )
+
+    trusted_email_domains: str = Field(
+        default="",
+        description=(
+            "Comma-separated list of trusted email domains for new user registration. "
+            "Existing users can always login regardless of domain. "
+            "New users must have an email from a trusted domain. "
+            "Empty string means all domains are allowed. "
+            "Example: 'siggymd.ai,example.com'"
+        ),
+    )
+
+    @property
+    def trusted_domain_list(self) -> list[str]:
+        """Get trusted domains as a list, filtering empty strings."""
+        if not self.trusted_email_domains:
+            return []
+        return [d.strip().lower() for d in self.trusted_email_domains.split(",") if d.strip()]
+
+    def is_domain_trusted(self, email: str) -> bool:
+        """Check if an email's domain is in the trusted list.
+
+        Args:
+            email: Email address to check
+
+        Returns:
+            True if domain is trusted (or if no trusted domains configured)
+        """
+        domains = self.trusted_domain_list
+        if not domains:
+            # No restrictions configured
+            return True
+
+        email_domain = email.lower().split("@")[-1].strip()
+        return email_domain in domains
+
+    @property
+    def is_configured(self) -> bool:
+        """Check if email service is properly configured."""
+        return bool(self.sender_email and self.app_password)
+
+
 class TestSettings(BaseSettings):
     """
     Test environment settings.
@@ -1585,6 +1693,7 @@ class Settings(BaseSettings):
     chunking: ChunkingSettings = Field(default_factory=ChunkingSettings)
     content: ContentSettings = Field(default_factory=ContentSettings)
     schema_search: SchemaSettings = Field(default_factory=SchemaSettings)
+    email: EmailSettings = Field(default_factory=EmailSettings)
     test: TestSettings = Field(default_factory=TestSettings)
 
 

@@ -1,13 +1,49 @@
 """Session message compression and rehydration for efficient context loading.
 
-This module implements message compression to keep conversation history within
-context windows while preserving full content via REM LOOKUP.
+This module implements message storage and compression to keep conversation history
+within context windows while preserving full content via REM LOOKUP.
 
-Design Pattern:
-- Long assistant messages (>400 chars) are stored as separate Message entities
-- In-memory conversation uses truncated versions with REM lookup hints
-- Full content retrieved on-demand via LOOKUP queries
-- Compression disabled when Postgres is disabled
+Message Types and Storage Strategy
+===================================
+
+All messages are stored UNCOMPRESSED in the database for full audit/analysis.
+Compression happens only on RELOAD when reconstructing context for the LLM.
+
+Message Types:
+- `user`: User messages - stored and reloaded as-is
+- `tool`: Tool call messages (e.g., register_metadata) - stored and reloaded as-is
+         NEVER compressed - contains important structured metadata
+- `assistant`: Assistant text responses - stored uncompressed, but MAY BE
+              compressed on reload if long (>400 chars) with REM LOOKUP hints
+
+Example Session Flow:
+```
+Turn 1 (stored uncompressed):
+  - user: "I have a headache"
+  - tool: register_metadata({confidence: 0.3, collected_fields: {...}})
+  - assistant: "I'm sorry to hear that. How long has this been going on?"
+
+Turn 2 (stored uncompressed):
+  - user: "About 3 days, really bad"
+  - tool: register_metadata({confidence: 0.6, collected_fields: {...}})
+  - assistant: "Got it - 3 days. On a scale of 1-10..."
+
+On reload (for LLM context):
+  - user messages: returned as-is
+  - tool messages: returned as-is (never compressed)
+  - assistant messages: compressed if long, with REM LOOKUP hint for full retrieval
+```
+
+REM LOOKUP Pattern:
+- Long assistant messages get truncated with hint: "... [REM LOOKUP session-{id}-msg-{idx}] ..."
+- Agent can retrieve full content on-demand using the LOOKUP key
+- Keeps context window efficient while preserving data integrity
+
+Key Design Decisions:
+1. Store everything uncompressed - full audit trail in database
+2. Compress only on reload - optimize for LLM context window
+3. Never compress tool messages - structured metadata must stay intact
+4. REM LOOKUP enables on-demand retrieval of full assistant responses
 """
 
 from typing import Any
@@ -285,8 +321,23 @@ class SessionMessageStore:
                     msg_copy["_entity_key"] = entity_key
                     compressed_messages.append(msg_copy)
             else:
-                # Short assistant messages, user messages, and system messages stored as-is
+                # Short assistant messages, user messages, tool messages, and system messages stored as-is
                 # Store ALL messages in database for full audit trail
+                # Build metadata dict with standard fields
+                msg_metadata = {
+                    "message_index": idx,
+                    "timestamp": message.get("timestamp"),
+                }
+
+                # For tool messages, include tool call details in metadata
+                if message.get("role") == "tool":
+                    if message.get("tool_call_id"):
+                        msg_metadata["tool_call_id"] = message.get("tool_call_id")
+                    if message.get("tool_name"):
+                        msg_metadata["tool_name"] = message.get("tool_name")
+                    if message.get("tool_arguments"):
+                        msg_metadata["tool_arguments"] = message.get("tool_arguments")
+
                 msg = Message(
                     id=message.get("id"),  # Use pre-generated ID if provided
                     content=content,
@@ -296,10 +347,7 @@ class SessionMessageStore:
                     user_id=user_id or self.user_id,
                     trace_id=message.get("trace_id"),
                     span_id=message.get("span_id"),
-                    metadata={
-                        "message_index": idx,
-                        "timestamp": message.get("timestamp"),
-                    },
+                    metadata=msg_metadata,
                 )
                 await self.repo.upsert(msg)
                 compressed_messages.append(message.copy())
@@ -307,18 +355,24 @@ class SessionMessageStore:
         return compressed_messages
 
     async def load_session_messages(
-        self, session_id: str, user_id: str | None = None, decompress: bool = False
+        self, session_id: str, user_id: str | None = None, compress_on_load: bool = True
     ) -> list[dict[str, Any]]:
         """
-        Load session messages from database.
+        Load session messages from database, optionally compressing long assistant messages.
+
+        Compression on Load:
+        - Tool messages (role: "tool") are NEVER compressed - they contain structured metadata
+        - User messages are returned as-is
+        - Assistant messages MAY be compressed if long (>400 chars) with REM LOOKUP hints
 
         Args:
             session_id: Session identifier
             user_id: Optional user identifier for filtering
-            decompress: Whether to decompress messages (default: False)
+            compress_on_load: Whether to compress long assistant messages (default: True)
 
         Returns:
-            List of session messages in chronological order
+            List of session messages in chronological order, with long assistant
+            messages optionally compressed with REM LOOKUP hints
         """
         if not settings.postgres.enabled:
             logger.debug("Postgres disabled, returning empty message list")
@@ -335,49 +389,58 @@ class SessionMessageStore:
 
             # Convert Message entities to dict format
             message_dicts = []
-            for msg in messages:
+            for idx, msg in enumerate(messages):
+                role = msg.message_type or "assistant"
                 msg_dict = {
-                    "role": msg.message_type or "assistant",
+                    "role": role,
                     "content": msg.content,
                     "timestamp": msg.created_at.isoformat() if msg.created_at else None,
                 }
 
-                # Check if message was compressed
-                entity_key: str | None = msg.metadata.get("entity_key") if msg.metadata else None
-                if entity_key and len(msg.content) <= self.compressor.min_length_for_compression:
-                    # This is a compressed reference, mark it
-                    msg_dict["_compressed"] = True
-                    msg_dict["_entity_key"] = entity_key
-                    msg_dict["_original_length"] = msg.metadata.get("original_length", 0)
+                # For tool messages, reconstruct tool call metadata
+                if role == "tool" and msg.metadata:
+                    if msg.metadata.get("tool_call_id"):
+                        msg_dict["tool_call_id"] = msg.metadata["tool_call_id"]
+                    if msg.metadata.get("tool_name"):
+                        msg_dict["tool_name"] = msg.metadata["tool_name"]
+                    if msg.metadata.get("tool_arguments"):
+                        msg_dict["tool_arguments"] = msg.metadata["tool_arguments"]
+
+                # Compress long ASSISTANT messages on load (never tool messages)
+                if (
+                    compress_on_load
+                    and role == "assistant"
+                    and len(msg.content) > self.compressor.min_length_for_compression
+                ):
+                    # Generate entity key for REM LOOKUP
+                    entity_key = truncate_key(f"session-{session_id}-msg-{idx}")
+                    msg_dict = self.compressor.compress_message(msg_dict, entity_key)
 
                 message_dicts.append(msg_dict)
 
-            # Decompress if requested
-            if decompress:
-                decompressed_messages = []
-                for message in message_dicts:
-                    if self.compressor.is_compressed(message):
-                        entity_key = self.compressor.get_entity_key(message)
-                        if entity_key:
-                            full_content = await self.retrieve_message(entity_key)
-                            if full_content:
-                                decompressed_messages.append(
-                                    self.compressor.decompress_message(
-                                        message, full_content
-                                    )
-                                )
-                            else:
-                                # Fallback to compressed version if retrieval fails
-                                decompressed_messages.append(message)
-                        else:
-                            decompressed_messages.append(message)
-                    else:
-                        decompressed_messages.append(message)
-
-                return decompressed_messages
-
+            logger.debug(
+                f"Loaded {len(message_dicts)} messages for session {session_id} "
+                f"(compress_on_load={compress_on_load})"
+            )
             return message_dicts
 
         except Exception as e:
             logger.error(f"Failed to load session messages: {e}")
             return []
+
+    async def retrieve_full_message(self, session_id: str, message_index: int) -> str | None:
+        """
+        Retrieve full message content by session and message index (for REM LOOKUP).
+
+        This is used when an agent needs to recover full content from a compressed
+        message that has a REM LOOKUP hint.
+
+        Args:
+            session_id: Session identifier
+            message_index: Index of message in session (from REM LOOKUP key)
+
+        Returns:
+            Full message content or None if not found
+        """
+        entity_key = truncate_key(f"session-{session_id}-msg-{message_index}")
+        return await self.retrieve_message(entity_key)

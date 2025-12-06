@@ -171,6 +171,8 @@ class TestEmbeddingWorker:
 
     async def test_batch_processing(self, postgres_service):
         """Test that worker batches tasks efficiently."""
+        from uuid import uuid4
+
         worker = EmbeddingWorker(
             postgres_service=postgres_service,
             num_workers=1,
@@ -186,7 +188,7 @@ class TestEmbeddingWorker:
             for i in range(5):
                 task = EmbeddingTask(
                     task_id=f"test-{i}",
-                    entity_id=f"entity-{i}",
+                    entity_id=str(uuid4()),
                     table_name="resources",
                     field_name="content",
                     content=f"Test content {i}",

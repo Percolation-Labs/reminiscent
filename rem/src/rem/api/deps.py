@@ -185,8 +185,8 @@ async def get_user_filter(
                 f"User {user.get('email')} attempted to filter by user_id={x_user_id}"
             )
     else:
-        # Anonymous: could use anonymous tracking ID or restrict access
-        # For now, anonymous can't access user-scoped data
+        # Anonymous: use anonymous tracking ID
+        # Note: user_id should come from JWT, not from parameters
         anon_id = getattr(request.state, "anon_id", None)
         if anon_id:
             filters["user_id"] = f"anon:{anon_id}"

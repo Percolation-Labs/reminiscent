@@ -39,6 +39,7 @@ from .shared_session import (
     SharedWithMeResponse,
     SharedWithMeSummary,
 )
+from .subscriber import Subscriber, SubscriberOrigin, SubscriberStatus
 from .user import User, UserTier
 
 __all__ = [
@@ -56,6 +57,9 @@ __all__ = [
     "FeedbackCategory",
     "User",
     "UserTier",
+    "Subscriber",
+    "SubscriberStatus",
+    "SubscriberOrigin",
     "File",
     "Moment",
     "Schema",

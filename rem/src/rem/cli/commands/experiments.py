@@ -125,19 +125,17 @@ def create(
         # Resolve base path: CLI arg > EXPERIMENTS_HOME env var > default "experiments"
         if base_path is None:
             base_path = os.getenv("EXPERIMENTS_HOME", "experiments")
-        # Build dataset reference
+        # Build dataset reference (format auto-detected from file extension)
         if dataset_location == "git":
             dataset_ref = DatasetReference(
                 location=DatasetLocation.GIT,
                 path="ground-truth/dataset.csv",
-                format="csv",
                 description="Ground truth Q&A dataset for evaluation"
             )
         else:  # s3 or hybrid
             dataset_ref = DatasetReference(
                 location=DatasetLocation(dataset_location),
                 path=f"s3://rem-experiments/{name}/datasets/ground_truth.parquet",
-                format="parquet",
                 schema_path="datasets/schema.yaml" if dataset_location == "hybrid" else None,
                 description="Ground truth dataset for evaluation"
             )
@@ -930,58 +928,46 @@ def run(
                 raise click.Abort()
             click.echo("✓ Evaluator credentials validated")
 
-        # Load dataset using Polars
-        import polars as pl
+        # Load dataset using read_dataframe utility (auto-detects format from extension)
+        from rem.utils.files import read_dataframe
 
         click.echo(f"Loading dataset: {list(config.datasets.keys())[0]}")
         dataset_ref = list(config.datasets.values())[0]
 
-        if dataset_ref.location.value == "git":
-            # Load from Git (local filesystem)
-            dataset_path = Path(base_path) / name / dataset_ref.path
-            if not dataset_path.exists():
-                click.echo(f"Error: Dataset not found: {dataset_path}")
-                raise click.Abort()
-
-            if dataset_ref.format == "csv":
-                dataset_df = pl.read_csv(dataset_path)
-            elif dataset_ref.format == "parquet":
-                dataset_df = pl.read_parquet(dataset_path)
-            elif dataset_ref.format == "jsonl":
-                dataset_df = pl.read_ndjson(dataset_path)
-            else:
-                click.echo(f"Error: Format '{dataset_ref.format}' not yet supported")
-                raise click.Abort()
-        elif dataset_ref.location.value in ["s3", "hybrid"]:
-            # Load from S3 using FS provider
-            from rem.services.fs import FS
-            from io import BytesIO
-
-            fs = FS()
-
-            try:
-                if dataset_ref.format == "csv":
-                    content = fs.read(dataset_ref.path)
-                    dataset_df = pl.read_csv(BytesIO(content.encode() if isinstance(content, str) else content))
-                elif dataset_ref.format == "parquet":
-                    content_bytes = fs.read(dataset_ref.path)
-                    dataset_df = pl.read_parquet(BytesIO(content_bytes if isinstance(content_bytes, bytes) else content_bytes.encode()))
-                elif dataset_ref.format == "jsonl":
-                    content = fs.read(dataset_ref.path)
-                    dataset_df = pl.read_ndjson(BytesIO(content.encode() if isinstance(content, str) else content))
-                else:
-                    click.echo(f"Error: Format '{dataset_ref.format}' not yet supported")
+        try:
+            if dataset_ref.location.value == "git":
+                # Load from Git (local filesystem)
+                dataset_path = Path(base_path) / name / dataset_ref.path
+                if not dataset_path.exists():
+                    click.echo(f"Error: Dataset not found: {dataset_path}")
                     raise click.Abort()
 
+                dataset_df = read_dataframe(dataset_path)
+
+            elif dataset_ref.location.value in ["s3", "hybrid"]:
+                # Load from S3 using FS provider
+                from rem.services.fs import FS
+
+                fs = FS()
+                content = fs.read(dataset_ref.path)
+                # Ensure we have bytes
+                if isinstance(content, str):
+                    content = content.encode()
+                dataset_df = read_dataframe(content, filename=dataset_ref.path)
                 click.echo(f"✓ Loaded dataset from S3")
-            except Exception as e:
-                logger.error(f"Failed to load dataset from S3: {e}")
-                click.echo(f"Error: Could not load dataset from S3")
-                click.echo(f"  Path: {dataset_ref.path}")
-                click.echo(f"  Format: {dataset_ref.format}")
+
+            else:
+                click.echo(f"Error: Unknown dataset location: {dataset_ref.location.value}")
                 raise click.Abort()
-        else:
-            click.echo(f"Error: Unknown dataset location: {dataset_ref.location.value}")
+
+        except ValueError as e:
+            # Unsupported format error from read_dataframe
+            click.echo(f"Error: {e}")
+            raise click.Abort()
+        except Exception as e:
+            logger.error(f"Failed to load dataset: {e}")
+            click.echo(f"Error: Could not load dataset")
+            click.echo(f"  Path: {dataset_ref.path}")
             raise click.Abort()
 
         click.echo(f"✓ Loaded dataset: {len(dataset_df)} examples")

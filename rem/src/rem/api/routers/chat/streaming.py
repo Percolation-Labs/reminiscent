@@ -76,6 +76,9 @@ async def stream_openai_response(
     agent_schema: str | None = None,
     # Mutable container to capture trace context (deterministic, not AI-dependent)
     trace_context_out: dict | None = None,
+    # Mutable container to capture tool calls for persistence
+    # Format: list of {"tool_name": str, "tool_id": str, "arguments": dict, "result": any}
+    tool_calls_out: list | None = None,
 ) -> AsyncGenerator[str, None]:
     """
     Stream Pydantic AI agent responses with rich SSE events.
@@ -146,6 +149,9 @@ async def stream_openai_response(
     pending_tool_completions: list[tuple[str, str]] = []
     # Track if metadata was registered via register_metadata tool
     metadata_registered = False
+    # Track pending tool calls with full data for persistence
+    # Maps tool_id -> {"tool_name": str, "tool_id": str, "arguments": dict}
+    pending_tool_data: dict[str, dict] = {}
 
     try:
         # Emit initial progress event
@@ -299,6 +305,13 @@ async def stream_openai_response(
                                     arguments=args_dict
                                 ))
 
+                                # Track tool call data for persistence (especially register_metadata)
+                                pending_tool_data[tool_id] = {
+                                    "tool_name": tool_name,
+                                    "tool_id": tool_id,
+                                    "arguments": args_dict,
+                                }
+
                                 # Update progress
                                 current_step = 2
                                 total_steps = 4  # Added tool execution step
@@ -420,6 +433,15 @@ async def stream_openai_response(
                                         extra=extra_data if extra_data else None,
                                         hidden=False,
                                     ))
+
+                                # Capture tool call with result for persistence
+                                # Special handling for register_metadata - always capture full data
+                                if tool_calls_out is not None and tool_id in pending_tool_data:
+                                    tool_data = pending_tool_data[tool_id]
+                                    tool_data["result"] = result_content
+                                    tool_data["is_metadata"] = is_metadata_event
+                                    tool_calls_out.append(tool_data)
+                                    del pending_tool_data[tool_id]
 
                                 if not is_metadata_event:
                                     # Normal tool completion - emit ToolCallEvent
@@ -728,6 +750,9 @@ async def stream_openai_response_with_save(
     # Accumulate content during streaming
     accumulated_content = []
 
+    # Capture tool calls for persistence (especially register_metadata)
+    tool_calls: list = []
+
     async for chunk in stream_openai_response(
         agent=agent,
         prompt=prompt,
@@ -737,6 +762,7 @@ async def stream_openai_response_with_save(
         session_id=session_id,
         message_id=message_id,
         trace_context_out=trace_context,  # Pass container to capture trace IDs
+        tool_calls_out=tool_calls,  # Capture tool calls for persistence
     ):
         yield chunk
 
@@ -755,28 +781,57 @@ async def stream_openai_response_with_save(
             except (json.JSONDecodeError, KeyError, IndexError):
                 pass  # Skip non-JSON or malformed chunks
 
-    # After streaming completes, save the assistant response
-    if settings.postgres.enabled and session_id and accumulated_content:
-        full_content = "".join(accumulated_content)
+    # After streaming completes, save tool calls and assistant response
+    # Note: All messages stored UNCOMPRESSED. Compression happens on reload.
+    if settings.postgres.enabled and session_id:
         # Get captured trace context from container (deterministically captured inside agent execution)
         captured_trace_id = trace_context.get("trace_id")
         captured_span_id = trace_context.get("span_id")
-        assistant_message = {
-            "id": message_id,  # Use pre-generated ID for consistency with metadata event
-            "role": "assistant",
-            "content": full_content,
-            "timestamp": to_iso(utc_now()),
-            "trace_id": captured_trace_id,
-            "span_id": captured_span_id,
-        }
-        try:
-            store = SessionMessageStore(user_id=user_id or settings.test.effective_user_id)
-            await store.store_session_messages(
-                session_id=session_id,
-                messages=[assistant_message],
-                user_id=user_id,
-                compress=True,  # Compress long assistant responses
-            )
-            logger.debug(f"Saved assistant response {message_id} to session {session_id} ({len(full_content)} chars)")
-        except Exception as e:
-            logger.error(f"Failed to save assistant response: {e}", exc_info=True)
+        timestamp = to_iso(utc_now())
+
+        messages_to_store = []
+
+        # First, store tool call messages (message_type: "tool")
+        for tool_call in tool_calls:
+            tool_message = {
+                "role": "tool",
+                "content": json.dumps(tool_call.get("result", {}), default=str),
+                "timestamp": timestamp,
+                "trace_id": captured_trace_id,
+                "span_id": captured_span_id,
+                # Store tool call details in a way that can be reconstructed
+                "tool_call_id": tool_call.get("tool_id"),
+                "tool_name": tool_call.get("tool_name"),
+                "tool_arguments": tool_call.get("arguments"),
+            }
+            messages_to_store.append(tool_message)
+
+        # Then store assistant text response (if any)
+        if accumulated_content:
+            full_content = "".join(accumulated_content)
+            assistant_message = {
+                "id": message_id,  # Use pre-generated ID for consistency with metadata event
+                "role": "assistant",
+                "content": full_content,
+                "timestamp": timestamp,
+                "trace_id": captured_trace_id,
+                "span_id": captured_span_id,
+            }
+            messages_to_store.append(assistant_message)
+
+        if messages_to_store:
+            try:
+                store = SessionMessageStore(user_id=user_id or settings.test.effective_user_id)
+                await store.store_session_messages(
+                    session_id=session_id,
+                    messages=messages_to_store,
+                    user_id=user_id,
+                    compress=False,  # Store uncompressed; compression happens on reload
+                )
+                logger.debug(
+                    f"Saved {len(tool_calls)} tool calls and "
+                    f"{'assistant response' if accumulated_content else 'no text'} "
+                    f"to session {session_id}"
+                )
+            except Exception as e:
+                logger.error(f"Failed to save session messages: {e}", exc_info=True)

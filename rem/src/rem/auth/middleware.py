@@ -6,6 +6,7 @@ Supports anonymous access with rate limiting when allow_anonymous=True.
 MCP endpoints are always protected unless explicitly disabled.
 
 Design Pattern:
+- Check X-API-Key header first (if API key auth enabled)
 - Check session for user on protected paths
 - Check Bearer token for dev token (non-production only)
 - MCP paths always require authentication (protected service)
@@ -19,6 +20,12 @@ Access Modes (configured in settings.auth):
 - enabled=false: Middleware not loaded, all requests pass through
 - mcp_requires_auth=true (default): MCP always requires login regardless of allow_anonymous
 - mcp_requires_auth=false: MCP follows normal allow_anonymous rules (dev only)
+
+API Key Authentication (configured in settings.api):
+- api_key_enabled=true: Require X-API-Key header for protected endpoints
+- api_key: The secret key to validate against
+- Provides simple programmatic access without OAuth flow
+- X-API-Key header takes precedence over session auth
 
 Dev Token Support (non-production only):
 - GET /api/auth/dev/token returns a Bearer token for test-user
@@ -82,6 +89,39 @@ class AuthMiddleware(BaseHTTPMiddleware):
         self.mcp_requires_auth = mcp_requires_auth
         self.mcp_path = mcp_path
 
+    def _check_api_key(self, request: Request) -> dict | None:
+        """
+        Check for valid X-API-Key header.
+
+        Returns:
+            API key user dict if valid, None otherwise
+        """
+        # Only check if API key auth is enabled
+        if not settings.api.api_key_enabled:
+            return None
+
+        # Check for X-API-Key header
+        api_key = request.headers.get("x-api-key")
+        if not api_key:
+            return None
+
+        # Validate against configured API key
+        if settings.api.api_key and api_key == settings.api.api_key:
+            logger.debug("X-API-Key authenticated")
+            return {
+                "id": "api-key-user",
+                "email": "api@rem.local",
+                "name": "API Key User",
+                "provider": "api-key",
+                "tenant_id": "default",
+                "tier": "pro",  # API key users get full access
+                "roles": ["user"],
+            }
+
+        # Invalid API key
+        logger.warning("Invalid X-API-Key provided")
+        return None
+
     def _check_dev_token(self, request: Request) -> dict | None:
         """
         Check for valid dev token in Authorization header (non-production only).
@@ -105,7 +145,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Verify dev token
         from ..api.routers.dev import verify_dev_token
         if verify_dev_token(token):
-            logger.debug(f"Dev token authenticated as test-user")
+            logger.debug("Dev token authenticated as test-user")
             return {
                 "id": "test-user",
                 "email": "test@rem.local",
@@ -141,6 +181,31 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Skip auth check for excluded paths
         if not is_protected or is_excluded:
             return await call_next(request)
+
+        # Check for X-API-Key header first (if enabled)
+        api_key_user = self._check_api_key(request)
+        if api_key_user:
+            request.state.user = api_key_user
+            request.state.is_anonymous = False
+            return await call_next(request)
+
+        # If API key auth is enabled but no valid key provided, reject immediately
+        if settings.api.api_key_enabled:
+            # Check if X-API-Key header was provided but invalid
+            if request.headers.get("x-api-key"):
+                logger.warning(f"Invalid X-API-Key for: {path}")
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "Invalid API key"},
+                    headers={"WWW-Authenticate": 'ApiKey realm="REM API"'},
+                )
+            # No API key provided when required
+            logger.debug(f"Missing X-API-Key for: {path}")
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "API key required. Include X-API-Key header."},
+                headers={"WWW-Authenticate": 'ApiKey realm="REM API"'},
+            )
 
         # Check for dev token (non-production only)
         dev_user = self._check_dev_token(request)

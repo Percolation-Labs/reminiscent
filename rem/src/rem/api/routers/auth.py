@@ -1,20 +1,68 @@
 """
-OAuth 2.1 Authentication Router.
+Authentication Router.
 
-Leverages Authlib for standards-compliant OAuth/OIDC implementation.
-Minimal custom code - Authlib handles PKCE, token validation, JWKS.
+Supports multiple authentication methods:
+1. Email (passwordless): POST /api/auth/email/send-code, POST /api/auth/email/verify
+2. OAuth (Google, Microsoft): GET /api/auth/{provider}/login, GET /api/auth/{provider}/callback
 
 Endpoints:
+- POST /api/auth/email/send-code     - Send login code to email
+- POST /api/auth/email/verify        - Verify code and create session
 - GET  /api/auth/{provider}/login    - Initiate OAuth flow
 - GET  /api/auth/{provider}/callback - OAuth callback
 - POST /api/auth/logout              - Clear session
 - GET  /api/auth/me                  - Current user info
 
 Supported providers:
+- email: Passwordless email login
 - google: Google OAuth 2.0 / OIDC
 - microsoft: Microsoft Entra ID OIDC
 
-Design Pattern (OAuth 2.1 + PKCE):
+=============================================================================
+Email Authentication Access Control
+=============================================================================
+
+The email auth provider implements a tiered access control system:
+
+Access Control Flow (send-code):
+    User requests login code
+    ├── User exists in database?
+    │   ├── Yes → Check user.tier
+    │   │   ├── tier == BLOCKED → Reject "Account is blocked"
+    │   │   └── tier != BLOCKED → Allow (send code, existing users grandfathered)
+    │   └── No (new user) → Check EMAIL__TRUSTED_EMAIL_DOMAINS
+    │       ├── Setting configured → domain in trusted list?
+    │       │   ├── Yes → Create user & send code
+    │       │   └── No → Reject "Email domain not allowed for signup"
+    │       └── Not configured (empty) → Create user & send code (no restrictions)
+
+Key Behaviors:
+- Existing users: Always allowed to login (unless tier=BLOCKED)
+- New users: Must have email from trusted domain (if EMAIL__TRUSTED_EMAIL_DOMAINS is set)
+- No restrictions: Leave EMAIL__TRUSTED_EMAIL_DOMAINS empty to allow all domains
+
+User Tiers (models.entities.UserTier):
+- BLOCKED: Cannot login (rejected at send-code)
+- ANONYMOUS: Rate-limited anonymous access
+- FREE: Standard free tier
+- BASIC/PRO: Paid tiers with additional features
+
+Configuration:
+    # Allow only specific domains for new signups
+    EMAIL__TRUSTED_EMAIL_DOMAINS=siggymd.ai,example.com
+
+    # Allow all domains (no restrictions)
+    EMAIL__TRUSTED_EMAIL_DOMAINS=
+
+Example blocking a user:
+    user = await user_repo.get_by_id(user_id, tenant_id="default")
+    user.tier = UserTier.BLOCKED
+    await user_repo.upsert(user)
+
+=============================================================================
+OAuth Design Pattern (OAuth 2.1 + PKCE)
+=============================================================================
+
 1. User clicks "Login with Google"
 2. /login generates state + PKCE code_verifier
 3. Store code_verifier in session
@@ -37,6 +85,7 @@ Environment variables:
     AUTH__MICROSOFT__CLIENT_ID=<microsoft-client-id>
     AUTH__MICROSOFT__CLIENT_SECRET=<microsoft-client-secret>
     AUTH__MICROSOFT__TENANT=common
+    EMAIL__TRUSTED_EMAIL_DOMAINS=example.com  # Optional: restrict new signups
 
 References:
 - Authlib: https://docs.authlib.org/en/latest/
@@ -46,11 +95,13 @@ References:
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from authlib.integrations.starlette_client import OAuth
+from pydantic import BaseModel, EmailStr
 from loguru import logger
 
 from ...settings import settings
 from ...services.postgres.service import PostgresService
 from ...services.user_service import UserService
+from ...auth.providers.email import EmailAuthProvider
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -85,6 +136,159 @@ if settings.auth.microsoft.client_id:
         },
     )
     logger.info(f"Microsoft OAuth provider registered (tenant: {tenant})")
+
+
+# =============================================================================
+# Email Authentication Endpoints
+# =============================================================================
+
+
+class EmailSendCodeRequest(BaseModel):
+    """Request to send login code."""
+    email: EmailStr
+
+
+class EmailVerifyRequest(BaseModel):
+    """Request to verify login code."""
+    email: EmailStr
+    code: str
+
+
+@router.post("/email/send-code")
+async def send_email_code(request: Request, body: EmailSendCodeRequest):
+    """
+    Send a login code to an email address.
+
+    Creates user if not exists (using deterministic UUID from email).
+    Stores code in user metadata with expiry.
+
+    Args:
+        request: FastAPI request
+        body: EmailSendCodeRequest with email
+
+    Returns:
+        Success status and message
+    """
+    if not settings.email.is_configured:
+        raise HTTPException(
+            status_code=501,
+            detail="Email authentication is not configured"
+        )
+
+    # Get database connection
+    if not settings.postgres.enabled:
+        raise HTTPException(
+            status_code=501,
+            detail="Database is required for email authentication"
+        )
+
+    db = PostgresService()
+    try:
+        await db.connect()
+
+        # Initialize email auth provider
+        email_auth = EmailAuthProvider()
+
+        # Send code
+        result = await email_auth.send_code(
+            email=body.email,
+            db=db,
+        )
+
+        if result.success:
+            return {
+                "success": True,
+                "message": result.message,
+                "email": result.email,
+            }
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=result.message or result.error
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error sending login code: {e}")
+        raise HTTPException(status_code=500, detail="Failed to send login code")
+    finally:
+        await db.disconnect()
+
+
+@router.post("/email/verify")
+async def verify_email_code(request: Request, body: EmailVerifyRequest):
+    """
+    Verify login code and create session.
+
+    Args:
+        request: FastAPI request
+        body: EmailVerifyRequest with email and code
+
+    Returns:
+        Success status with user info
+    """
+    if not settings.email.is_configured:
+        raise HTTPException(
+            status_code=501,
+            detail="Email authentication is not configured"
+        )
+
+    if not settings.postgres.enabled:
+        raise HTTPException(
+            status_code=501,
+            detail="Database is required for email authentication"
+        )
+
+    db = PostgresService()
+    try:
+        await db.connect()
+
+        # Initialize email auth provider
+        email_auth = EmailAuthProvider()
+
+        # Verify code
+        result = await email_auth.verify_code(
+            email=body.email,
+            code=body.code,
+            db=db,
+        )
+
+        if not result.success:
+            raise HTTPException(
+                status_code=400,
+                detail=result.message or result.error
+            )
+
+        # Create session - compatible with OAuth session format
+        user_dict = email_auth.get_user_dict(
+            email=result.email,
+            user_id=result.user_id,
+        )
+
+        # Store user in session
+        request.session["user"] = user_dict
+
+        logger.info(f"User authenticated via email: {result.email}")
+
+        return {
+            "success": True,
+            "message": result.message,
+            "user": user_dict,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error verifying login code: {e}")
+        raise HTTPException(status_code=500, detail="Failed to verify login code")
+    finally:
+        await db.disconnect()
+
+
+# =============================================================================
+# OAuth Authentication Endpoints
+# =============================================================================
 
 
 @router.get("/{provider}/login")

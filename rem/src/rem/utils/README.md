@@ -4,6 +4,7 @@
 
 1. [SQL Types](#sql-types-sql_typespy) - Pydantic to PostgreSQL type mapping
 2. [Embeddings](#embeddings-embeddingspy) - Vector embeddings generation
+3. [Files](#files-filespy) - File utilities and DataFrame I/O
 
 ## SQL Types (`sql_types.py`)
 
@@ -581,3 +582,47 @@ This will demonstrate:
 - `sql_types.py` - Use `embedding_provider` in json_schema_extra for TEXT fields
 - OpenAI Embeddings API: https://platform.openai.com/docs/api-reference/embeddings
 - pgvector Documentation: https://github.com/pgvector/pgvector
+
+---
+
+## Files (`files.py`)
+
+File utilities including temporary file handling and DataFrame I/O with automatic format detection.
+
+### DataFrame I/O
+
+Read and write DataFrames with format auto-detected from file extension:
+
+```python
+from rem.utils.files import read_dataframe, write_dataframe
+
+# Read - format inferred from extension
+df = read_dataframe("data.csv")
+df = read_dataframe("data.parquet")
+df = read_dataframe("data.xlsx")
+
+# Read from bytes (e.g., from S3)
+df = read_dataframe(content_bytes, filename="data.csv")
+
+# Write - format inferred from extension
+write_dataframe(df, "output.parquet")
+```
+
+**Supported formats**: `.csv`, `.tsv`, `.parquet`, `.json`, `.jsonl`, `.avro`, `.xlsx`, `.xls`, `.ods`, `.ipc`, `.arrow`, `.feather`
+
+Note: Some formats require optional dependencies (e.g., `fastexcel` for Excel).
+
+### Temporary File Utilities
+
+```python
+from rem.utils.files import temp_file_from_bytes, temp_directory
+
+# Create temp file from bytes, auto-cleanup
+with temp_file_from_bytes(pdf_bytes, suffix=".pdf") as tmp_path:
+    result = process_pdf(tmp_path)
+
+# Create temp directory, auto-cleanup
+with temp_directory() as tmp_dir:
+    # Work with files in tmp_dir
+    pass
+```

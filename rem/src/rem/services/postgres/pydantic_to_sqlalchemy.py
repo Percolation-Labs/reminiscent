@@ -494,12 +494,13 @@ def _build_embeddings_table(base_table_name: str, metadata: MetaData) -> Table:
     ]
 
     # Create table with unique constraint
-    # Note: constraint name matches PostgreSQL's auto-generated naming convention
+    # Truncate constraint name to fit PostgreSQL's 63-char identifier limit
+    constraint_name = f"uq_{base_table_name[:30]}_emb_entity_field_prov"
     table = Table(
         embeddings_table_name,
         metadata,
         *columns,
-        UniqueConstraint("entity_id", "field_name", "provider", name=f"{embeddings_table_name}_entity_id_field_name_provider_key"),
+        UniqueConstraint("entity_id", "field_name", "provider", name=constraint_name),
     )
 
     # Add indexes (matching register_type output)
@@ -507,6 +508,30 @@ def _build_embeddings_table(base_table_name: str, metadata: MetaData) -> Table:
     Index(f"idx_{embeddings_table_name}_field_provider", table.c.field_name, table.c.provider)
 
     return table
+
+
+def _import_model_modules() -> list[str]:
+    """
+    Import modules specified in MODELS__IMPORT_MODULES setting.
+
+    This ensures downstream models decorated with @rem.register_model
+    are registered before schema generation.
+
+    Returns:
+        List of successfully imported module names
+    """
+    import importlib
+    from ...settings import settings
+
+    imported = []
+    for module_name in settings.models.module_list:
+        try:
+            importlib.import_module(module_name)
+            imported.append(module_name)
+            logger.debug(f"Imported model module: {module_name}")
+        except ImportError as e:
+            logger.warning(f"Failed to import model module '{module_name}': {e}")
+    return imported
 
 
 def get_target_metadata() -> MetaData:
@@ -519,9 +544,19 @@ def get_target_metadata() -> MetaData:
     - Core REM models (Resource, Message, User, etc.)
     - User-registered models via @rem.register_model decorator
 
+    Before building metadata, imports model modules from settings to ensure
+    downstream models are registered. This supports:
+    - Auto-detection of ./models directory (convention)
+    - MODELS__IMPORT_MODULES env var (explicit configuration)
+
     Returns:
         SQLAlchemy MetaData object representing all registered Pydantic models
     """
+    # Import model modules first (auto-detects ./models or uses MODELS__IMPORT_MODULES)
+    imported = _import_model_modules()
+    if imported:
+        logger.info(f"Imported model modules: {imported}")
+
     # build_sqlalchemy_metadata_from_pydantic uses the registry internally,
     # so no directory path is needed (the parameter is kept for backwards compat)
     return build_sqlalchemy_metadata_from_pydantic()

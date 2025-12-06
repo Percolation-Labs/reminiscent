@@ -22,6 +22,7 @@ from ..core import CoreModel
 class UserTier(str, Enum):
     """User subscription tier for feature gating."""
 
+    BLOCKED = "blocked"  # User is blocked from logging in
     ANONYMOUS = "anonymous"
     FREE = "free"
     BASIC = "basic"

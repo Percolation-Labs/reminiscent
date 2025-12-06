@@ -688,6 +688,44 @@ from rem.api.main import app  # Use REM's FastAPI app
 # Or build your own app using rem.services
 ```
 
+## Adding Models & Migrations
+
+Quick workflow for adding new database models:
+
+1. **Create a model** in `models/__init__.py` (or a submodule):
+   ```python
+   import rem
+   from rem.models.core import CoreModel
+
+   @rem.register_model
+   class MyEntity(CoreModel):
+       name: str
+       description: str  # Auto-embedded (common field name)
+   ```
+
+2. **Check for schema drift** - REM auto-detects `./models` directory:
+   ```bash
+   rem db diff              # Show pending changes (additive only)
+   rem db diff --strategy full  # Include destructive changes
+   ```
+
+3. **Generate migration** (optional - for version-controlled SQL):
+   ```bash
+   rem db diff --generate   # Creates numbered .sql file
+   ```
+
+4. **Apply changes**:
+   ```bash
+   rem db migrate           # Apply all pending migrations
+   ```
+
+**Key points:**
+- Models in `./models/` are auto-discovered (must have `__init__.py`)
+- Or set `MODELS__IMPORT_MODULES=myapp.models` for custom paths
+- `CoreModel` provides: `id`, `tenant_id`, `user_id`, `created_at`, `updated_at`, `deleted_at`, `graph_edges`, `metadata`, `tags`
+- Fields named `content`, `description`, `summary`, `text`, `body`, `message`, `notes` get embeddings by default
+- Use `Field(json_schema_extra={"embed": True})` to embed other fields
+
 ## Configuration
 
 Environment variables:
