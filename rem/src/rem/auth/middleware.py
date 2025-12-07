@@ -7,14 +7,22 @@ Anonymous access with rate limiting when allow_anonymous=True.
 MCP endpoints are always protected unless explicitly disabled.
 
 Design Pattern:
-- Check X-API-Key header first (if API key auth enabled)
-- Check JWT token in Authorization header (Bearer token)
-- Check dev token (non-production only, starts with "dev_")
-- Check session for user on protected paths
+- API Key (X-API-Key): Access control guardrail, NOT user identity
+- JWT (Authorization: Bearer): Primary method for user identity
+- Dev token: Non-production testing (starts with "dev_")
+- Session: Backward compatibility for browser-based auth
 - MCP paths always require authentication (protected service)
-- If allow_anonymous=True: Allow unauthenticated requests (marked as ANONYMOUS tier)
-- If allow_anonymous=False: Return 401 for API calls, redirect browsers to login
-- Exclude auth endpoints and public paths
+
+Authentication Flow:
+1. If API key enabled: Validate X-API-Key header (access gate)
+2. Check JWT token for user identity (primary)
+3. Check dev token for testing (non-production only)
+4. Check session for user (backward compatibility)
+5. If allow_anonymous=True: Allow as anonymous (rate-limited)
+6. If allow_anonymous=False: Return 401 / redirect to login
+
+IMPORTANT: API key validates ACCESS, JWT identifies USER.
+Both can be required: API key for access + JWT for user identity.
 
 Access Modes (configured in settings.auth):
 - enabled=true, allow_anonymous=true: Auth available, anonymous gets rate-limited access
@@ -24,10 +32,9 @@ Access Modes (configured in settings.auth):
 - mcp_requires_auth=false: MCP follows normal allow_anonymous rules (dev only)
 
 API Key Authentication (configured in settings.api):
-- api_key_enabled=true: Require X-API-Key header for protected endpoints
+- api_key_enabled=true: Require X-API-Key header for access
 - api_key: The secret key to validate against
-- Provides simple programmatic access without OAuth flow
-- X-API-Key header takes precedence over session auth
+- API key is an ACCESS GATE, not user identity - JWT still needed for user
 
 Dev Token Support (non-production only):
 - GET /api/auth/dev/token returns a Bearer token for test-user
@@ -212,32 +219,28 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if not is_protected or is_excluded:
             return await call_next(request)
 
-        # Check for X-API-Key header first (if enabled)
-        api_key_user = self._check_api_key(request)
-        if api_key_user:
-            request.state.user = api_key_user
-            request.state.is_anonymous = False
-            return await call_next(request)
-
-        # If API key auth is enabled but no valid key provided, reject immediately
+        # API key validation (access control, not user identity)
+        # API key is a guardrail for access - JWT identifies the actual user
         if settings.api.api_key_enabled:
-            # Check if X-API-Key header was provided but invalid
-            if request.headers.get("x-api-key"):
+            api_key = request.headers.get("x-api-key")
+            if not api_key:
+                logger.debug(f"Missing X-API-Key for: {path}")
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "API key required. Include X-API-Key header."},
+                    headers={"WWW-Authenticate": 'ApiKey realm="REM API"'},
+                )
+            if api_key != settings.api.api_key:
                 logger.warning(f"Invalid X-API-Key for: {path}")
                 return JSONResponse(
                     status_code=401,
                     content={"detail": "Invalid API key"},
                     headers={"WWW-Authenticate": 'ApiKey realm="REM API"'},
                 )
-            # No API key provided when required
-            logger.debug(f"Missing X-API-Key for: {path}")
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "API key required. Include X-API-Key header."},
-                headers={"WWW-Authenticate": 'ApiKey realm="REM API"'},
-            )
+            logger.debug("X-API-Key validated for access")
+            # API key valid - continue to check JWT for user identity
 
-        # Check for JWT token in Authorization header
+        # Check for JWT token in Authorization header (primary user identity)
         jwt_user = self._check_jwt_token(request)
         if jwt_user:
             request.state.user = jwt_user
