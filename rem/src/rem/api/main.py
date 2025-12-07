@@ -149,19 +149,38 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         client_host = request.client.host if request.client else "unknown"
         user_agent = request.headers.get('user-agent', 'unknown')[:100]
 
+        # Extract auth info for logging (first 8 chars of token for debugging)
+        auth_header = request.headers.get('authorization', '')
+        auth_preview = ""
+        if auth_header.startswith('Bearer '):
+            token = auth_header[7:]
+            auth_preview = f"Bearer {token[:8]}..." if len(token) > 8 else f"Bearer {token}"
+
         # Process request
         response = await call_next(request)
+
+        # Extract user info set by auth middleware (after processing)
+        user = getattr(request.state, "user", None)
+        user_id = user.get("id", "none")[:12] if user else "anon"
+        user_email = user.get("email", "") if user else ""
 
         # Determine log level based on path AND response status
         duration_ms = (time.time() - start_time) * 1000
         use_debug = self._should_log_at_debug(path, response.status_code)
         log_fn = logger.debug if use_debug else logger.info
 
-        # Log request and response together
+        # Build user info string
+        user_info = f"user={user_id}"
+        if user_email:
+            user_info += f" ({user_email})"
+        if auth_preview:
+            user_info += f" | auth={auth_preview}"
+
+        # Log request and response together with auth info
         log_fn(
             f"→ REQUEST: {request.method} {path} | "
             f"Client: {client_host} | "
-            f"User-Agent: {user_agent}"
+            f"{user_info}"
         )
         log_fn(
             f"← RESPONSE: {request.method} {path} | "

@@ -330,8 +330,8 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
     - Useful for A/B testing, model comparison, and feedback collection
     """
     # Load agent schema: use header value from context or default
-    # Extract AgentContext first to get schema name
-    temp_context = AgentContext.from_headers(dict(request.headers))
+    # Extract AgentContext from request (gets user_id from JWT token)
+    temp_context = AgentContext.from_request(request)
     schema_name = temp_context.agent_schema_uri or DEFAULT_AGENT_SCHEMA
 
     # Resolve model: use body.model if provided, otherwise settings default
@@ -350,6 +350,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
         context, messages = await ContextBuilder.build_from_headers(
             headers=dict(request.headers),
             new_messages=new_messages,
+            user_id=temp_context.user_id,  # From JWT token (source of truth)
         )
 
         # Ensure session exists with metadata and eval mode if applicable
@@ -509,6 +510,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
     context, messages = await ContextBuilder.build_from_headers(
         headers=dict(request.headers),
         new_messages=new_messages,
+        user_id=temp_context.user_id,  # From JWT token (source of truth)
     )
 
     logger.info(f"Built context with {len(messages)} total messages (includes history + user context)")

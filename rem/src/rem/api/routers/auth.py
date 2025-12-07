@@ -102,6 +102,7 @@ from ...settings import settings
 from ...services.postgres.service import PostgresService
 from ...services.user_service import UserService
 from ...auth.providers.email import EmailAuthProvider
+from ...auth.jwt import JWTService, get_jwt_service
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -219,14 +220,14 @@ async def send_email_code(request: Request, body: EmailSendCodeRequest):
 @router.post("/email/verify")
 async def verify_email_code(request: Request, body: EmailVerifyRequest):
     """
-    Verify login code and create session.
+    Verify login code and create session with JWT tokens.
 
     Args:
         request: FastAPI request
         body: EmailVerifyRequest with email and code
 
     Returns:
-        Success status with user info
+        Success status with user info and JWT tokens
     """
     if not settings.email.is_configured:
         raise HTTPException(
@@ -266,7 +267,25 @@ async def verify_email_code(request: Request, body: EmailVerifyRequest):
             user_id=result.user_id,
         )
 
-        # Store user in session
+        # Fetch actual user data from database to get role/tier
+        user_service = UserService(db)
+        try:
+            user_entity = await user_service.get_user_by_id(result.user_id)
+            if user_entity:
+                # Override defaults with actual database values
+                user_dict["role"] = user_entity.role or "user"
+                user_dict["roles"] = [user_entity.role] if user_entity.role else ["user"]
+                user_dict["tier"] = user_entity.tier.value if user_entity.tier else "free"
+                user_dict["name"] = user_entity.name or user_dict["name"]
+        except Exception as e:
+            logger.warning(f"Could not fetch user details: {e}")
+            # Continue with defaults from get_user_dict
+
+        # Generate JWT tokens
+        jwt_service = get_jwt_service()
+        tokens = jwt_service.create_tokens(user_dict)
+
+        # Store user in session (for backward compatibility)
         request.session["user"] = user_dict
 
         logger.info(f"User authenticated via email: {result.email}")
@@ -275,6 +294,11 @@ async def verify_email_code(request: Request, body: EmailVerifyRequest):
             "success": True,
             "message": result.message,
             "user": user_dict,
+            # JWT tokens for stateless auth
+            "access_token": tokens["access_token"],
+            "refresh_token": tokens["refresh_token"],
+            "token_type": tokens["token_type"],
+            "expires_in": tokens["expires_in"],
         }
 
     except HTTPException:
@@ -472,7 +496,7 @@ async def logout(request: Request):
 @router.get("/me")
 async def me(request: Request):
     """
-    Get current user information from session.
+    Get current user information from session or JWT.
 
     Args:
         request: FastAPI request
@@ -480,11 +504,84 @@ async def me(request: Request):
     Returns:
         User information or 401 if not authenticated
     """
+    # First check for JWT in Authorization header
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+        jwt_service = get_jwt_service()
+        user = jwt_service.verify_token(token)
+        if user:
+            return user
+
+    # Fall back to session
     user = request.session.get("user")
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     return user
+
+
+# =============================================================================
+# JWT Token Endpoints
+# =============================================================================
+
+
+class TokenRefreshRequest(BaseModel):
+    """Request to refresh access token."""
+    refresh_token: str
+
+
+@router.post("/token/refresh")
+async def refresh_token(body: TokenRefreshRequest):
+    """
+    Refresh access token using refresh token.
+
+    Args:
+        body: TokenRefreshRequest with refresh_token
+
+    Returns:
+        New access token or 401 if refresh token is invalid
+    """
+    jwt_service = get_jwt_service()
+    result = jwt_service.refresh_access_token(body.refresh_token)
+
+    if not result:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired refresh token"
+        )
+
+    return result
+
+
+@router.post("/token/verify")
+async def verify_token(request: Request):
+    """
+    Verify an access token is valid.
+
+    Pass the token in the Authorization header: Bearer <token>
+
+    Returns:
+        User info if valid, 401 if invalid
+    """
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(
+            status_code=401,
+            detail="Missing Authorization header"
+        )
+
+    token = auth_header[7:]
+    jwt_service = get_jwt_service()
+    user = jwt_service.verify_token(token)
+
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired token"
+        )
+
+    return {"valid": True, "user": user}
 
 
 # =============================================================================
@@ -554,4 +651,44 @@ async def get_dev_token(request: Request):
         },
         "usage": f'curl -H "Authorization: Bearer {token}" http://localhost:8000/api/v1/...',
         "warning": "This token is for development/testing only and will not work in production.",
+    }
+
+
+@router.get("/dev/mock-code/{email}")
+async def get_mock_code(email: str, request: Request):
+    """
+    Get the mock login code for testing (non-production only).
+
+    This endpoint retrieves the code that was "sent" via email in mock mode.
+    Use this for automated testing without real email delivery.
+
+    Usage:
+        1. POST /api/auth/email/send-code with email
+        2. GET /api/auth/dev/mock-code/{email} to retrieve the code
+        3. POST /api/auth/email/verify with email and code
+
+    Returns:
+        401 if in production environment
+        404 if no code found for the email
+        The code and email otherwise
+    """
+    if settings.environment == "production":
+        raise HTTPException(
+            status_code=401,
+            detail="Mock codes are not available in production"
+        )
+
+    from ...services.email import EmailService
+
+    code = EmailService.get_mock_code(email)
+    if not code:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No mock code found for {email}. Send a code first."
+        )
+
+    return {
+        "email": email,
+        "code": code,
+        "warning": "This endpoint is for testing only and will not work in production.",
     }

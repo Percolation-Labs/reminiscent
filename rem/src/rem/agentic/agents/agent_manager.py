@@ -128,8 +128,9 @@ async def save_agent(
     )
 
     # Create Schema entity (user-scoped)
+    # Note: tenant_id defaults to "default" for anonymous users
     schema_entity = Schema(
-        tenant_id=user_id,
+        tenant_id=user_id or "default",
         user_id=user_id,
         name=name,
         spec=spec,

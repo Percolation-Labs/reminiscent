@@ -134,7 +134,6 @@ async def list_messages(
     ),
     limit: int = Query(default=50, ge=1, le=100, description="Max results to return"),
     offset: int = Query(default=0, ge=0, description="Offset for pagination"),
-    x_tenant_id: str = Header(alias="X-Tenant-Id", default="default"),
 ) -> MessageListResponse:
     """
     List messages with optional filters.
@@ -158,21 +157,31 @@ async def list_messages(
 
     repo = Repository(Message, table_name="messages")
 
+    # Get current user for logging
+    current_user = get_current_user(request)
+    jwt_user_id = current_user.get("id") if current_user else None
+
     # If mine=true, force filter to current user's ID from JWT
     effective_user_id = user_id
     if mine:
-        current_user = get_current_user(request)
         if current_user:
             effective_user_id = current_user.get("id")
 
     # Build user-scoped filters (admin can see all, regular users see only their own)
-    filters = await get_user_filter(request, x_user_id=effective_user_id, x_tenant_id=x_tenant_id)
+    filters = await get_user_filter(request, x_user_id=effective_user_id)
 
     # Apply optional filters
     if session_id:
         filters["session_id"] = session_id
     if message_type:
         filters["message_type"] = message_type
+
+    # Log the query parameters for debugging
+    logger.debug(
+        f"[messages] Query: session_id={session_id} | "
+        f"jwt_user_id={jwt_user_id} | "
+        f"filters={filters}"
+    )
 
     # For date filtering, we need custom SQL (not supported by basic Repository)
     # For now, fetch all matching base filters and filter in Python
@@ -206,6 +215,12 @@ async def list_messages(
     # Get total count for pagination info
     total = await repo.count(filters)
 
+    # Log result count
+    logger.debug(
+        f"[messages] Result: returned={len(messages)} | total={total} | "
+        f"session_id={session_id}"
+    )
+
     return MessageListResponse(data=messages, total=total, has_more=has_more)
 
 
@@ -213,7 +228,6 @@ async def list_messages(
 async def get_message(
     request: Request,
     message_id: str,
-    x_tenant_id: str = Header(alias="X-Tenant-Id", default="default"),
 ) -> Message:
     """
     Get a specific message by ID.
@@ -236,7 +250,7 @@ async def get_message(
         raise HTTPException(status_code=503, detail="Database not enabled")
 
     repo = Repository(Message, table_name="messages")
-    message = await repo.get_by_id(message_id, x_tenant_id)
+    message = await repo.get_by_id(message_id)
 
     if not message:
         raise HTTPException(status_code=404, detail=f"Message '{message_id}' not found")
@@ -263,7 +277,6 @@ async def list_sessions(
     mode: SessionMode | None = Query(default=None, description="Filter by session mode"),
     page: int = Query(default=1, ge=1, description="Page number (1-indexed)"),
     page_size: int = Query(default=50, ge=1, le=100, description="Number of results per page"),
-    x_tenant_id: str = Header(alias="X-Tenant-Id", default="default"),
 ) -> SessionsQueryResponse:
     """
     List sessions with optional filters and page-based pagination.
@@ -288,7 +301,7 @@ async def list_sessions(
     repo = Repository(Session, table_name="sessions")
 
     # Build user-scoped filters (admin can see all, regular users see only their own)
-    filters = await get_user_filter(request, x_user_id=user_id, x_tenant_id=x_tenant_id)
+    filters = await get_user_filter(request, x_user_id=user_id)
     if mode:
         filters["mode"] = mode.value
 
@@ -319,7 +332,6 @@ async def create_session(
     request_body: SessionCreateRequest,
     user: dict = Depends(require_admin),
     x_user_id: str = Header(alias="X-User-Id", default="default"),
-    x_tenant_id: str = Header(alias="X-Tenant-Id", default="default"),
 ) -> Session:
     """
     Create a new session.
@@ -334,7 +346,6 @@ async def create_session(
 
     Headers:
     - X-User-Id: User identifier (owner of the session)
-    - X-Tenant-Id: Tenant identifier
 
     Returns:
         Created session object
@@ -354,7 +365,7 @@ async def create_session(
         prompt=request_body.prompt,
         agent_schema_uri=request_body.agent_schema_uri,
         user_id=effective_user_id,
-        tenant_id=x_tenant_id,
+        tenant_id="default",  # tenant_id not used for filtering, set to default
     )
 
     repo = Repository(Session, table_name="sessions")
@@ -372,7 +383,6 @@ async def create_session(
 async def get_session(
     request: Request,
     session_id: str,
-    x_tenant_id: str = Header(alias="X-Tenant-Id", default="default"),
 ) -> Session:
     """
     Get a specific session by ID.
@@ -395,11 +405,11 @@ async def get_session(
         raise HTTPException(status_code=503, detail="Database not enabled")
 
     repo = Repository(Session, table_name="sessions")
-    session = await repo.get_by_id(session_id, x_tenant_id)
+    session = await repo.get_by_id(session_id)
 
     if not session:
         # Try finding by name
-        sessions = await repo.find({"name": session_id, "tenant_id": x_tenant_id}, limit=1)
+        sessions = await repo.find({"name": session_id}, limit=1)
         if sessions:
             session = sessions[0]
         else:
@@ -420,7 +430,6 @@ async def update_session(
     request: Request,
     session_id: str,
     request_body: SessionUpdateRequest,
-    x_tenant_id: str = Header(alias="X-Tenant-Id", default="default"),
 ) -> Session:
     """
     Update an existing session.
@@ -450,7 +459,7 @@ async def update_session(
         raise HTTPException(status_code=503, detail="Database not enabled")
 
     repo = Repository(Session, table_name="sessions")
-    session = await repo.get_by_id(session_id, x_tenant_id)
+    session = await repo.get_by_id(session_id)
 
     if not session:
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")

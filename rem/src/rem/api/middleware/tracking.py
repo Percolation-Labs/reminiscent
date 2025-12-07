@@ -102,14 +102,14 @@ class AnonymousTrackingMiddleware(BaseHTTPMiddleware):
             # Tenant ID from header or default
             tenant_id = request.headers.get("X-Tenant-Id", "default")
 
-        # 4. Rate Limiting
-        if settings.postgres.enabled:
+        # 4. Rate Limiting (skip if disabled via settings)
+        if settings.postgres.enabled and settings.api.rate_limit_enabled:
             is_allowed, current, limit = await self.rate_limiter.check_rate_limit(
                 tenant_id=tenant_id,
                 identifier=identifier,
                 tier=tier
             )
-            
+
             if not is_allowed:
                 return JSONResponse(
                     status_code=429,
@@ -141,8 +141,8 @@ class AnonymousTrackingMiddleware(BaseHTTPMiddleware):
                 secure=settings.environment == "production"
             )
             
-        # Add Rate Limit headers
-        if settings.postgres.enabled and 'limit' in locals():
+        # Add Rate Limit headers (only if rate limiting is enabled)
+        if settings.postgres.enabled and settings.api.rate_limit_enabled and 'limit' in locals():
             response.headers["X-RateLimit-Limit"] = str(limit)
             response.headers["X-RateLimit-Remaining"] = str(max(0, limit - current))
             

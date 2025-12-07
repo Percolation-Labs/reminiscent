@@ -2,11 +2,15 @@
 Agent execution context and configuration.
 
 Design pattern for session context that can be constructed from:
+- FastAPI Request object (preferred - extracts user from JWT via request.state)
 - HTTP headers (X-User-Id, X-Session-Id, X-Model-Name, X-Is-Eval, etc.)
 - Direct instantiation for testing/CLI
 
+User ID Sources (in priority order):
+1. request.state.user.id - From JWT token validated by auth middleware (SECURE)
+2. X-User-Id header - Fallback for backwards compatibility (less secure)
+
 Headers Mapping:
-    X-User-Id        → context.user_id
     X-Tenant-Id      → context.tenant_id (default: "default")
     X-Session-Id     → context.session_id
     X-Agent-Schema   → context.agent_schema_uri (default: "rem")
@@ -129,12 +133,86 @@ class AgentContext(BaseModel):
         return None
 
     @classmethod
+    def from_request(cls, request: "Request") -> "AgentContext":
+        """
+        Construct AgentContext from a FastAPI Request object.
+
+        This is the PREFERRED method for API endpoints. It extracts user_id
+        from the authenticated user in request.state (set by auth middleware
+        from JWT token), which is more secure than trusting X-User-Id header.
+
+        Priority for user_id:
+        1. request.state.user.id - From validated JWT token (SECURE)
+        2. X-User-Id header - Fallback for backwards compatibility
+
+        Args:
+            request: FastAPI Request object
+
+        Returns:
+            AgentContext with user from JWT and other values from headers
+
+        Example:
+            @app.post("/api/v1/chat/completions")
+            async def chat(request: Request, body: ChatRequest):
+                context = AgentContext.from_request(request)
+                # context.user_id is from JWT, not header
+        """
+        from typing import TYPE_CHECKING
+        if TYPE_CHECKING:
+            from starlette.requests import Request
+
+        # Get headers dict
+        headers = dict(request.headers)
+        normalized = {k.lower(): v for k, v in headers.items()}
+
+        # Extract user_id from authenticated user (JWT) - this is the source of truth
+        user_id = None
+        tenant_id = "default"
+
+        if hasattr(request, "state"):
+            user = getattr(request.state, "user", None)
+            if user and isinstance(user, dict):
+                user_id = user.get("id")
+                # Also get tenant_id from authenticated user if available
+                if user.get("tenant_id"):
+                    tenant_id = user.get("tenant_id")
+                if user_id:
+                    logger.debug(f"User ID from JWT: {user_id}")
+
+        # Fallback to X-User-Id header if no authenticated user
+        if not user_id:
+            user_id = normalized.get("x-user-id")
+            if user_id:
+                logger.debug(f"User ID from X-User-Id header (fallback): {user_id}")
+
+        # Override tenant_id from header if provided
+        header_tenant = normalized.get("x-tenant-id")
+        if header_tenant:
+            tenant_id = header_tenant
+
+        # Parse X-Is-Eval header
+        is_eval_str = normalized.get("x-is-eval", "").lower()
+        is_eval = is_eval_str in ("true", "1", "yes")
+
+        return cls(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            session_id=normalized.get("x-session-id"),
+            default_model=normalized.get("x-model-name") or settings.llm.default_model,
+            agent_schema_uri=normalized.get("x-agent-schema"),
+            is_eval=is_eval,
+        )
+
+    @classmethod
     def from_headers(cls, headers: dict[str, str]) -> "AgentContext":
         """
-        Construct AgentContext from HTTP headers.
+        Construct AgentContext from HTTP headers dict.
+
+        NOTE: Prefer from_request() for API endpoints as it extracts user_id
+        from the validated JWT token in request.state, which is more secure.
 
         Reads standard headers:
-        - X-User-Id: User identifier
+        - X-User-Id: User identifier (fallback - prefer JWT)
         - X-Tenant-Id: Tenant identifier
         - X-Session-Id: Session identifier
         - X-Model-Name: Model override

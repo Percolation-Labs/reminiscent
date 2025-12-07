@@ -141,13 +141,13 @@ class Repository(Generic[T]):
         # Return single item or list to match input type
         return records_list[0] if is_single else records_list
 
-    async def get_by_id(self, record_id: str, tenant_id: str) -> T | None:
+    async def get_by_id(self, record_id: str, tenant_id: str | None = None) -> T | None:
         """
         Get a single record by ID.
 
         Args:
             record_id: Record identifier
-            tenant_id: Tenant identifier for multi-tenancy isolation
+            tenant_id: Optional tenant identifier (deprecated, not used for filtering)
 
         Returns:
             Model instance or None if not found
@@ -164,13 +164,14 @@ class Repository(Generic[T]):
         if not self.db.pool:
             raise RuntimeError("Failed to establish database connection")
 
+        # Note: tenant_id filtering removed - use user_id for access control instead
         query = f"""
             SELECT * FROM {self.table_name}
-            WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+            WHERE id = $1 AND deleted_at IS NULL
         """
 
         async with self.db.pool.acquire() as conn:
-            row = await conn.fetchrow(query, record_id, tenant_id)
+            row = await conn.fetchrow(query, record_id)
 
         if not row:
             return None

@@ -73,6 +73,35 @@ class UserService:
         logger.info(f"Created new user: {email}")
         return user
 
+    async def get_user_by_id(self, user_id: str) -> Optional[User]:
+        """
+        Get a user by their UUID.
+
+        Args:
+            user_id: The user's UUID
+
+        Returns:
+            User if found, None otherwise
+        """
+        try:
+            return await self.repo.get_by_id(user_id)
+        except Exception as e:
+            logger.warning(f"Could not find user by id {user_id}: {e}")
+            return None
+
+    async def get_user_by_email(self, email: str) -> Optional[User]:
+        """
+        Get a user by their email address.
+
+        Args:
+            email: The user's email
+
+        Returns:
+            User if found, None otherwise
+        """
+        users = await self.repo.find(filters={"email": email}, limit=1)
+        return users[0] if users else None
+
     async def link_anonymous_session(self, user: User, anon_id: str) -> None:
         """
         Link an anonymous session ID to a user account.

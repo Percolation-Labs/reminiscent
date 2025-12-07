@@ -1114,6 +1114,14 @@ class APISettings(BaseSettings):
         ),
     )
 
+    rate_limit_enabled: bool = Field(
+        default=True,
+        description=(
+            "Enable rate limiting for API endpoints. "
+            "Set to false to disable rate limiting entirely (useful for development)."
+        ),
+    )
+
 
 class ModelsSettings(BaseSettings):
     """
@@ -1489,6 +1497,14 @@ class EmailSettings(BaseSettings):
         EMAIL__APP_PASSWORD - Gmail app password (from secrets)
         EMAIL__USE_TLS - Use TLS encryption (default: true)
         EMAIL__LOGIN_CODE_EXPIRY_MINUTES - Login code expiry (default: 10)
+
+    Branding environment variables (for email templates):
+        EMAIL__APP_NAME - Application name in emails (default: REM)
+        EMAIL__LOGO_URL - Logo URL for email templates (40x40 recommended)
+        EMAIL__TAGLINE - Tagline shown in email footer
+        EMAIL__WEBSITE_URL - Main website URL for email links
+        EMAIL__PRIVACY_URL - Privacy policy URL for email footer
+        EMAIL__TERMS_URL - Terms of service URL for email footer
     """
 
     model_config = SettingsConfigDict(
@@ -1521,6 +1537,37 @@ class EmailSettings(BaseSettings):
     sender_name: str = Field(
         default="REM",
         description="Sender display name",
+    )
+
+    # Branding settings for email templates
+    app_name: str = Field(
+        default="REM",
+        description="Application name shown in email templates",
+    )
+
+    logo_url: str | None = Field(
+        default=None,
+        description="Logo URL for email templates (40x40 recommended)",
+    )
+
+    tagline: str = Field(
+        default="Your AI-powered platform",
+        description="Tagline shown in email footer",
+    )
+
+    website_url: str = Field(
+        default="https://rem.ai",
+        description="Main website URL for email links",
+    )
+
+    privacy_url: str = Field(
+        default="https://rem.ai/privacy",
+        description="Privacy policy URL for email footer",
+    )
+
+    terms_url: str = Field(
+        default="https://rem.ai/terms",
+        description="Terms of service URL for email footer",
     )
 
     app_password: str | None = Field(
@@ -1577,6 +1624,25 @@ class EmailSettings(BaseSettings):
     def is_configured(self) -> bool:
         """Check if email service is properly configured."""
         return bool(self.sender_email and self.app_password)
+
+    @property
+    def template_kwargs(self) -> dict:
+        """
+        Get branding kwargs for email templates.
+
+        Returns a dict that can be passed to template functions:
+            login_code_template(..., **settings.email.template_kwargs)
+        """
+        kwargs = {
+            "app_name": self.app_name,
+            "tagline": self.tagline,
+            "website_url": self.website_url,
+            "privacy_url": self.privacy_url,
+            "terms_url": self.terms_url,
+        }
+        if self.logo_url:
+            kwargs["logo_url"] = self.logo_url
+        return kwargs
 
 
 class TestSettings(BaseSettings):

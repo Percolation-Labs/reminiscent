@@ -116,7 +116,8 @@ def mcp_tool_error_handler(func: Callable) -> Callable:
             # Otherwise wrap in success response
             return {"status": "success", **result}
         except Exception as e:
-            logger.error(f"{func.__name__} failed: {e}", exc_info=True)
+            # Use %s format to avoid issues with curly braces in error messages
+            logger.opt(exception=True).error("{} failed: {}", func.__name__, str(e))
             return {
                 "status": "error",
                 "error": str(e),
@@ -380,9 +381,10 @@ async def ask_rem_agent(
     from ...utils.schema_loader import load_agent_schema
 
     # Create agent context
+    # Note: tenant_id defaults to "default" if user_id is None
     context = AgentContext(
         user_id=user_id,
-        tenant_id=user_id,  # Set tenant_id to user_id for backward compat
+        tenant_id=user_id or "default",  # Use default tenant for anonymous users
         default_model=settings.llm.default_model,
     )
 

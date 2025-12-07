@@ -103,6 +103,7 @@ class ContextBuilder:
         headers: dict[str, str],
         new_messages: list[dict[str, str]] | None = None,
         db: PostgresService | None = None,
+        user_id: str | None = None,
     ) -> tuple[AgentContext, list[ContextMessage]]:
         """
         Build complete context from HTTP headers.
@@ -125,6 +126,7 @@ class ContextBuilder:
             headers: HTTP request headers (case-insensitive)
             new_messages: New messages from current request
             db: Optional PostgresService (creates if None)
+            user_id: Override user_id from JWT token (takes precedence over X-User-Id header)
 
         Returns:
             Tuple of (AgentContext, messages list)
@@ -146,6 +148,17 @@ class ContextBuilder:
 
         # Extract AgentContext from headers
         context = AgentContext.from_headers(headers)
+
+        # Override user_id if provided (from JWT token - takes precedence over header)
+        if user_id is not None:
+            context = AgentContext(
+                user_id=user_id,
+                tenant_id=context.tenant_id,
+                session_id=context.session_id,
+                default_model=context.default_model,
+                agent_schema_uri=context.agent_schema_uri,
+                is_eval=context.is_eval,
+            )
 
         # Initialize DB if not provided and needed (for user context or session history)
         close_db = False

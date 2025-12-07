@@ -147,7 +147,6 @@ def is_admin(user: dict | None) -> bool:
 async def get_user_filter(
     request: Request,
     x_user_id: str | None = None,
-    x_tenant_id: str = "default",
 ) -> dict[str, Any]:
     """
     Get user-scoped filter dict for database queries.
@@ -158,7 +157,6 @@ async def get_user_filter(
     Args:
         request: FastAPI request
         x_user_id: Optional user_id filter (admin only for cross-user)
-        x_tenant_id: Tenant ID for multi-tenancy
 
     Returns:
         Filter dict with appropriate user_id constraint
@@ -169,7 +167,7 @@ async def get_user_filter(
             return await repo.find(filters)
     """
     user = get_current_user(request)
-    filters: dict[str, Any] = {"tenant_id": x_tenant_id}
+    filters: dict[str, Any] = {}
 
     if is_admin(user):
         # Admin can filter by any user or see all

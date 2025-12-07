@@ -132,13 +132,51 @@ def _load_schema_from_database(schema_name: str, user_id: str) -> dict[str, Any]
     # Check if we're already in an async context
     try:
         loop = asyncio.get_running_loop()
-        # We're in an async context - can't use asyncio.run()
-        # This shouldn't happen in normal usage since load_agent_schema is called from sync contexts
-        logger.warning(
-            "Database schema lookup called from async context. "
-            "This may cause issues. Consider using async version of load_agent_schema."
-        )
-        return None
+        # We're in an async context - use thread executor to run async code
+        import concurrent.futures
+
+        async def _async_lookup():
+            """Async helper to query database."""
+            from rem.services.postgres import get_postgres_service
+
+            db = get_postgres_service()
+            if not db:
+                logger.debug("PostgreSQL service not available for schema lookup")
+                return None
+
+            try:
+                await db.connect()
+
+                query = """
+                    SELECT spec FROM schemas
+                    WHERE LOWER(name) = LOWER($1)
+                    AND (user_id = $2 OR user_id = 'system' OR user_id IS NULL)
+                    LIMIT 1
+                """
+                logger.debug(f"Executing schema lookup: name={schema_name}, user_id={user_id}")
+
+                row = await db.fetchrow(query, schema_name, user_id)
+
+                if row:
+                    spec = row.get("spec")
+                    if spec and isinstance(spec, dict):
+                        logger.debug(f"Found schema in database: {schema_name}")
+                        return spec
+
+                logger.debug(f"Schema not found in database: {schema_name}")
+                return None
+
+            except Exception as e:
+                logger.debug(f"Database schema lookup error: {e}")
+                return None
+            finally:
+                await db.disconnect()
+
+        # Run in thread pool to avoid blocking the event loop
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            future = pool.submit(asyncio.run, _async_lookup())
+            return future.result(timeout=10)
+
     except RuntimeError:
         # Not in async context - safe to use asyncio.run()
         pass

@@ -26,6 +26,9 @@ logger = logging.getLogger(__name__)
 class EmailService:
     """Service for sending transactional emails and passwordless login."""
 
+    # Store last login code for mock mode testing
+    _last_login_code: dict[str, str] = {}
+
     def __init__(
         self,
         smtp_host: str | None = None,
@@ -35,6 +38,7 @@ class EmailService:
         app_password: str | None = None,
         use_tls: bool = True,
         login_code_expiry_minutes: int = 10,
+        mock_mode: bool | None = None,
     ):
         """
         Initialize EmailService.
@@ -50,6 +54,7 @@ class EmailService:
             app_password: SMTP app password
             use_tls: Use TLS encryption
             login_code_expiry_minutes: Login code expiry in minutes
+            mock_mode: If True, don't send real emails (log code instead)
         """
         # Import settings lazily to avoid circular imports
         from ...settings import settings
@@ -65,16 +70,31 @@ class EmailService:
             or settings.email.login_code_expiry_minutes
         )
 
-        if not self._app_password:
+        # Mock mode: enabled via setting or if not configured
+        if mock_mode is not None:
+            self._mock_mode = mock_mode
+        elif hasattr(settings.email, 'mock_mode'):
+            self._mock_mode = settings.email.mock_mode
+        else:
+            # Auto-enable mock mode if email is not configured
+            self._mock_mode = not self._app_password
+
+        if not self._app_password and not self._mock_mode:
             logger.warning(
                 "Email app password not configured. "
                 "Set EMAIL__APP_PASSWORD to enable email sending."
             )
 
+        if self._mock_mode:
+            logger.info(
+                "Email service running in MOCK MODE. "
+                "Codes will be logged but not emailed."
+            )
+
     @property
     def is_configured(self) -> bool:
-        """Check if email service is properly configured."""
-        return bool(self._sender_email and self._app_password)
+        """Check if email service is properly configured (or in mock mode)."""
+        return self._mock_mode or bool(self._sender_email and self._app_password)
 
     def _create_smtp_connection(self) -> smtplib.SMTP:
         """Create and authenticate SMTP connection."""
@@ -106,6 +126,13 @@ class EmailService:
         if not self.is_configured:
             logger.error("Email service not configured. Cannot send email.")
             return False
+
+        # Mock mode - log but don't send
+        if self._mock_mode:
+            logger.info(
+                f"[MOCK EMAIL] To: {to_email}, Subject: {template.subject}"
+            )
+            return True
 
         try:
             # Create message
@@ -151,6 +178,22 @@ class EmailService:
             6-digit numeric string
         """
         return "".join(random.choices(string.digits, k=6))
+
+    @classmethod
+    def get_mock_code(cls, email: str) -> str | None:
+        """
+        Get the last login code sent to an email (mock mode only).
+
+        For testing purposes - retrieves the code that would have been
+        sent in mock mode.
+
+        Args:
+            email: Email address to look up
+
+        Returns:
+            The login code or None if not found
+        """
+        return cls._last_login_code.get(email.lower().strip())
 
     @staticmethod
     def generate_user_id_from_email(email: str) -> str:
@@ -245,14 +288,24 @@ class EmailService:
                 result["error"] = "Failed to store login code"
                 return result
 
-        # Send the email
-        kwargs = template_kwargs or {}
+        # Send the email with branding from settings
+        # Merge settings.email.template_kwargs with any explicit overrides
+        kwargs = {**settings.email.template_kwargs, **(template_kwargs or {})}
         template = login_code_template(code=code, email=email, **kwargs)
         sent = self.send_email(to_email=email, template=template)
 
         if sent:
             result["success"] = True
             result["code_sent"] = True
+
+            # Store code for mock mode retrieval
+            if self._mock_mode:
+                EmailService._last_login_code[email] = code
+                logger.info(
+                    f"[MOCK MODE] Login code for {email}: {code} "
+                    f"(expires at {expires_at.isoformat()})"
+                )
+
             logger.info(
                 f"Login code sent to {email}, "
                 f"user_id={user_id}, expires at {expires_at.isoformat()}"
@@ -330,11 +383,19 @@ class EmailService:
                     return {"allowed": False, "error": "Email domain not allowed for signup"}
 
             # Domain is trusted (or no restrictions) - create new user
+            # Users from trusted domains get admin role
+            user_role = None
+            if settings and hasattr(settings, 'email') and settings.email.trusted_domain_list:
+                if settings.email.is_domain_trusted(email):
+                    user_role = "admin"
+                    logger.info(f"New user {email} assigned admin role (trusted domain)")
+
             new_user = User(
                 id=uuid.UUID(user_id),
                 tenant_id=tenant_id,
                 name=email.split("@")[0],  # Default name from email
                 email=email,
+                role=user_role,
                 metadata=login_metadata,
             )
             await user_repo.upsert(new_user)
@@ -442,6 +503,9 @@ class EmailService:
         Returns:
             True if sent successfully
         """
-        kwargs = template_kwargs or {}
+        from ...settings import settings
+
+        # Merge settings.email.template_kwargs with any explicit overrides
+        kwargs = {**settings.email.template_kwargs, **(template_kwargs or {})}
         template = welcome_template(name=name, **kwargs)
         return self.send_email(to_email=email, template=template)

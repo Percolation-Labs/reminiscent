@@ -1,14 +1,16 @@
 """
-OAuth Authentication Middleware for FastAPI.
+Authentication Middleware for FastAPI.
 
-Protects API endpoints by requiring valid session.
-Supports anonymous access with rate limiting when allow_anonymous=True.
+Protects API endpoints by requiring valid authentication.
+Supports multiple auth methods: JWT, API Key, Session, Dev Token.
+Anonymous access with rate limiting when allow_anonymous=True.
 MCP endpoints are always protected unless explicitly disabled.
 
 Design Pattern:
 - Check X-API-Key header first (if API key auth enabled)
+- Check JWT token in Authorization header (Bearer token)
+- Check dev token (non-production only, starts with "dev_")
 - Check session for user on protected paths
-- Check Bearer token for dev token (non-production only)
 - MCP paths always require authentication (protected service)
 - If allow_anonymous=True: Allow unauthenticated requests (marked as ANONYMOUS tier)
 - If allow_anonymous=False: Return 401 for API calls, redirect browsers to login
@@ -122,6 +124,34 @@ class AuthMiddleware(BaseHTTPMiddleware):
         logger.warning("Invalid X-API-Key provided")
         return None
 
+    def _check_jwt_token(self, request: Request) -> dict | None:
+        """
+        Check for valid JWT in Authorization header.
+
+        Returns:
+            User dict if valid JWT, None otherwise
+        """
+        auth_header = request.headers.get("authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return None
+
+        token = auth_header[7:]  # Strip "Bearer "
+
+        # Skip dev tokens (handled separately)
+        if token.startswith("dev_"):
+            return None
+
+        # Verify JWT token
+        from .jwt import get_jwt_service
+        jwt_service = get_jwt_service()
+        user = jwt_service.verify_token(token)
+
+        if user:
+            logger.debug(f"JWT authenticated: {user.get('email')}")
+            return user
+
+        return None
+
     def _check_dev_token(self, request: Request) -> dict | None:
         """
         Check for valid dev token in Authorization header (non-production only).
@@ -207,6 +237,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 headers={"WWW-Authenticate": 'ApiKey realm="REM API"'},
             )
 
+        # Check for JWT token in Authorization header
+        jwt_user = self._check_jwt_token(request)
+        if jwt_user:
+            request.state.user = jwt_user
+            request.state.is_anonymous = False
+            return await call_next(request)
+
         # Check for dev token (non-production only)
         dev_user = self._check_dev_token(request)
         if dev_user:
@@ -214,7 +251,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             request.state.is_anonymous = False
             return await call_next(request)
 
-        # Check for valid session
+        # Check for valid session (backward compatibility)
         user = request.session.get("user")
 
         if user:
