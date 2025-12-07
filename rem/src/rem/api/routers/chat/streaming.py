@@ -835,3 +835,21 @@ async def stream_openai_response_with_save(
                 )
             except Exception as e:
                 logger.error(f"Failed to save session messages: {e}", exc_info=True)
+
+        # Update session description with session_name (non-blocking, after all yields)
+        for tool_call in tool_calls:
+            if tool_call.get("tool_name") == "register_metadata" and tool_call.get("is_metadata"):
+                session_name = tool_call.get("arguments", {}).get("session_name")
+                if session_name:
+                    try:
+                        from ....models.entities import Session
+                        from ....services.postgres import Repository
+                        repo = Repository(Session, table_name="sessions")
+                        session = await repo.get_by_id(session_id)
+                        if session and session.description != session_name:
+                            session.description = session_name
+                            await repo.update(session)
+                            logger.debug(f"Updated session {session_id} description to '{session_name}'")
+                    except Exception as e:
+                        logger.warning(f"Failed to update session description: {e}")
+                    break

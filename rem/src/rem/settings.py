@@ -1028,7 +1028,7 @@ class ChatSettings(BaseSettings):
     - Prevents context window bloat while maintaining conversation continuity
 
     User Context (on-demand by default):
-    - Agent system prompt includes: "User ID: {user_id}. To load user profile: Use REM LOOKUP users/{user_id}"
+    - Agent system prompt includes: "User: {email}. To load user profile: Use REM LOOKUP \"{email}\""
     - Agent decides whether to load profile based on query
     - More efficient for queries that don't need personalization
 

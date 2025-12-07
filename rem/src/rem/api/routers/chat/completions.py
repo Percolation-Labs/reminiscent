@@ -97,7 +97,7 @@ Context Building Flow:
    - Long messages include REM LOOKUP hints: "... [REM LOOKUP session-{id}-msg-{index}] ..."
    - Agent can retrieve full content on-demand using REM LOOKUP
 3. User profile provided as REM LOOKUP hint (on-demand by default)
-   - Agent receives: "User ID: {user_id}. To load user profile: Use REM LOOKUP users/{user_id}"
+   - Agent receives: "User: {email}. To load user profile: Use REM LOOKUP \"{email}\""
    - Agent decides whether to load profile based on query
 4. If CHAT__AUTO_INJECT_USER_CONTEXT=true: User profile auto-loaded and injected
 5. Combines: system context + compressed session history + new messages

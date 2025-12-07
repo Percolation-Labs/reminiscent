@@ -4,7 +4,8 @@ User Service - User account management.
 Handles user creation, profile updates, and session linking.
 """
 
-from datetime import datetime
+from rem.utils.date_utils import utc_now
+from rem.utils.user_id import email_to_user_id
 from typing import Optional
 
 from loguru import logger
@@ -51,22 +52,24 @@ class UserService:
                     updated = True
             
             if updated:
-                user.updated_at = datetime.utcnow()
+                user.updated_at = utc_now()
                 await self.repo.upsert(user)
             
             return user
         
         # Create new user
+        # id and user_id = UUID5 hash of email (deterministic bijection)
+        # name = email (entity_key for LOOKUP by email in KV store)
+        hashed_id = email_to_user_id(email)
         user = User(
+            id=hashed_id,  # Database id = hash of email
             tenant_id=tenant_id,
-            user_id=email, # Use email as user_id for now? Or UUID?
-            # The User model has 'user_id' field but also 'id' UUID.
-            # Usually user_id is the external ID or email.
-            name=name,
+            user_id=hashed_id,  # user_id = hash of email (same as id)
+            name=email,  # Email as entity_key for REM LOOKUP
             email=email,
             tier=UserTier.FREE,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
+            created_at=utc_now(),
+            updated_at=utc_now(),
             metadata={"avatar_url": avatar_url} if avatar_url else {},
         )
         await self.repo.upsert(user)
@@ -117,7 +120,7 @@ class UserService:
 
         # Add to list
         user.anonymous_ids.append(anon_id)
-        user.updated_at = datetime.utcnow()
+        user.updated_at = utc_now()
         
         # Save
         await self.repo.upsert(user)

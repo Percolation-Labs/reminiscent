@@ -200,8 +200,8 @@ class EmailService:
         """
         Generate a deterministic UUID from email address.
 
-        Uses UUID v5 with DNS namespace for consistency.
-        Same email always produces same UUID.
+        Uses the centralized email_to_user_id() for consistency.
+        Same email always produces same UUID (bijection).
 
         Args:
             email: Email address
@@ -209,7 +209,8 @@ class EmailService:
         Returns:
             UUID string
         """
-        return str(uuid.uuid5(uuid.NAMESPACE_DNS, email.lower().strip()))
+        from rem.utils.user_id import email_to_user_id
+        return email_to_user_id(email)
 
     async def send_login_code(
         self,
@@ -393,7 +394,8 @@ class EmailService:
             new_user = User(
                 id=uuid.UUID(user_id),
                 tenant_id=tenant_id,
-                name=email.split("@")[0],  # Default name from email
+                user_id=user_id,  # UUID5 hash of email (same as id)
+                name=email,  # Full email as entity_key for LOOKUP
                 email=email,
                 role=user_role,
                 metadata=login_metadata,

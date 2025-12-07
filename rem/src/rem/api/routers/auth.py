@@ -103,6 +103,7 @@ from ...services.postgres.service import PostgresService
 from ...services.user_service import UserService
 from ...auth.providers.email import EmailAuthProvider
 from ...auth.jwt import JWTService, get_jwt_service
+from ...utils.user_id import email_to_user_id
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -429,8 +430,9 @@ async def callback(provider: str, request: Request):
                     await user_service.link_anonymous_session(user_entity, anon_id)
                     
                 # Enrich session user with DB info
+                # user_id = UUID5 hash of email (deterministic, bijection)
                 db_info = {
-                    "id": str(user_entity.id),
+                    "id": email_to_user_id(user_info.get("email")),
                     "tenant_id": user_entity.tenant_id,
                     "tier": user_entity.tier.value if user_entity.tier else "free",
                     "roles": [user_entity.role] if user_entity.role else [],
