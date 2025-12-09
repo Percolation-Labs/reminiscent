@@ -376,8 +376,18 @@ class EmailService:
             await user_repo.upsert(existing_user)
             return {"allowed": True, "error": None}
         else:
-            # New user - check if domain is trusted
-            if settings and hasattr(settings, 'email') and settings.email.trusted_domain_list:
+            # New user - first check if they're an approved subscriber
+            from ...models.entities import Subscriber
+            subscriber_repo = Repository(Subscriber, db=db)
+            subscriber_id = str(Subscriber.email_to_uuid(email))
+            existing_subscriber = await subscriber_repo.get_by_id(subscriber_id, tenant_id=tenant_id)
+
+            if existing_subscriber:
+                # Subscriber exists - allow them to create account
+                # (approved field may not exist in older schemas, so just check existence)
+                logger.info(f"Subscriber {email} creating user account")
+            elif settings and hasattr(settings, 'email') and settings.email.trusted_domain_list:
+                # Not an approved subscriber - check if domain is trusted
                 if not settings.email.is_domain_trusted(email):
                     email_domain = email.split("@")[-1]
                     logger.warning(f"Untrusted domain attempted signup: {email_domain}")

@@ -30,14 +30,17 @@ Access Control Flow (send-code):
     │   ├── Yes → Check user.tier
     │   │   ├── tier == BLOCKED → Reject "Account is blocked"
     │   │   └── tier != BLOCKED → Allow (send code, existing users grandfathered)
-    │   └── No (new user) → Check EMAIL__TRUSTED_EMAIL_DOMAINS
-    │       ├── Setting configured → domain in trusted list?
-    │       │   ├── Yes → Create user & send code
-    │       │   └── No → Reject "Email domain not allowed for signup"
-    │       └── Not configured (empty) → Create user & send code (no restrictions)
+    │   └── No (new user) → Check subscriber list first
+    │       ├── Email in subscribers table? → Allow (create user & send code)
+    │       └── Not a subscriber → Check EMAIL__TRUSTED_EMAIL_DOMAINS
+    │           ├── Setting configured → domain in trusted list?
+    │           │   ├── Yes → Create user & send code
+    │           │   └── No → Reject "Email domain not allowed for signup"
+    │           └── Not configured (empty) → Create user & send code (no restrictions)
 
 Key Behaviors:
 - Existing users: Always allowed to login (unless tier=BLOCKED)
+- Subscribers: Always allowed to login (regardless of email domain)
 - New users: Must have email from trusted domain (if EMAIL__TRUSTED_EMAIL_DOMAINS is set)
 - No restrictions: Leave EMAIL__TRUSTED_EMAIL_DOMAINS empty to allow all domains
 
