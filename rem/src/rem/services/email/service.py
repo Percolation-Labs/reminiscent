@@ -376,11 +376,10 @@ class EmailService:
             await user_repo.upsert(existing_user)
             return {"allowed": True, "error": None}
         else:
-            # New user - first check if they're an approved subscriber
+            # New user - first check if they're a subscriber (by email lookup)
             from ...models.entities import Subscriber
             subscriber_repo = Repository(Subscriber, db=db)
-            subscriber_id = str(Subscriber.email_to_uuid(email))
-            existing_subscriber = await subscriber_repo.get_by_id(subscriber_id, tenant_id=tenant_id)
+            existing_subscriber = await subscriber_repo.find_one({"email": email})
 
             if existing_subscriber:
                 # Subscriber exists - allow them to create account
