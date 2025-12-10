@@ -81,7 +81,7 @@ class Ontology(CoreModel):
         extracted_data: Structured data extracted by agent (arbitrary JSON)
         confidence_score: Optional confidence score from extraction (0.0-1.0)
         extraction_timestamp: When extraction was performed
-        embedding_text: Text used for generating embedding (derived from extracted_data)
+        content: Text used for generating embedding (derived from extracted_data)
 
     Inherited from CoreModel:
         id: UUID or string identifier
@@ -165,8 +165,8 @@ class Ontology(CoreModel):
     confidence_score: Optional[float] = None  # 0.0-1.0 if provided by agent
     extraction_timestamp: Optional[str] = None  # ISO8601 timestamp
 
-    # Semantic search support
-    embedding_text: Optional[str] = None  # Text for embedding generation
+    # Semantic search support - 'content' is a default embeddable field name
+    content: Optional[str] = None  # Text for embedding generation (derived from extracted_data)
 
     model_config = ConfigDict(
         json_schema_extra={

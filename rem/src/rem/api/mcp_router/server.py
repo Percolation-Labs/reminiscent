@@ -1,7 +1,7 @@
 """
 MCP server creation and configuration for REM.
 
-Design Pattern 
+Design Pattern
 1. Create FastMCP server with tools and resources
 2. Register tools using @mcp.tool() decorator
 3. Register resources using resource registration functions
@@ -20,10 +20,30 @@ FastMCP Features:
 """
 
 import importlib.metadata
+from functools import wraps
 
 from fastmcp import FastMCP
+from loguru import logger
 
 from ...settings import settings
+from .prompts import register_prompts
+from .resources import (
+    register_agent_resources,
+    register_file_resources,
+    register_schema_resources,
+    register_status_resources,
+)
+from .tools import (
+    ask_rem_agent,
+    get_schema,
+    ingest_into_rem,
+    list_schema,
+    read_resource,
+    register_metadata,
+    save_agent,
+    search_rem,
+    test_error_handling,
+)
 
 # Get package version
 try:
@@ -174,18 +194,7 @@ def create_mcp_server(is_local: bool = False) -> FastMCP:
         ),
     )
 
-    # Register REM tools
-    from .tools import (
-        ask_rem_agent,
-        get_schema,
-        ingest_into_rem,
-        list_schema,
-        read_resource,
-        register_metadata,
-        save_agent,
-        search_rem,
-    )
-
+    # Register core REM tools
     mcp.tool()(search_rem)
     mcp.tool()(ask_rem_agent)
     mcp.tool()(read_resource)
@@ -194,10 +203,13 @@ def create_mcp_server(is_local: bool = False) -> FastMCP:
     mcp.tool()(get_schema)
     mcp.tool()(save_agent)
 
+    # Register test tool only in development environment (not staging/production)
+    if settings.environment not in ("staging", "production"):
+        mcp.tool()(test_error_handling)
+        logger.debug("Registered test_error_handling tool (dev environment only)")
+
     # File ingestion tool (with local path support for local servers)
     # Wrap to inject is_local parameter
-    from functools import wraps
-
     @wraps(ingest_into_rem)
     async def ingest_into_rem_wrapper(
         file_uri: str,
@@ -216,18 +228,9 @@ def create_mcp_server(is_local: bool = False) -> FastMCP:
     mcp.tool()(ingest_into_rem_wrapper)
 
     # Register prompts
-    from .prompts import register_prompts
-
     register_prompts(mcp)
 
     # Register schema resources
-    from .resources import (
-        register_agent_resources,
-        register_file_resources,
-        register_schema_resources,
-        register_status_resources,
-    )
-
     register_schema_resources(mcp)
     register_agent_resources(mcp)
     register_file_resources(mcp)

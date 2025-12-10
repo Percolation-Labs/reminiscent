@@ -3,6 +3,17 @@ REM tools for agent execution (CLI and API compatible).
 
 These tools work in both CLI and API contexts by initializing services on-demand.
 They wrap the service layer directly, not MCP tools.
+
+Core tables (always available):
+- resources: Documents, content chunks, artifacts
+- moments: Temporal narratives extracted from resources (usually user-specific)
+- ontologies: Domain entities with semantic links for further lookups (like a wiki)
+
+Other tables (may vary by deployment):
+- users, sessions, messages, files, schemas, feedbacks
+
+Note: Not all tables are populated in all systems. Use FUZZY or SEARCH
+to discover what data exists before assuming specific tables have content.
 """
 
 from typing import Any, Literal, cast

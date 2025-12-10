@@ -45,6 +45,33 @@ BEGIN
 END $$;
 
 -- ============================================================================
+-- NORMALIZATION HELPER
+-- ============================================================================
+
+-- Normalize entity keys to lower-kebab-case for consistent lookups
+-- "Mood Disorder" -> "mood-disorder"
+-- "mood_disorder" -> "mood-disorder"
+-- "MoodDisorder" -> "mood-disorder"
+CREATE OR REPLACE FUNCTION normalize_key(input TEXT)
+RETURNS TEXT AS $$
+BEGIN
+    RETURN lower(
+        regexp_replace(
+            regexp_replace(
+                regexp_replace(input, '([a-z])([A-Z])', '\1-\2', 'g'),  -- camelCase -> kebab
+                '[_\s]+', '-', 'g'  -- underscores/spaces -> hyphens
+            ),
+            '-+', '-', 'g'  -- collapse multiple hyphens
+        )
+    );
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
+COMMENT ON FUNCTION normalize_key IS
+'Normalizes entity keys to lower-kebab-case for consistent lookups.
+Examples: "Mood Disorder" -> "mood-disorder", "mood_disorder" -> "mood-disorder"';
+
+-- ============================================================================
 -- MIGRATION TRACKING
 -- ============================================================================
 
@@ -237,10 +264,11 @@ BEGIN
 
     -- First lookup in KV store to get entity_type (table name)
     -- Include user-owned AND public (NULL user_id) entries
+    -- Normalize input key for consistent matching
     SELECT kv.entity_type INTO entity_table
     FROM kv_store kv
     WHERE (kv.user_id = effective_user_id OR kv.user_id IS NULL)
-    AND kv.entity_key = p_entity_key
+    AND kv.entity_key = normalize_key(p_entity_key)
     LIMIT 1;
 
     -- If not found, return empty
@@ -414,6 +442,7 @@ BEGIN
     FOR graph_keys IN
         WITH RECURSIVE graph_traversal AS (
             -- Base case: Find starting entity (user-owned OR public)
+            -- Normalize input key for consistent matching
             SELECT
                 0 AS depth,
                 kv.entity_key,
@@ -424,7 +453,7 @@ BEGIN
                 ARRAY[kv.entity_key]::TEXT[] AS path
             FROM kv_store kv
             WHERE (kv.user_id = effective_user_id OR kv.user_id IS NULL)
-            AND kv.entity_key = p_entity_key
+            AND kv.entity_key = normalize_key(p_entity_key)
 
             UNION ALL
 
@@ -441,7 +470,7 @@ BEGIN
             JOIN kv_store source_kv ON source_kv.entity_key = gt.entity_key
                 AND (source_kv.user_id = effective_user_id OR source_kv.user_id IS NULL)
             CROSS JOIN LATERAL jsonb_array_elements(COALESCE(source_kv.graph_edges, '[]'::jsonb)) AS edge
-            JOIN kv_store target_kv ON target_kv.entity_key = (edge->>'dst')::VARCHAR(255)
+            JOIN kv_store target_kv ON target_kv.entity_key = normalize_key((edge->>'dst')::VARCHAR(255))
                 AND (target_kv.user_id = effective_user_id OR target_kv.user_id IS NULL)
             WHERE gt.depth < p_max_depth
             AND (p_rel_type IS NULL OR (edge->>'rel_type')::VARCHAR(100) = p_rel_type)
@@ -657,7 +686,7 @@ BEGIN
         MIN(msg_counts.first_msg)::TIMESTAMP AS first_message_at,
         MAX(msg_counts.last_msg)::TIMESTAMP AS last_message_at
     FROM shared_sessions ss
-    LEFT JOIN users u ON u.user_id = ss.owner_user_id AND u.tenant_id = ss.tenant_id
+    LEFT JOIN users u ON u.id::text = ss.owner_user_id AND u.tenant_id = ss.tenant_id
     LEFT JOIN (
         SELECT
             m.session_id,

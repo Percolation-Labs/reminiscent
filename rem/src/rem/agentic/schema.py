@@ -215,12 +215,13 @@ class AgentSchemaMetadata(BaseModel):
     )
 
     # Structured output toggle
-    structured_output: bool = Field(
-        default=True,
+    structured_output: bool | None = Field(
+        default=None,
         description=(
             "Whether to enforce structured JSON output. "
             "When False, the agent produces free-form text and schema properties "
-            "are converted to prompt guidance instead. Default: True (JSON output)."
+            "are converted to prompt guidance instead. "
+            "Default: None (uses LLM__DEFAULT_STRUCTURED_OUTPUT setting, which defaults to False)."
         ),
     )
 

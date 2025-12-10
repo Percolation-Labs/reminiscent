@@ -77,6 +77,7 @@ class LLMSettings(BaseSettings):
         LLM__ANTHROPIC_API_KEY or ANTHROPIC_API_KEY - Anthropic API key
         LLM__EMBEDDING_PROVIDER or EMBEDDING_PROVIDER - Default embedding provider (openai)
         LLM__EMBEDDING_MODEL or EMBEDDING_MODEL - Default embedding model name
+        LLM__DEFAULT_STRUCTURED_OUTPUT - Default structured output mode (False = streaming text)
     """
 
     model_config = SettingsConfigDict(
@@ -136,6 +137,11 @@ class LLMSettings(BaseSettings):
     embedding_model: str = Field(
         default="text-embedding-3-small",
         description="Default embedding model (provider-specific model name)",
+    )
+
+    default_structured_output: bool = Field(
+        default=False,
+        description="Default structured output mode for agents. False = streaming text (easier), True = JSON schema validation",
     )
 
     @field_validator("openai_api_key", mode="before")

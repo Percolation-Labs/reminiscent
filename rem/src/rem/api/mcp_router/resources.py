@@ -349,6 +349,53 @@ def register_agent_resources(mcp: FastMCP):
         except Exception as e:
             return f"# Available Agents\n\nError listing agents: {e}"
 
+    @mcp.resource("rem://agents/{agent_name}")
+    def get_agent_schema(agent_name: str) -> str:
+        """
+        Get a specific agent schema by name.
+
+        Args:
+            agent_name: Name of the agent (e.g., "ask_rem", "agent-builder")
+
+        Returns:
+            Full agent schema as YAML string, or error message if not found.
+        """
+        import importlib.resources
+        import yaml
+        from pathlib import Path
+
+        try:
+            # Find packaged agent schemas
+            agents_ref = importlib.resources.files("rem") / "schemas" / "agents"
+            agents_dir = Path(str(agents_ref))
+
+            if not agents_dir.exists():
+                return f"# Agent Not Found\n\nNo agent schemas directory found."
+
+            # Search for agent file (try multiple extensions)
+            for ext in [".yaml", ".yml", ".json"]:
+                # Try exact match first
+                agent_file = agents_dir / f"{agent_name}{ext}"
+                if agent_file.exists():
+                    with open(agent_file, "r") as f:
+                        content = f.read()
+                    return f"# Agent Schema: {agent_name}\n\n```yaml\n{content}\n```"
+
+                # Try recursive search
+                matches = list(agents_dir.rglob(f"{agent_name}{ext}"))
+                if matches:
+                    with open(matches[0], "r") as f:
+                        content = f.read()
+                    return f"# Agent Schema: {agent_name}\n\n```yaml\n{content}\n```"
+
+            # Not found - list available agents
+            available = [f.stem for f in agents_dir.rglob("*.yaml")] + \
+                       [f.stem for f in agents_dir.rglob("*.yml")]
+            return f"# Agent Not Found\n\nAgent '{agent_name}' not found.\n\nAvailable agents: {', '.join(sorted(set(available)))}"
+
+        except Exception as e:
+            return f"# Error\n\nError loading agent '{agent_name}': {e}"
+
 
 def register_file_resources(mcp: FastMCP):
     """
@@ -501,10 +548,11 @@ async def load_resource(uri: str) -> dict | str:
     Load an MCP resource by URI.
 
     This function is called by the read_resource tool to dispatch to
-    registered resource handlers.
+    registered resource handlers. Supports both regular resources and
+    parameterized resource templates (e.g., rem://agents/{agent_name}).
 
     Args:
-        uri: Resource URI (e.g., "rem://schemas", "rem://status")
+        uri: Resource URI (e.g., "rem://agents", "rem://agents/ask_rem", "rem://status")
 
     Returns:
         Resource data (dict or string)
@@ -512,9 +560,10 @@ async def load_resource(uri: str) -> dict | str:
     Raises:
         ValueError: If URI is invalid or resource not found
     """
-    # Create temporary MCP instance with resources
+    import inspect
     from fastmcp import FastMCP
 
+    # Create temporary MCP instance with resources
     mcp = FastMCP(name="temp")
 
     # Register all resources
@@ -523,14 +572,26 @@ async def load_resource(uri: str) -> dict | str:
     register_file_resources(mcp)
     register_status_resources(mcp)
 
-    # Get resource handlers from MCP internal registry
-    # FastMCP stores resources in a dict by URI
-    if hasattr(mcp, "_resources"):
-        if uri in mcp._resources:
-            handler = mcp._resources[uri]
-            if callable(handler):
-                result = handler()
-                return result if result else {"error": "Resource returned None"}
+    # 1. Try exact match in regular resources
+    resources = await mcp.get_resources()
+    if uri in resources:
+        resource = resources[uri]
+        result = resource.fn()
+        if inspect.iscoroutine(result):
+            result = await result
+        return result if result else {"error": "Resource returned None"}
 
-    # If not found, raise error
-    raise ValueError(f"Resource not found: {uri}. Available resources: {list(mcp._resources.keys()) if hasattr(mcp, '_resources') else 'unknown'}")
+    # 2. Try matching against parameterized resource templates
+    templates = await mcp.get_resource_templates()
+    for template_uri, template in templates.items():
+        params = template.matches(uri)
+        if params is not None:
+            # Template matched - call function with extracted parameters
+            result = template.fn(**params)
+            if inspect.iscoroutine(result):
+                result = await result
+            return result if result else {"error": "Resource returned None"}
+
+    # 3. Not found - include both resources and templates in error
+    available = list(resources.keys()) + list(templates.keys())
+    raise ValueError(f"Resource not found: {uri}. Available resources: {available}")

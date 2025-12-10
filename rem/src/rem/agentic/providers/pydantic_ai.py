@@ -96,6 +96,35 @@ TODO:
 
     Priority: HIGH (blocks production scaling beyond 50 req/sec)
 
+    4. Response Format Control (structured_output enhancement):
+       - Current: structured_output is bool (True=strict schema, False=free-form text)
+       - Missing: OpenAI JSON mode (valid JSON without strict schema enforcement)
+       - Missing: Completions API support (some models only support completions, not chat)
+
+       Proposed schema field values for `structured_output`:
+         - True (default): Strict structured output using provider's native schema support
+         - False: Free-form text response (properties converted to prompt guidance)
+         - "json": JSON mode - ensures valid JSON but no schema enforcement
+                   (OpenAI: response_format={"type": "json_object"})
+         - "text": Explicit free-form text (alias for False)
+
+       Implementation:
+         a) Update AgentSchemaMetadata.structured_output type:
+            structured_output: bool | Literal["json", "text"] = True
+         b) In create_agent(), handle each mode:
+            - True: Use output_type with Pydantic model (current behavior)
+            - False/"text": Convert properties to prompt guidance (current behavior)
+            - "json": Use provider's JSON mode without strict schema
+         c) Provider-specific JSON mode:
+            - OpenAI: model_settings={"response_format": {"type": "json_object"}}
+            - Anthropic: Not supported natively, use prompt guidance
+            - Others: Fallback to prompt guidance with JSON instruction
+
+       Related: Some providers (Cerebras) have completions-only models where
+       structured output isn't available. Consider model capability detection.
+
+       Priority: MEDIUM (enables more flexible output control)
+
 Example Agent Schema:
 {
   "type": "object",
@@ -553,58 +582,70 @@ async def create_agent(
     if agent_schema:
         system_prompt = get_system_prompt(agent_schema)
         metadata = get_metadata(agent_schema)
-        mcp_server_configs = [s.model_dump() for s in metadata.mcp_servers] if hasattr(metadata, 'mcp_servers') and metadata.mcp_servers else []
         resource_configs = metadata.resources if hasattr(metadata, 'resources') else []
+
+        # DEPRECATED: mcp_servers in agent schemas is ignored
+        # MCP servers are now always auto-detected at the application level
+        if hasattr(metadata, 'mcp_servers') and metadata.mcp_servers:
+            logger.warning(
+                "DEPRECATED: mcp_servers in agent schema is ignored. "
+                "MCP servers are auto-detected from tools.mcp_server module. "
+                "Remove mcp_servers from your agent schema."
+            )
 
         if metadata.system_prompt:
             logger.debug("Using custom system_prompt from json_schema_extra")
     else:
         system_prompt = ""
         metadata = None
-        mcp_server_configs = []
         resource_configs = []
 
-    # Auto-detect local MCP server if not explicitly configured
-    # This makes mcp_servers config optional - agents get tools automatically
+    # Auto-detect MCP server at application level
+    # Convention: tools/mcp_server.py exports `mcp` FastMCP instance
+    # Falls back to REM's built-in MCP server if no local server found
+    import importlib
+    import os
+    import sys
+
+    # Ensure current working directory is in sys.path for local imports
+    cwd = os.getcwd()
+    if cwd not in sys.path:
+        sys.path.insert(0, cwd)
+
+    mcp_server_configs = []
+    auto_detect_modules = [
+        "tools.mcp_server",  # Convention: tools/mcp_server.py
+        "mcp_server",        # Alternative: mcp_server.py in root
+    ]
+    for module_path in auto_detect_modules:
+        try:
+            mcp_module = importlib.import_module(module_path)
+            if hasattr(mcp_module, "mcp"):
+                logger.info(f"Auto-detected local MCP server: {module_path}")
+                mcp_server_configs = [{"type": "local", "module": module_path, "id": "auto-detected"}]
+                break
+        except ImportError as e:
+            logger.debug(f"MCP server auto-detect: {module_path} not found ({e})")
+            continue
+        except Exception as e:
+            logger.warning(f"MCP server auto-detect: {module_path} failed to load: {e}")
+            continue
+
+    # Fall back to REM's default MCP server if no local server found
     if not mcp_server_configs:
-        import importlib
-        import os
-        import sys
-
-        # Ensure current working directory is in sys.path for local imports
-        cwd = os.getcwd()
-        if cwd not in sys.path:
-            sys.path.insert(0, cwd)
-
-        # Try common local MCP server module paths first
-        auto_detect_modules = [
-            "tools.mcp_server",  # Convention: tools/mcp_server.py
-            "mcp_server",        # Alternative: mcp_server.py in root
-        ]
-        for module_path in auto_detect_modules:
-            try:
-                mcp_module = importlib.import_module(module_path)
-                if hasattr(mcp_module, "mcp"):
-                    logger.info(f"Auto-detected local MCP server: {module_path}")
-                    mcp_server_configs = [{"type": "local", "module": module_path, "id": "auto-detected"}]
-                    break
-            except ImportError:
-                continue
-
-        # Fall back to REM's default MCP server if no local server found
-        if not mcp_server_configs:
-            logger.debug("No local MCP server found, using REM default")
-            mcp_server_configs = [{"type": "local", "module": "rem.mcp_server", "id": "rem"}]
+        logger.info("No local MCP server found, using REM default (rem.mcp_server)")
+        mcp_server_configs = [{"type": "local", "module": "rem.mcp_server", "id": "rem"}]
 
     # Extract temperature and max_iterations from schema metadata (with fallback to settings defaults)
     if metadata:
         temperature = metadata.override_temperature if metadata.override_temperature is not None else settings.llm.default_temperature
         max_iterations = metadata.override_max_iterations if metadata.override_max_iterations is not None else settings.llm.default_max_iterations
-        use_structured_output = metadata.structured_output
+        # Use schema-level structured_output if set, otherwise fall back to global setting
+        use_structured_output = metadata.structured_output if metadata.structured_output is not None else settings.llm.default_structured_output
     else:
         temperature = settings.llm.default_temperature
         max_iterations = settings.llm.default_max_iterations
-        use_structured_output = True
+        use_structured_output = settings.llm.default_structured_output
 
     # Build list of tools - start with built-in tools
     tools = _get_builtin_tools()
@@ -727,6 +768,7 @@ async def create_agent(
 
     # Create tools from collected resource URIs
     # Pass the loaded MCP server so resources can be resolved from it
+    logger.info(f"Creating {len(resource_uris)} resource tools with mcp_server={'set' if loaded_mcp_server else 'None'}")
     for uri, usage in resource_uris:
         resource_tool = create_resource_tool(uri, usage, mcp_server=loaded_mcp_server)
         tools.append(resource_tool)

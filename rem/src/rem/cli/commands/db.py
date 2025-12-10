@@ -333,29 +333,46 @@ def rebuild_cache(connection: str | None):
 
 @click.command()
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
+@click.option("--table", "-t", default=None, help="Target table name (required for non-YAML formats)")
 @click.option("--user-id", default=None, help="User ID to scope data privately (default: public/shared)")
 @click.option("--dry-run", is_flag=True, help="Show what would be loaded without loading")
-def load(file_path: Path, user_id: str | None, dry_run: bool):
+def load(file_path: Path, table: str | None, user_id: str | None, dry_run: bool):
     """
-    Load data from YAML file into database.
+    Load data from file into database.
 
-    File format:
-        - table: resources
-          key_field: name
-          rows:
-            - name: Example
-              content: Test data...
+    Supports YAML with embedded metadata, or any tabular format via Polars
+    (jsonl, parquet, csv, json, arrow, etc.). For non-YAML formats, use --table.
 
     Examples:
-        rem db load rem/tests/data/graph_seed.yaml
-        rem db load data.yaml --user-id my-user  # Private to user
-        rem db load data.yaml --dry-run
+        rem db load data.yaml                        # YAML with metadata
+        rem db load data.jsonl -t resources          # Any Polars-supported format
     """
-    asyncio.run(_load_async(file_path, user_id, dry_run))
+    asyncio.run(_load_async(file_path, table, user_id, dry_run))
 
 
-async def _load_async(file_path: Path, user_id: str | None, dry_run: bool):
+def _load_dataframe_from_file(file_path: Path) -> "pl.DataFrame":
+    """Load any Polars-supported file format into a DataFrame."""
+    import polars as pl
+
+    suffix = file_path.suffix.lower()
+
+    if suffix in {".jsonl", ".ndjson"}:
+        return pl.read_ndjson(file_path)
+    elif suffix in {".parquet", ".pq"}:
+        return pl.read_parquet(file_path)
+    elif suffix == ".csv":
+        return pl.read_csv(file_path)
+    elif suffix == ".json":
+        return pl.read_json(file_path)
+    elif suffix in {".ipc", ".arrow"}:
+        return pl.read_ipc(file_path)
+    else:
+        raise ValueError(f"Unsupported file format: {suffix}. Use any Polars-supported format.")
+
+
+async def _load_async(file_path: Path, table: str | None, user_id: str | None, dry_run: bool):
     """Async implementation of load command."""
+    import polars as pl
     import yaml
     from ...models.core.inline_edge import InlineEdge
     from ...models.entities import Resource, Moment, User, Message, SharedSession, Schema
@@ -365,21 +382,10 @@ async def _load_async(file_path: Path, user_id: str | None, dry_run: bool):
     scope_msg = f"user: {user_id}" if user_id else "public"
     logger.info(f"Scope: {scope_msg}")
 
-    # Load YAML file
-    with open(file_path) as f:
-        data = yaml.safe_load(f)
-
-    if not isinstance(data, list):
-        logger.error("YAML must be a list of table definitions")
-        raise click.Abort()
-
-    if dry_run:
-        logger.info("DRY RUN - Would load:")
-        logger.info(yaml.dump(data, default_flow_style=False))
-        return
+    suffix = file_path.suffix.lower()
+    is_yaml = suffix in {".yaml", ".yml"}
 
     # Map table names to model classes
-    # CoreModel subclasses use Repository.upsert()
     MODEL_MAP = {
         "users": User,
         "moments": Moment,
@@ -390,6 +396,58 @@ async def _load_async(file_path: Path, user_id: str | None, dry_run: bool):
 
     # Non-CoreModel tables that need direct SQL insertion
     DIRECT_INSERT_TABLES = {"shared_sessions"}
+
+    # Parse file based on format
+    if is_yaml:
+        # YAML with embedded metadata
+        with open(file_path) as f:
+            data = yaml.safe_load(f)
+
+        if not isinstance(data, list):
+            logger.error("YAML must be a list of table definitions")
+            raise click.Abort()
+
+        if dry_run:
+            logger.info("DRY RUN - Would load:")
+            logger.info(yaml.dump(data, default_flow_style=False))
+            return
+
+        table_defs = data
+    else:
+        # Polars-supported format - require --table
+        if not table:
+            logger.error(f"For {suffix} files, --table is required. Example: rem db load {file_path.name} -t resources")
+            raise click.Abort()
+
+        try:
+            df = _load_dataframe_from_file(file_path)
+        except Exception as e:
+            logger.error(f"Failed to load file: {e}")
+            raise click.Abort()
+
+        rows = df.to_dicts()
+
+        if dry_run:
+            logger.info(f"DRY RUN - Would load {len(rows)} rows to table '{table}':")
+            logger.info(f"Columns: {list(df.columns)}")
+
+            # Validate first row against model if table is known
+            if table in {"users", "moments", "resources", "messages", "schemas"} and rows:
+                from ...models.entities import Resource, Moment, User, Message, Schema
+                from ...utils.model_helpers import validate_data_for_model
+                model_map = {"users": User, "moments": Moment, "resources": Resource,
+                            "messages": Message, "schemas": Schema}
+                result = validate_data_for_model(model_map[table], rows[0])
+                if result.extra_fields:
+                    logger.warning(f"Unknown fields (ignored): {result.extra_fields}")
+                if result.valid:
+                    logger.success(f"Sample row validates OK. Required: {result.required_fields or '(none)'}")
+                else:
+                    result.log_errors("Sample row")
+            return
+
+        # Wrap as single table definition
+        table_defs = [{"table": table, "rows": rows}]
 
     # Connect to database
     pg = get_postgres_service()
@@ -402,20 +460,17 @@ async def _load_async(file_path: Path, user_id: str | None, dry_run: bool):
     try:
         total_loaded = 0
 
-        for table_def in data:
+        for table_def in table_defs:
             table_name = table_def["table"]
-            key_field = table_def.get("key_field", "id")
             rows = table_def.get("rows", [])
 
             # Handle direct insert tables (non-CoreModel)
             if table_name in DIRECT_INSERT_TABLES:
                 for row_data in rows:
-                    # Add tenant_id if not present
                     if "tenant_id" not in row_data:
                         row_data["tenant_id"] = "default"
 
                     if table_name == "shared_sessions":
-                        # Insert shared_session directly
                         await pg.fetch(
                             """INSERT INTO shared_sessions
                                (session_id, owner_user_id, shared_with_user_id, tenant_id)
@@ -434,12 +489,9 @@ async def _load_async(file_path: Path, user_id: str | None, dry_run: bool):
                 logger.warning(f"Unknown table: {table_name}, skipping")
                 continue
 
-            model_class = MODEL_MAP[table_name]  # Type is inferred from MODEL_MAP
+            model_class = MODEL_MAP[table_name]
 
-            for row_data in rows:
-                # Add user_id and tenant_id only if explicitly provided
-                # Default is public (None) - data is shared/visible to all
-                # Pass --user-id to scope data privately to a specific user
+            for row_idx, row_data in enumerate(rows):
                 if "user_id" not in row_data and user_id is not None:
                     row_data["user_id"] = user_id
                 if "tenant_id" not in row_data and user_id is not None:
@@ -452,26 +504,28 @@ async def _load_async(file_path: Path, user_id: str | None, dry_run: bool):
                         for edge in row_data["graph_edges"]
                     ]
 
-                # Convert any ISO timestamp strings with Z suffix to naive datetime
-                # This handles fields like starts_timestamp, ends_timestamp, etc.
+                # Convert ISO timestamp strings
                 from ...utils.date_utils import parse_iso
                 for key, value in list(row_data.items()):
                     if isinstance(value, str) and (key.endswith("_timestamp") or key.endswith("_at")):
                         try:
                             row_data[key] = parse_iso(value)
                         except (ValueError, TypeError):
-                            pass  # Not a valid datetime string, leave as-is
+                            pass
 
-                # Create model instance and upsert via repository
                 from ...services.postgres.repository import Repository
+                from ...utils.model_helpers import validate_data_for_model
 
-                instance = model_class(**row_data)
-                repo = Repository(model_class, table_name, pg)  # Type inferred from MODEL_MAP
-                await repo.upsert(instance)  # type: ignore[arg-type]
+                result = validate_data_for_model(model_class, row_data)
+                if not result.valid:
+                    result.log_errors(f"Row {row_idx + 1} ({table_name})")
+                    raise click.Abort()
+
+                repo = Repository(model_class, table_name, pg)
+                await repo.upsert(result.instance)  # type: ignore[arg-type]
                 total_loaded += 1
 
-                # Log based on model type
-                name = getattr(instance, 'name', getattr(instance, 'id', '?'))
+                name = getattr(result.instance, 'name', getattr(result.instance, 'id', '?'))
                 logger.success(f"Loaded {table_name[:-1]}: {name}")
 
         logger.success(f"Data loaded successfully! Total rows: {total_loaded}")

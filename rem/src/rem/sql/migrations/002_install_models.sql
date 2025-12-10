@@ -1,7 +1,7 @@
 -- REM Model Schema (install_models.sql)
 -- Generated from Pydantic models
 -- Source: model registry
--- Generated at: 2025-11-29T18:45:11.372432
+-- Generated at: 2025-12-10T08:24:23.881380
 --
 -- DO NOT EDIT MANUALLY - Regenerate with: rem db schema generate
 --
@@ -56,11 +56,11 @@ CREATE TABLE IF NOT EXISTS feedbacks (
     tags TEXT[] DEFAULT ARRAY[]::TEXT[]
 );
 
-CREATE INDEX IF NOT EXISTS idx_feedbacks_tenant ON feedbacks (tenant_id);
-CREATE INDEX IF NOT EXISTS idx_feedbacks_user ON feedbacks (user_id);
-CREATE INDEX IF NOT EXISTS idx_feedbacks_graph_edges ON feedbacks USING GIN (graph_edges);
-CREATE INDEX IF NOT EXISTS idx_feedbacks_metadata ON feedbacks USING GIN (metadata);
-CREATE INDEX IF NOT EXISTS idx_feedbacks_tags ON feedbacks USING GIN (tags);
+CREATE INDEX idx_feedbacks_tenant ON feedbacks (tenant_id);
+CREATE INDEX idx_feedbacks_user ON feedbacks (user_id);
+CREATE INDEX idx_feedbacks_graph_edges ON feedbacks USING GIN (graph_edges);
+CREATE INDEX idx_feedbacks_metadata ON feedbacks USING GIN (metadata);
+CREATE INDEX idx_feedbacks_tags ON feedbacks USING GIN (tags);
 
 -- KV_STORE trigger for feedbacks
 -- Trigger function to maintain KV_STORE for feedbacks
@@ -135,11 +135,11 @@ CREATE TABLE IF NOT EXISTS files (
     tags TEXT[] DEFAULT ARRAY[]::TEXT[]
 );
 
-CREATE INDEX IF NOT EXISTS idx_files_tenant ON files (tenant_id);
-CREATE INDEX IF NOT EXISTS idx_files_user ON files (user_id);
-CREATE INDEX IF NOT EXISTS idx_files_graph_edges ON files USING GIN (graph_edges);
-CREATE INDEX IF NOT EXISTS idx_files_metadata ON files USING GIN (metadata);
-CREATE INDEX IF NOT EXISTS idx_files_tags ON files USING GIN (tags);
+CREATE INDEX idx_files_tenant ON files (tenant_id);
+CREATE INDEX idx_files_user ON files (user_id);
+CREATE INDEX idx_files_graph_edges ON files USING GIN (graph_edges);
+CREATE INDEX idx_files_metadata ON files USING GIN (metadata);
+CREATE INDEX idx_files_tags ON files USING GIN (tags);
 
 -- Embeddings for files
 CREATE TABLE IF NOT EXISTS embeddings_files (
@@ -157,14 +157,14 @@ CREATE TABLE IF NOT EXISTS embeddings_files (
 );
 
 -- Index for entity lookup (get all embeddings for entity)
-CREATE INDEX IF NOT EXISTS idx_embeddings_files_entity ON embeddings_files (entity_id);
+CREATE INDEX idx_embeddings_files_entity ON embeddings_files (entity_id);
 
 -- Index for field + provider lookup
-CREATE INDEX IF NOT EXISTS idx_embeddings_files_field_provider ON embeddings_files (field_name, provider);
+CREATE INDEX idx_embeddings_files_field_provider ON embeddings_files (field_name, provider);
 
 -- HNSW index for vector similarity search (created in background)
 -- Note: This will be created by background thread after data load
--- CREATE INDEX IF NOT EXISTS idx_embeddings_files_vector_hnsw ON embeddings_files
+-- CREATE INDEX idx_embeddings_files_vector_hnsw ON embeddings_files
 -- USING hnsw (embedding vector_cosine_ops);
 
 -- KV_STORE trigger for files
@@ -248,11 +248,11 @@ CREATE TABLE IF NOT EXISTS image_resources (
     tags TEXT[] DEFAULT ARRAY[]::TEXT[]
 );
 
-CREATE INDEX IF NOT EXISTS idx_image_resources_tenant ON image_resources (tenant_id);
-CREATE INDEX IF NOT EXISTS idx_image_resources_user ON image_resources (user_id);
-CREATE INDEX IF NOT EXISTS idx_image_resources_graph_edges ON image_resources USING GIN (graph_edges);
-CREATE INDEX IF NOT EXISTS idx_image_resources_metadata ON image_resources USING GIN (metadata);
-CREATE INDEX IF NOT EXISTS idx_image_resources_tags ON image_resources USING GIN (tags);
+CREATE INDEX idx_image_resources_tenant ON image_resources (tenant_id);
+CREATE INDEX idx_image_resources_user ON image_resources (user_id);
+CREATE INDEX idx_image_resources_graph_edges ON image_resources USING GIN (graph_edges);
+CREATE INDEX idx_image_resources_metadata ON image_resources USING GIN (metadata);
+CREATE INDEX idx_image_resources_tags ON image_resources USING GIN (tags);
 
 -- Embeddings for image_resources
 CREATE TABLE IF NOT EXISTS embeddings_image_resources (
@@ -270,14 +270,14 @@ CREATE TABLE IF NOT EXISTS embeddings_image_resources (
 );
 
 -- Index for entity lookup (get all embeddings for entity)
-CREATE INDEX IF NOT EXISTS idx_embeddings_image_resources_entity ON embeddings_image_resources (entity_id);
+CREATE INDEX idx_embeddings_image_resources_entity ON embeddings_image_resources (entity_id);
 
 -- Index for field + provider lookup
-CREATE INDEX IF NOT EXISTS idx_embeddings_image_resources_field_provider ON embeddings_image_resources (field_name, provider);
+CREATE INDEX idx_embeddings_image_resources_field_provider ON embeddings_image_resources (field_name, provider);
 
 -- HNSW index for vector similarity search (created in background)
 -- Note: This will be created by background thread after data load
--- CREATE INDEX IF NOT EXISTS idx_embeddings_image_resources_vector_hnsw ON embeddings_image_resources
+-- CREATE INDEX idx_embeddings_image_resources_vector_hnsw ON embeddings_image_resources
 -- USING hnsw (embedding vector_cosine_ops);
 
 -- KV_STORE trigger for image_resources
@@ -354,11 +354,11 @@ CREATE TABLE IF NOT EXISTS messages (
     tags TEXT[] DEFAULT ARRAY[]::TEXT[]
 );
 
-CREATE INDEX IF NOT EXISTS idx_messages_tenant ON messages (tenant_id);
-CREATE INDEX IF NOT EXISTS idx_messages_user ON messages (user_id);
-CREATE INDEX IF NOT EXISTS idx_messages_graph_edges ON messages USING GIN (graph_edges);
-CREATE INDEX IF NOT EXISTS idx_messages_metadata ON messages USING GIN (metadata);
-CREATE INDEX IF NOT EXISTS idx_messages_tags ON messages USING GIN (tags);
+CREATE INDEX idx_messages_tenant ON messages (tenant_id);
+CREATE INDEX idx_messages_user ON messages (user_id);
+CREATE INDEX idx_messages_graph_edges ON messages USING GIN (graph_edges);
+CREATE INDEX idx_messages_metadata ON messages USING GIN (metadata);
+CREATE INDEX idx_messages_tags ON messages USING GIN (tags);
 
 -- Embeddings for messages
 CREATE TABLE IF NOT EXISTS embeddings_messages (
@@ -376,14 +376,14 @@ CREATE TABLE IF NOT EXISTS embeddings_messages (
 );
 
 -- Index for entity lookup (get all embeddings for entity)
-CREATE INDEX IF NOT EXISTS idx_embeddings_messages_entity ON embeddings_messages (entity_id);
+CREATE INDEX idx_embeddings_messages_entity ON embeddings_messages (entity_id);
 
 -- Index for field + provider lookup
-CREATE INDEX IF NOT EXISTS idx_embeddings_messages_field_provider ON embeddings_messages (field_name, provider);
+CREATE INDEX idx_embeddings_messages_field_provider ON embeddings_messages (field_name, provider);
 
 -- HNSW index for vector similarity search (created in background)
 -- Note: This will be created by background thread after data load
--- CREATE INDEX IF NOT EXISTS idx_embeddings_messages_vector_hnsw ON embeddings_messages
+-- CREATE INDEX idx_embeddings_messages_vector_hnsw ON embeddings_messages
 -- USING hnsw (embedding vector_cosine_ops);
 
 -- KV_STORE trigger for messages
@@ -462,11 +462,11 @@ CREATE TABLE IF NOT EXISTS moments (
     tags TEXT[] DEFAULT ARRAY[]::TEXT[]
 );
 
-CREATE INDEX IF NOT EXISTS idx_moments_tenant ON moments (tenant_id);
-CREATE INDEX IF NOT EXISTS idx_moments_user ON moments (user_id);
-CREATE INDEX IF NOT EXISTS idx_moments_graph_edges ON moments USING GIN (graph_edges);
-CREATE INDEX IF NOT EXISTS idx_moments_metadata ON moments USING GIN (metadata);
-CREATE INDEX IF NOT EXISTS idx_moments_tags ON moments USING GIN (tags);
+CREATE INDEX idx_moments_tenant ON moments (tenant_id);
+CREATE INDEX idx_moments_user ON moments (user_id);
+CREATE INDEX idx_moments_graph_edges ON moments USING GIN (graph_edges);
+CREATE INDEX idx_moments_metadata ON moments USING GIN (metadata);
+CREATE INDEX idx_moments_tags ON moments USING GIN (tags);
 
 -- Embeddings for moments
 CREATE TABLE IF NOT EXISTS embeddings_moments (
@@ -484,14 +484,14 @@ CREATE TABLE IF NOT EXISTS embeddings_moments (
 );
 
 -- Index for entity lookup (get all embeddings for entity)
-CREATE INDEX IF NOT EXISTS idx_embeddings_moments_entity ON embeddings_moments (entity_id);
+CREATE INDEX idx_embeddings_moments_entity ON embeddings_moments (entity_id);
 
 -- Index for field + provider lookup
-CREATE INDEX IF NOT EXISTS idx_embeddings_moments_field_provider ON embeddings_moments (field_name, provider);
+CREATE INDEX idx_embeddings_moments_field_provider ON embeddings_moments (field_name, provider);
 
 -- HNSW index for vector similarity search (created in background)
 -- Note: This will be created by background thread after data load
--- CREATE INDEX IF NOT EXISTS idx_embeddings_moments_vector_hnsw ON embeddings_moments
+-- CREATE INDEX idx_embeddings_moments_vector_hnsw ON embeddings_moments
 -- USING hnsw (embedding vector_cosine_ops);
 
 -- KV_STORE trigger for moments
@@ -560,7 +560,7 @@ CREATE TABLE IF NOT EXISTS ontologies (
     extracted_data JSONB NOT NULL,
     confidence_score DOUBLE PRECISION,
     extraction_timestamp VARCHAR(256),
-    embedding_text TEXT,
+    content TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     deleted_at TIMESTAMP,
@@ -569,11 +569,37 @@ CREATE TABLE IF NOT EXISTS ontologies (
     tags TEXT[] DEFAULT ARRAY[]::TEXT[]
 );
 
-CREATE INDEX IF NOT EXISTS idx_ontologies_tenant ON ontologies (tenant_id);
-CREATE INDEX IF NOT EXISTS idx_ontologies_user ON ontologies (user_id);
-CREATE INDEX IF NOT EXISTS idx_ontologies_graph_edges ON ontologies USING GIN (graph_edges);
-CREATE INDEX IF NOT EXISTS idx_ontologies_metadata ON ontologies USING GIN (metadata);
-CREATE INDEX IF NOT EXISTS idx_ontologies_tags ON ontologies USING GIN (tags);
+CREATE INDEX idx_ontologies_tenant ON ontologies (tenant_id);
+CREATE INDEX idx_ontologies_user ON ontologies (user_id);
+CREATE INDEX idx_ontologies_graph_edges ON ontologies USING GIN (graph_edges);
+CREATE INDEX idx_ontologies_metadata ON ontologies USING GIN (metadata);
+CREATE INDEX idx_ontologies_tags ON ontologies USING GIN (tags);
+
+-- Embeddings for ontologies
+CREATE TABLE IF NOT EXISTS embeddings_ontologies (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    entity_id UUID NOT NULL REFERENCES ontologies(id) ON DELETE CASCADE,
+    field_name VARCHAR(100) NOT NULL,
+    provider VARCHAR(50) NOT NULL DEFAULT 'openai',
+    model VARCHAR(100) NOT NULL DEFAULT 'text-embedding-3-small',
+    embedding vector(1536) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    -- Unique: one embedding per entity per field per provider
+    UNIQUE (entity_id, field_name, provider)
+);
+
+-- Index for entity lookup (get all embeddings for entity)
+CREATE INDEX idx_embeddings_ontologies_entity ON embeddings_ontologies (entity_id);
+
+-- Index for field + provider lookup
+CREATE INDEX idx_embeddings_ontologies_field_provider ON embeddings_ontologies (field_name, provider);
+
+-- HNSW index for vector similarity search (created in background)
+-- Note: This will be created by background thread after data load
+-- CREATE INDEX idx_embeddings_ontologies_vector_hnsw ON embeddings_ontologies
+-- USING hnsw (embedding vector_cosine_ops);
 
 -- KV_STORE trigger for ontologies
 -- Trigger function to maintain KV_STORE for ontologies
@@ -651,11 +677,11 @@ CREATE TABLE IF NOT EXISTS ontology_configs (
     tags TEXT[] DEFAULT ARRAY[]::TEXT[]
 );
 
-CREATE INDEX IF NOT EXISTS idx_ontology_configs_tenant ON ontology_configs (tenant_id);
-CREATE INDEX IF NOT EXISTS idx_ontology_configs_user ON ontology_configs (user_id);
-CREATE INDEX IF NOT EXISTS idx_ontology_configs_graph_edges ON ontology_configs USING GIN (graph_edges);
-CREATE INDEX IF NOT EXISTS idx_ontology_configs_metadata ON ontology_configs USING GIN (metadata);
-CREATE INDEX IF NOT EXISTS idx_ontology_configs_tags ON ontology_configs USING GIN (tags);
+CREATE INDEX idx_ontology_configs_tenant ON ontology_configs (tenant_id);
+CREATE INDEX idx_ontology_configs_user ON ontology_configs (user_id);
+CREATE INDEX idx_ontology_configs_graph_edges ON ontology_configs USING GIN (graph_edges);
+CREATE INDEX idx_ontology_configs_metadata ON ontology_configs USING GIN (metadata);
+CREATE INDEX idx_ontology_configs_tags ON ontology_configs USING GIN (tags);
 
 -- Embeddings for ontology_configs
 CREATE TABLE IF NOT EXISTS embeddings_ontology_configs (
@@ -673,14 +699,14 @@ CREATE TABLE IF NOT EXISTS embeddings_ontology_configs (
 );
 
 -- Index for entity lookup (get all embeddings for entity)
-CREATE INDEX IF NOT EXISTS idx_embeddings_ontology_configs_entity ON embeddings_ontology_configs (entity_id);
+CREATE INDEX idx_embeddings_ontology_configs_entity ON embeddings_ontology_configs (entity_id);
 
 -- Index for field + provider lookup
-CREATE INDEX IF NOT EXISTS idx_embeddings_ontology_configs_field_provider ON embeddings_ontology_configs (field_name, provider);
+CREATE INDEX idx_embeddings_ontology_configs_field_provider ON embeddings_ontology_configs (field_name, provider);
 
 -- HNSW index for vector similarity search (created in background)
 -- Note: This will be created by background thread after data load
--- CREATE INDEX IF NOT EXISTS idx_embeddings_ontology_configs_vector_hnsw ON embeddings_ontology_configs
+-- CREATE INDEX idx_embeddings_ontology_configs_vector_hnsw ON embeddings_ontology_configs
 -- USING hnsw (embedding vector_cosine_ops);
 
 -- KV_STORE trigger for ontology_configs
@@ -756,11 +782,11 @@ CREATE TABLE IF NOT EXISTS resources (
     tags TEXT[] DEFAULT ARRAY[]::TEXT[]
 );
 
-CREATE INDEX IF NOT EXISTS idx_resources_tenant ON resources (tenant_id);
-CREATE INDEX IF NOT EXISTS idx_resources_user ON resources (user_id);
-CREATE INDEX IF NOT EXISTS idx_resources_graph_edges ON resources USING GIN (graph_edges);
-CREATE INDEX IF NOT EXISTS idx_resources_metadata ON resources USING GIN (metadata);
-CREATE INDEX IF NOT EXISTS idx_resources_tags ON resources USING GIN (tags);
+CREATE INDEX idx_resources_tenant ON resources (tenant_id);
+CREATE INDEX idx_resources_user ON resources (user_id);
+CREATE INDEX idx_resources_graph_edges ON resources USING GIN (graph_edges);
+CREATE INDEX idx_resources_metadata ON resources USING GIN (metadata);
+CREATE INDEX idx_resources_tags ON resources USING GIN (tags);
 
 -- Embeddings for resources
 CREATE TABLE IF NOT EXISTS embeddings_resources (
@@ -778,14 +804,14 @@ CREATE TABLE IF NOT EXISTS embeddings_resources (
 );
 
 -- Index for entity lookup (get all embeddings for entity)
-CREATE INDEX IF NOT EXISTS idx_embeddings_resources_entity ON embeddings_resources (entity_id);
+CREATE INDEX idx_embeddings_resources_entity ON embeddings_resources (entity_id);
 
 -- Index for field + provider lookup
-CREATE INDEX IF NOT EXISTS idx_embeddings_resources_field_provider ON embeddings_resources (field_name, provider);
+CREATE INDEX idx_embeddings_resources_field_provider ON embeddings_resources (field_name, provider);
 
 -- HNSW index for vector similarity search (created in background)
 -- Note: This will be created by background thread after data load
--- CREATE INDEX IF NOT EXISTS idx_embeddings_resources_vector_hnsw ON embeddings_resources
+-- CREATE INDEX idx_embeddings_resources_vector_hnsw ON embeddings_resources
 -- USING hnsw (embedding vector_cosine_ops);
 
 -- KV_STORE trigger for resources
@@ -860,11 +886,11 @@ CREATE TABLE IF NOT EXISTS schemas (
     tags TEXT[] DEFAULT ARRAY[]::TEXT[]
 );
 
-CREATE INDEX IF NOT EXISTS idx_schemas_tenant ON schemas (tenant_id);
-CREATE INDEX IF NOT EXISTS idx_schemas_user ON schemas (user_id);
-CREATE INDEX IF NOT EXISTS idx_schemas_graph_edges ON schemas USING GIN (graph_edges);
-CREATE INDEX IF NOT EXISTS idx_schemas_metadata ON schemas USING GIN (metadata);
-CREATE INDEX IF NOT EXISTS idx_schemas_tags ON schemas USING GIN (tags);
+CREATE INDEX idx_schemas_tenant ON schemas (tenant_id);
+CREATE INDEX idx_schemas_user ON schemas (user_id);
+CREATE INDEX idx_schemas_graph_edges ON schemas USING GIN (graph_edges);
+CREATE INDEX idx_schemas_metadata ON schemas USING GIN (metadata);
+CREATE INDEX idx_schemas_tags ON schemas USING GIN (tags);
 
 -- Embeddings for schemas
 CREATE TABLE IF NOT EXISTS embeddings_schemas (
@@ -882,14 +908,14 @@ CREATE TABLE IF NOT EXISTS embeddings_schemas (
 );
 
 -- Index for entity lookup (get all embeddings for entity)
-CREATE INDEX IF NOT EXISTS idx_embeddings_schemas_entity ON embeddings_schemas (entity_id);
+CREATE INDEX idx_embeddings_schemas_entity ON embeddings_schemas (entity_id);
 
 -- Index for field + provider lookup
-CREATE INDEX IF NOT EXISTS idx_embeddings_schemas_field_provider ON embeddings_schemas (field_name, provider);
+CREATE INDEX idx_embeddings_schemas_field_provider ON embeddings_schemas (field_name, provider);
 
 -- HNSW index for vector similarity search (created in background)
 -- Note: This will be created by background thread after data load
--- CREATE INDEX IF NOT EXISTS idx_embeddings_schemas_vector_hnsw ON embeddings_schemas
+-- CREATE INDEX idx_embeddings_schemas_vector_hnsw ON embeddings_schemas
 -- USING hnsw (embedding vector_cosine_ops);
 
 -- KV_STORE trigger for schemas
@@ -967,11 +993,11 @@ CREATE TABLE IF NOT EXISTS sessions (
     tags TEXT[] DEFAULT ARRAY[]::TEXT[]
 );
 
-CREATE INDEX IF NOT EXISTS idx_sessions_tenant ON sessions (tenant_id);
-CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id);
-CREATE INDEX IF NOT EXISTS idx_sessions_graph_edges ON sessions USING GIN (graph_edges);
-CREATE INDEX IF NOT EXISTS idx_sessions_metadata ON sessions USING GIN (metadata);
-CREATE INDEX IF NOT EXISTS idx_sessions_tags ON sessions USING GIN (tags);
+CREATE INDEX idx_sessions_tenant ON sessions (tenant_id);
+CREATE INDEX idx_sessions_user ON sessions (user_id);
+CREATE INDEX idx_sessions_graph_edges ON sessions USING GIN (graph_edges);
+CREATE INDEX idx_sessions_metadata ON sessions USING GIN (metadata);
+CREATE INDEX idx_sessions_tags ON sessions USING GIN (tags);
 
 -- Embeddings for sessions
 CREATE TABLE IF NOT EXISTS embeddings_sessions (
@@ -989,14 +1015,14 @@ CREATE TABLE IF NOT EXISTS embeddings_sessions (
 );
 
 -- Index for entity lookup (get all embeddings for entity)
-CREATE INDEX IF NOT EXISTS idx_embeddings_sessions_entity ON embeddings_sessions (entity_id);
+CREATE INDEX idx_embeddings_sessions_entity ON embeddings_sessions (entity_id);
 
 -- Index for field + provider lookup
-CREATE INDEX IF NOT EXISTS idx_embeddings_sessions_field_provider ON embeddings_sessions (field_name, provider);
+CREATE INDEX idx_embeddings_sessions_field_provider ON embeddings_sessions (field_name, provider);
 
 -- HNSW index for vector similarity search (created in background)
 -- Note: This will be created by background thread after data load
--- CREATE INDEX IF NOT EXISTS idx_embeddings_sessions_vector_hnsw ON embeddings_sessions
+-- CREATE INDEX idx_embeddings_sessions_vector_hnsw ON embeddings_sessions
 -- USING hnsw (embedding vector_cosine_ops);
 
 -- KV_STORE trigger for sessions
@@ -1068,11 +1094,11 @@ CREATE TABLE IF NOT EXISTS shared_sessions (
     tags TEXT[] DEFAULT ARRAY[]::TEXT[]
 );
 
-CREATE INDEX IF NOT EXISTS idx_shared_sessions_tenant ON shared_sessions (tenant_id);
-CREATE INDEX IF NOT EXISTS idx_shared_sessions_user ON shared_sessions (user_id);
-CREATE INDEX IF NOT EXISTS idx_shared_sessions_graph_edges ON shared_sessions USING GIN (graph_edges);
-CREATE INDEX IF NOT EXISTS idx_shared_sessions_metadata ON shared_sessions USING GIN (metadata);
-CREATE INDEX IF NOT EXISTS idx_shared_sessions_tags ON shared_sessions USING GIN (tags);
+CREATE INDEX idx_shared_sessions_tenant ON shared_sessions (tenant_id);
+CREATE INDEX idx_shared_sessions_user ON shared_sessions (user_id);
+CREATE INDEX idx_shared_sessions_graph_edges ON shared_sessions USING GIN (graph_edges);
+CREATE INDEX idx_shared_sessions_metadata ON shared_sessions USING GIN (metadata);
+CREATE INDEX idx_shared_sessions_tags ON shared_sessions USING GIN (tags);
 
 -- KV_STORE trigger for shared_sessions
 -- Trigger function to maintain KV_STORE for shared_sessions
@@ -1151,11 +1177,11 @@ CREATE TABLE IF NOT EXISTS users (
     tags TEXT[] DEFAULT ARRAY[]::TEXT[]
 );
 
-CREATE INDEX IF NOT EXISTS idx_users_tenant ON users (tenant_id);
-CREATE INDEX IF NOT EXISTS idx_users_user ON users (user_id);
-CREATE INDEX IF NOT EXISTS idx_users_graph_edges ON users USING GIN (graph_edges);
-CREATE INDEX IF NOT EXISTS idx_users_metadata ON users USING GIN (metadata);
-CREATE INDEX IF NOT EXISTS idx_users_tags ON users USING GIN (tags);
+CREATE INDEX idx_users_tenant ON users (tenant_id);
+CREATE INDEX idx_users_user ON users (user_id);
+CREATE INDEX idx_users_graph_edges ON users USING GIN (graph_edges);
+CREATE INDEX idx_users_metadata ON users USING GIN (metadata);
+CREATE INDEX idx_users_tags ON users USING GIN (tags);
 
 -- Embeddings for users
 CREATE TABLE IF NOT EXISTS embeddings_users (
@@ -1173,14 +1199,14 @@ CREATE TABLE IF NOT EXISTS embeddings_users (
 );
 
 -- Index for entity lookup (get all embeddings for entity)
-CREATE INDEX IF NOT EXISTS idx_embeddings_users_entity ON embeddings_users (entity_id);
+CREATE INDEX idx_embeddings_users_entity ON embeddings_users (entity_id);
 
 -- Index for field + provider lookup
-CREATE INDEX IF NOT EXISTS idx_embeddings_users_field_provider ON embeddings_users (field_name, provider);
+CREATE INDEX idx_embeddings_users_field_provider ON embeddings_users (field_name, provider);
 
 -- HNSW index for vector similarity search (created in background)
 -- Note: This will be created by background thread after data load
--- CREATE INDEX IF NOT EXISTS idx_embeddings_users_vector_hnsw ON embeddings_users
+-- CREATE INDEX idx_embeddings_users_vector_hnsw ON embeddings_users
 -- USING hnsw (embedding vector_cosine_ops);
 
 -- KV_STORE trigger for users
@@ -2019,7 +2045,7 @@ Domain-specific knowledge extracted from files using custom agents.
         extracted_data: Structured data extracted by agent (arbitrary JSON)
         confidence_score: Optional confidence score from extraction (0.0-1.0)
         extraction_timestamp: When extraction was performed
-        embedding_text: Text used for generating embedding (derived from extracted_data)
+        content: Text used for generating embedding (derived from extracted_data)
 
     Inherited from CoreModel:
         id: UUID or string identifier
@@ -2110,7 +2136,7 @@ This schema includes the `search_rem` tool which supports:
 |----------|-------|
 | Table | `ontologies` |
 | Entity Key | `id` |
-| Embedding Fields | None |
+| Embedding Fields | `content` |
 | Tools | `search_rem` |
 
 ## Fields
@@ -2192,14 +2218,14 @@ This schema includes the `search_rem` tool which supports:
 - **Type**: `typing.Optional[str]`
 - **Optional**
 
-### `embedding_text`
+### `content`
 - **Type**: `typing.Optional[str]`
 - **Optional**
 
 ',
-    '{"type": "object", "description": "Domain-specific knowledge extracted from files using custom agents.\n\n    Attributes:\n        name: Human-readable label for this ontology instance\n        file_id: Foreign key to File entity that was processed\n        agent_schema_id: Foreign key to Schema entity that performed extraction\n        provider_name: LLM provider used for extraction (e.g., \"anthropic\", \"openai\")\n        model_name: Specific model used (e.g., \"claude-sonnet-4-5\")\n        extracted_data: Structured data extracted by agent (arbitrary JSON)\n        confidence_score: Optional confidence score from extraction (0.0-1.0)\n        extraction_timestamp: When extraction was performed\n        embedding_text: Text used for generating embedding (derived from extracted_data)\n\n    Inherited from CoreModel:\n        id: UUID or string identifier\n        created_at: Entity creation timestamp\n        updated_at: Last update timestamp\n        deleted_at: Soft deletion timestamp\n        tenant_id: Multi-tenancy isolation\n        user_id: Ownership\n        graph_edges: Relationships to other entities\n        metadata: Flexible metadata storage\n        tags: Classification tags\n        column: Database schema metadata\n\n    Example Usage:\n        # CV extraction\n        cv_ontology = Ontology(\n            name=\"john-doe-cv-2024\",\n            file_id=\"file-uuid-123\",\n            agent_schema_id=\"cv-parser-v1\",\n            provider_name=\"anthropic\",\n            model_name=\"claude-sonnet-4-5-20250929\",\n            extracted_data={\n                \"candidate_name\": \"John Doe\",\n                \"email\": \"john@example.com\",\n                \"skills\": [\"Python\", \"PostgreSQL\", \"Kubernetes\"],\n                \"experience\": [\n                    {\n                        \"company\": \"TechCorp\",\n                        \"role\": \"Senior Engineer\",\n                        \"years\": 3,\n                        \"achievements\": [\"Led migration to k8s\", \"Reduced costs 40%\"]\n                    }\n                ],\n                \"education\": [\n                    {\"degree\": \"BS Computer Science\", \"institution\": \"MIT\", \"year\": 2018}\n                ]\n            },\n            confidence_score=0.95,\n            tags=[\"cv\", \"engineering\", \"senior-level\"]\n        )\n\n        # Contract extraction\n        contract_ontology = Ontology(\n            name=\"acme-supplier-agreement-2024\",\n            file_id=\"file-uuid-456\",\n            agent_schema_id=\"contract-parser-v2\",\n            provider_name=\"openai\",\n            model_name=\"gpt-4.1\",\n            extracted_data={\n                \"contract_type\": \"supplier_agreement\",\n                \"parties\": [\n                    {\"name\": \"ACME Corp\", \"role\": \"buyer\"},\n                    {\"name\": \"SupplyChain Inc\", \"role\": \"supplier\"}\n                ],\n                \"effective_date\": \"2024-01-01\",\n                \"termination_date\": \"2026-12-31\",\n                \"payment_terms\": {\n                    \"amount\": 500000,\n                    \"currency\": \"USD\",\n                    \"frequency\": \"quarterly\"\n                },\n                \"key_obligations\": [\n                    \"Supplier must deliver within 30 days\",\n                    \"Buyer must pay within 60 days of invoice\"\n                ]\n            },\n            confidence_score=0.92,\n            tags=[\"contract\", \"supplier\", \"procurement\"]\n        )\n    \n\nThis agent can search the `ontologies` table using the `search_rem` tool. Use REM query syntax: LOOKUP for exact match, FUZZY for typo-tolerant search, SEARCH for semantic similarity, or SQL for complex queries.", "properties": {"id": {"anyOf": [{"format": "uuid", "type": "string"}, {"type": "string"}, {"type": "null"}], "default": null, "description": "Unique identifier (UUID or string, generated per model type). Generated automatically if not provided.", "title": "Id"}, "created_at": {"description": "Entity creation timestamp", "format": "date-time", "title": "Created At", "type": "string"}, "updated_at": {"description": "Last update timestamp", "format": "date-time", "title": "Updated At", "type": "string"}, "deleted_at": {"anyOf": [{"format": "date-time", "type": "string"}, {"type": "null"}], "default": null, "description": "Soft deletion timestamp", "title": "Deleted At"}, "tenant_id": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "description": "Tenant identifier for multi-tenancy isolation", "title": "Tenant Id"}, "user_id": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "description": "Owner user identifier (tenant-scoped). This is a VARCHAR(256), not a UUID, to allow flexibility for external identity providers. Typically generated as a hash of the user''s email address. In future, other strong unique claims (e.g., OAuth sub, verified phone) could also be used for generation.", "title": "User Id"}, "graph_edges": {"description": "Knowledge graph edges stored as InlineEdge dicts", "items": {"additionalProperties": true, "type": "object"}, "title": "Graph Edges", "type": "array"}, "metadata": {"additionalProperties": true, "description": "Flexible metadata storage", "title": "Metadata", "type": "object"}, "tags": {"description": "Entity tags", "items": {"type": "string"}, "title": "Tags", "type": "array"}, "name": {"title": "Name", "type": "string"}, "file_id": {"anyOf": [{"format": "uuid", "type": "string"}, {"type": "string"}], "title": "File Id"}, "agent_schema_id": {"title": "Agent Schema Id", "type": "string"}, "provider_name": {"title": "Provider Name", "type": "string"}, "model_name": {"title": "Model Name", "type": "string"}, "extracted_data": {"additionalProperties": true, "title": "Extracted Data", "type": "object"}, "confidence_score": {"anyOf": [{"type": "number"}, {"type": "null"}], "default": null, "title": "Confidence Score"}, "extraction_timestamp": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "title": "Extraction Timestamp"}, "embedding_text": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "title": "Embedding Text"}}, "required": ["name", "file_id", "agent_schema_id", "provider_name", "model_name", "extracted_data"], "json_schema_extra": {"table_name": "ontologies", "entity_key_field": "id", "embedding_fields": [], "fully_qualified_name": "rem.models.entities.ontology.Ontology", "tools": ["search_rem"], "default_search_table": "ontologies", "has_embeddings": false}}'::jsonb,
+    '{"type": "object", "description": "Domain-specific knowledge extracted from files using custom agents.\n\n    Attributes:\n        name: Human-readable label for this ontology instance\n        file_id: Foreign key to File entity that was processed\n        agent_schema_id: Foreign key to Schema entity that performed extraction\n        provider_name: LLM provider used for extraction (e.g., \"anthropic\", \"openai\")\n        model_name: Specific model used (e.g., \"claude-sonnet-4-5\")\n        extracted_data: Structured data extracted by agent (arbitrary JSON)\n        confidence_score: Optional confidence score from extraction (0.0-1.0)\n        extraction_timestamp: When extraction was performed\n        content: Text used for generating embedding (derived from extracted_data)\n\n    Inherited from CoreModel:\n        id: UUID or string identifier\n        created_at: Entity creation timestamp\n        updated_at: Last update timestamp\n        deleted_at: Soft deletion timestamp\n        tenant_id: Multi-tenancy isolation\n        user_id: Ownership\n        graph_edges: Relationships to other entities\n        metadata: Flexible metadata storage\n        tags: Classification tags\n        column: Database schema metadata\n\n    Example Usage:\n        # CV extraction\n        cv_ontology = Ontology(\n            name=\"john-doe-cv-2024\",\n            file_id=\"file-uuid-123\",\n            agent_schema_id=\"cv-parser-v1\",\n            provider_name=\"anthropic\",\n            model_name=\"claude-sonnet-4-5-20250929\",\n            extracted_data={\n                \"candidate_name\": \"John Doe\",\n                \"email\": \"john@example.com\",\n                \"skills\": [\"Python\", \"PostgreSQL\", \"Kubernetes\"],\n                \"experience\": [\n                    {\n                        \"company\": \"TechCorp\",\n                        \"role\": \"Senior Engineer\",\n                        \"years\": 3,\n                        \"achievements\": [\"Led migration to k8s\", \"Reduced costs 40%\"]\n                    }\n                ],\n                \"education\": [\n                    {\"degree\": \"BS Computer Science\", \"institution\": \"MIT\", \"year\": 2018}\n                ]\n            },\n            confidence_score=0.95,\n            tags=[\"cv\", \"engineering\", \"senior-level\"]\n        )\n\n        # Contract extraction\n        contract_ontology = Ontology(\n            name=\"acme-supplier-agreement-2024\",\n            file_id=\"file-uuid-456\",\n            agent_schema_id=\"contract-parser-v2\",\n            provider_name=\"openai\",\n            model_name=\"gpt-4.1\",\n            extracted_data={\n                \"contract_type\": \"supplier_agreement\",\n                \"parties\": [\n                    {\"name\": \"ACME Corp\", \"role\": \"buyer\"},\n                    {\"name\": \"SupplyChain Inc\", \"role\": \"supplier\"}\n                ],\n                \"effective_date\": \"2024-01-01\",\n                \"termination_date\": \"2026-12-31\",\n                \"payment_terms\": {\n                    \"amount\": 500000,\n                    \"currency\": \"USD\",\n                    \"frequency\": \"quarterly\"\n                },\n                \"key_obligations\": [\n                    \"Supplier must deliver within 30 days\",\n                    \"Buyer must pay within 60 days of invoice\"\n                ]\n            },\n            confidence_score=0.92,\n            tags=[\"contract\", \"supplier\", \"procurement\"]\n        )\n    \n\nThis agent can search the `ontologies` table using the `search_rem` tool. Use REM query syntax: LOOKUP for exact match, FUZZY for typo-tolerant search, SEARCH for semantic similarity, or SQL for complex queries.", "properties": {"id": {"anyOf": [{"format": "uuid", "type": "string"}, {"type": "string"}, {"type": "null"}], "default": null, "description": "Unique identifier (UUID or string, generated per model type). Generated automatically if not provided.", "title": "Id"}, "created_at": {"description": "Entity creation timestamp", "format": "date-time", "title": "Created At", "type": "string"}, "updated_at": {"description": "Last update timestamp", "format": "date-time", "title": "Updated At", "type": "string"}, "deleted_at": {"anyOf": [{"format": "date-time", "type": "string"}, {"type": "null"}], "default": null, "description": "Soft deletion timestamp", "title": "Deleted At"}, "tenant_id": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "description": "Tenant identifier for multi-tenancy isolation", "title": "Tenant Id"}, "user_id": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "description": "Owner user identifier (tenant-scoped). This is a VARCHAR(256), not a UUID, to allow flexibility for external identity providers. Typically generated as a hash of the user''s email address. In future, other strong unique claims (e.g., OAuth sub, verified phone) could also be used for generation.", "title": "User Id"}, "graph_edges": {"description": "Knowledge graph edges stored as InlineEdge dicts", "items": {"additionalProperties": true, "type": "object"}, "title": "Graph Edges", "type": "array"}, "metadata": {"additionalProperties": true, "description": "Flexible metadata storage", "title": "Metadata", "type": "object"}, "tags": {"description": "Entity tags", "items": {"type": "string"}, "title": "Tags", "type": "array"}, "name": {"title": "Name", "type": "string"}, "file_id": {"anyOf": [{"format": "uuid", "type": "string"}, {"type": "string"}], "title": "File Id"}, "agent_schema_id": {"title": "Agent Schema Id", "type": "string"}, "provider_name": {"title": "Provider Name", "type": "string"}, "model_name": {"title": "Model Name", "type": "string"}, "extracted_data": {"additionalProperties": true, "title": "Extracted Data", "type": "object"}, "confidence_score": {"anyOf": [{"type": "number"}, {"type": "null"}], "default": null, "title": "Confidence Score"}, "extraction_timestamp": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "title": "Extraction Timestamp"}, "content": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "title": "Content"}}, "required": ["name", "file_id", "agent_schema_id", "provider_name", "model_name", "extracted_data"], "json_schema_extra": {"table_name": "ontologies", "entity_key_field": "id", "embedding_fields": ["content"], "fully_qualified_name": "rem.models.entities.ontology.Ontology", "tools": ["search_rem"], "default_search_table": "ontologies", "has_embeddings": true}}'::jsonb,
     'entity',
-    '{"table_name": "ontologies", "entity_key_field": "id", "embedding_fields": [], "fqn": "rem.models.entities.ontology.Ontology"}'::jsonb
+    '{"table_name": "ontologies", "entity_key_field": "id", "embedding_fields": ["content"], "fqn": "rem.models.entities.ontology.Ontology"}'::jsonb
 )
 ON CONFLICT (id) DO UPDATE SET
     name = EXCLUDED.name,
@@ -3115,7 +3141,7 @@ BEGIN
     RAISE NOTICE '  ✓ image_resources (1 embeddable fields)';
     RAISE NOTICE '  ✓ messages (1 embeddable fields)';
     RAISE NOTICE '  ✓ moments (1 embeddable fields)';
-    RAISE NOTICE '  ✓ ontologies';
+    RAISE NOTICE '  ✓ ontologies (1 embeddable fields)';
     RAISE NOTICE '  ✓ ontology_configs (1 embeddable fields)';
     RAISE NOTICE '  ✓ resources (1 embeddable fields)';
     RAISE NOTICE '  ✓ schemas (1 embeddable fields)';

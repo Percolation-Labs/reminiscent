@@ -75,7 +75,7 @@ async def run_agent_streaming(
     """
     Run agent in streaming mode using agent.iter() with usage limits.
 
-    Design Pattern (from carrier):
+    Design Pattern:
     - Use agent.iter() for complete execution with tool call visibility
     - run_stream() stops after first output, missing tool calls
     - Stream tool call markers: [Calling: tool_name]

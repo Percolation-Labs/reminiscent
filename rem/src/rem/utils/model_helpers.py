@@ -19,6 +19,9 @@ Table Name Inference:
 
 Model Resolution:
 - model_from_arbitrary_casing: Resolve model class from flexible input casing
+
+Data Validation:
+- validate_data_for_model: Validate row data against a Pydantic model with clear error reporting
 """
 
 import re
@@ -389,3 +392,101 @@ def model_from_arbitrary_casing(
         f"Unknown model: '{name}' (normalized: '{normalized}'). "
         f"Available models: {', '.join(available)}"
     )
+
+
+class ValidationResult:
+    """Result of validating data against a Pydantic model."""
+
+    def __init__(
+        self,
+        valid: bool,
+        instance: BaseModel | None = None,
+        errors: list[str] | None = None,
+        missing_required: set[str] | None = None,
+        extra_fields: set[str] | None = None,
+        required_fields: set[str] | None = None,
+        optional_fields: set[str] | None = None,
+    ):
+        self.valid = valid
+        self.instance = instance
+        self.errors = errors or []
+        self.missing_required = missing_required or set()
+        self.extra_fields = extra_fields or set()
+        self.required_fields = required_fields or set()
+        self.optional_fields = optional_fields or set()
+
+    def log_errors(self, row_label: str = "Row") -> None:
+        """Log validation errors using loguru."""
+        if self.valid:
+            return
+
+        logger.error(f"{row_label}: Validation failed")
+        if self.missing_required:
+            logger.error(f"  Missing required: {self.missing_required}")
+        if self.extra_fields:
+            logger.warning(f"  Unknown fields (ignored): {self.extra_fields}")
+        for err in self.errors:
+            logger.error(f"  - {err}")
+        logger.info(f"  Required: {self.required_fields or '(none)'}")
+        logger.info(f"  Optional: {self.optional_fields}")
+
+
+def validate_data_for_model(
+    model: Type[BaseModel],
+    data: dict[str, Any],
+) -> ValidationResult:
+    """
+    Validate a data dict against a Pydantic model with detailed error reporting.
+
+    Args:
+        model: Pydantic model class to validate against
+        data: Dictionary of field values
+
+    Returns:
+        ValidationResult with validation status and detailed field info
+
+    Example:
+        >>> from rem.models.entities import Resource
+        >>> result = validate_data_for_model(Resource, {"name": "test", "content": "hello"})
+        >>> result.valid
+        True
+        >>> result = validate_data_for_model(Resource, {"unknown_field": "value"})
+        >>> result.valid
+        True  # Resource has no required fields
+        >>> result.extra_fields
+        {'unknown_field'}
+    """
+    from pydantic import ValidationError
+
+    model_fields = set(model.model_fields.keys())
+    required = {k for k, v in model.model_fields.items() if v.is_required()}
+    optional = model_fields - required
+    data_fields = set(data.keys())
+
+    missing_required = required - data_fields
+    extra_fields = data_fields - model_fields
+
+    try:
+        instance = model(**data)
+        return ValidationResult(
+            valid=True,
+            instance=instance,
+            required_fields=required,
+            optional_fields=optional,
+            extra_fields=extra_fields,
+        )
+    except ValidationError as e:
+        errors = []
+        for err in e.errors():
+            field = ".".join(str(p) for p in err["loc"])
+            if field not in missing_required:  # Don't double-report missing
+                errors.append(f"{field}: {err['msg']}")
+
+        return ValidationResult(
+            valid=False,
+            errors=errors,
+            missing_required=missing_required,
+            extra_fields=extra_fields,
+            required_fields=required,
+            optional_fields=optional,
+        )

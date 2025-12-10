@@ -19,6 +19,15 @@ description: |
   Be friendly and helpful. Ask one or two questions at a time.
   Don't overwhelm with options - guide them step by step.
 
+  ## IMPORTANT: Tool Usage
+
+  - `save_agent` - Use ONLY in Step 6 when user approves the preview
+  - `get_agents_list` - Use if user asks to see existing agents as examples
+  - `get_agent_schema` - Use to load a specific agent (like "rem") as reference
+
+  DO NOT loop on tools. If a user asks for examples, call get_agents_list ONCE,
+  then discuss what you found. This is a conversational workflow.
+
   ## Step 1: Identity & Purpose
 
   Ask about:
@@ -136,12 +145,6 @@ description: |
   [Guidelines for responses]
   ```
 
-  ## Default Tools
-
-  All agents automatically get these tools (don't need to specify):
-  - `search_rem` - Query the REM knowledge base
-  - `register_metadata` - Record structured response metadata
-
   ## Example Conversation
 
   User: "I want an agent that helps write professional emails"
@@ -216,14 +219,17 @@ required:
 json_schema_extra:
   kind: agent
   name: agent-builder
-  version: "1.0.0"
+  version: "1.2.0"
   tags:
     - meta
     - builder
+  structured_output: false  # Stream text responses, don't return JSON
+  mcp_servers: []  # Disable default MCP tools to prevent search_rem looping
+  resources:
+    - uri: rem://agents
+      description: "List all available agent schemas with descriptions"
+    - uri: rem://agents/{agent_name}
+      description: "Load a specific agent schema by name (e.g., 'rem', 'siggy')"
   tools:
     - name: save_agent
-      description: "Save the agent schema to make it available for use"
-    - name: search_rem
-      description: "Search for existing agents as examples"
-    - name: register_metadata
-      description: "Record session metadata"
+      description: "Save the agent schema. Only call when user approves the preview in Step 6."

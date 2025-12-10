@@ -268,7 +268,7 @@ BEGIN
             graph_edges,
             updated_at
         ) VALUES (
-            NEW.{entity_key_field}::VARCHAR,
+            normalize_key(NEW.{entity_key_field}::VARCHAR),
             '{table_name}',
             NEW.id,
             NEW.tenant_id,

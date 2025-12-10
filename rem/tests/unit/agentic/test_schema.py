@@ -294,7 +294,7 @@ class TestAgentSchemaMetadataNewFields:
         )
 
         assert metadata.system_prompt == "You are a helpful assistant."
-        assert metadata.structured_output is True  # default
+        assert metadata.structured_output is None  # default is None (auto-detect)
 
     def test_structured_output_disabled(self):
         """Test structured_output can be disabled."""

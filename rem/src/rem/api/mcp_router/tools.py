@@ -1132,3 +1132,82 @@ async def save_agent(
         result["message"] = f"Agent '{name}' saved. Use `/custom-agent {name}` to chat with it."
 
     return result
+
+
+# =============================================================================
+# Test/Debug Tools (for development only)
+# =============================================================================
+
+@mcp_tool_error_handler
+async def test_error_handling(
+    error_type: Literal["exception", "error_response", "timeout", "success"] = "success",
+    delay_seconds: float = 0,
+    error_message: str = "Test error occurred",
+) -> dict[str, Any]:
+    """
+    Test tool for simulating different error scenarios.
+
+    **FOR DEVELOPMENT/TESTING ONLY** - This tool helps verify that error
+    handling works correctly through the streaming layer.
+
+    Args:
+        error_type: Type of error to simulate:
+            - "success": Returns successful response (default)
+            - "exception": Raises an exception (tests @mcp_tool_error_handler)
+            - "error_response": Returns {"status": "error", ...} dict
+            - "timeout": Delays for 60 seconds (simulates timeout)
+        delay_seconds: Optional delay before responding (0-10 seconds)
+        error_message: Custom error message for error scenarios
+
+    Returns:
+        Dict with test results or error information
+
+    Examples:
+        # Test successful response
+        test_error_handling(error_type="success")
+
+        # Test exception handling
+        test_error_handling(error_type="exception", error_message="Database connection failed")
+
+        # Test error response format
+        test_error_handling(error_type="error_response", error_message="Resource not found")
+
+        # Test with delay
+        test_error_handling(error_type="success", delay_seconds=2)
+    """
+    import asyncio
+
+    logger.info(f"test_error_handling called: type={error_type}, delay={delay_seconds}")
+
+    # Apply delay (capped at 10 seconds for safety)
+    if delay_seconds > 0:
+        await asyncio.sleep(min(delay_seconds, 10))
+
+    if error_type == "exception":
+        # This tests the @mcp_tool_error_handler decorator
+        raise RuntimeError(f"TEST EXCEPTION: {error_message}")
+
+    elif error_type == "error_response":
+        # This tests how the streaming layer handles error status responses
+        return {
+            "status": "error",
+            "error": error_message,
+            "error_code": "TEST_ERROR",
+            "recoverable": True,
+        }
+
+    elif error_type == "timeout":
+        # Simulate a very long operation (for testing client-side timeouts)
+        await asyncio.sleep(60)
+        return {"status": "success", "message": "Timeout test completed (should not reach here)"}
+
+    else:  # success
+        return {
+            "status": "success",
+            "message": "Test completed successfully",
+            "test_data": {
+                "error_type": error_type,
+                "delay_applied": delay_seconds,
+                "timestamp": str(asyncio.get_event_loop().time()),
+            },
+        }

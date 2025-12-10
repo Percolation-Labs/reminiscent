@@ -26,8 +26,8 @@ class TestCreateResourceTool:
             "Get field definition"
         )
 
-        # Clean tool name (no template vars)
-        assert tool.name == "get_patient_profile_field"
+        # Clean tool name with _by_{params} suffix for parameterized tools
+        assert tool.name == "get_patient_profile_field_by_field_key"
         assert "{" not in tool.name  # No template chars in name
 
         # Check function has annotations for parameters
@@ -41,7 +41,7 @@ class TestCreateResourceTool:
             "Get endpoint details"
         )
 
-        assert tool.name == "get_api_endpoint"
+        assert tool.name == "get_api_endpoint_by_api_id_method_path"
 
         # Check function has annotations for all parameters
         annotations = tool.function.__annotations__

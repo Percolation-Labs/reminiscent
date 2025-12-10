@@ -21,6 +21,11 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_embeddings_moments_vector_hnsw
 ON embeddings_moments
 USING hnsw (embedding vector_cosine_ops);
 
+-- HNSW vector index for embeddings_ontologies
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_embeddings_ontologies_vector_hnsw
+ON embeddings_ontologies
+USING hnsw (embedding vector_cosine_ops);
+
 -- HNSW vector index for embeddings_ontology_configs
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_embeddings_ontology_configs_vector_hnsw
 ON embeddings_ontology_configs

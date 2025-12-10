@@ -3,27 +3,25 @@
 # Pre-commit Hook: Run Unit Tests
 # =============================================================================
 # Runs unit tests before allowing commits. Fails fast on any test failure.
-# Unit tests are isolated (no database required).
 #
 # Install: git config core.hooksPath .githooks
-# Skip: git commit --no-verify
 # =============================================================================
 
 set -e
 
 echo "=== Pre-commit: Running unit tests ==="
 
-# Get the repo root and rem directory
+# Get the repo root
 REPO_ROOT="$(git rev-parse --show-toplevel)"
-REM_DIR="$REPO_ROOT/rem"
-cd "$REM_DIR"
 
-# Check if source files changed (relative to rem/)
-SRC_CHANGED=$(git diff --cached --name-only -- 'rem/src/' 'rem/tests/' | wc -l | tr -d ' ')
+# Check if rem package has changes
+REM_CHANGED=$(git diff --cached --name-only -- 'rem/' | wc -l | tr -d ' ')
 
-if [ "$SRC_CHANGED" -gt 0 ]; then
+# Run tests if rem changed
+if [ "$REM_CHANGED" -gt 0 ]; then
     echo ""
-    echo ">>> Source changes detected - running unit tests..."
+    echo ">>> REM package changes detected - running pytest..."
+    cd "$REPO_ROOT/rem"
 
     # Sync dependencies if needed
     if [ ! -d ".venv" ]; then
@@ -31,11 +29,11 @@ if [ "$SRC_CHANGED" -gt 0 ]; then
         uv sync --frozen --quiet
     fi
 
-    # Run unit tests (no DB required)
-    uv run pytest tests/unit/ -q --tb=line -m "not llm" 2>/dev/null
+    # Run unit tests only (fast, no DB required)
+    uv run pytest tests/unit -q --tb=short
     echo "✓ Unit tests passed"
 else
-    echo "No source changes - skipping unit tests"
+    echo "No REM package changes - skipping unit tests"
 fi
 
 echo ""
