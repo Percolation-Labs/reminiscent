@@ -1,57 +1,41 @@
 #!/bin/bash
-# =============================================================================
 # Pre-push Hook: Run Integration Tests in Docker
-# =============================================================================
-# Before pushing:
-# 1. Starts test database (docker-compose.test.yml)
-# 2. Runs integration tests against isolated test DB (DB-only, no LLM)
-# 3. Tears down test database
-#
 # Skip with: git push --no-verify
 # Install: git config core.hooksPath .githooks
-# =============================================================================
 
 set -e
 
 echo "=== Pre-push: Running integration tests ==="
 
-# Get the repo root
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT/rem"
 
-# ---------------------------------------------------------------------------
-# Step 1: Start test database
-# ---------------------------------------------------------------------------
+# Start test database
 echo ""
 echo ">>> Starting test database..."
-
 docker compose -f docker-compose.test.yml up -d
 
 # Wait for database to be ready
 echo ">>> Waiting for database to be ready..."
 for i in {1..30}; do
     if docker compose -f docker-compose.test.yml exec -T postgres pg_isready -U rem -d rem > /dev/null 2>&1; then
-        echo "✓ Database ready"
+        echo "Database ready"
         break
     fi
     if [ $i -eq 30 ]; then
-        echo "✗ Database failed to start"
+        echo "Database failed to start"
         docker compose -f docker-compose.test.yml down -v
         exit 1
     fi
     sleep 1
 done
 
-# ---------------------------------------------------------------------------
-# Step 2: Run integration tests (DB-only, stable tests)
-# ---------------------------------------------------------------------------
+# Run integration tests (DB-only, exclude LLM tests)
 echo ""
-echo ">>> Running stable integration tests (DB-only)..."
+echo ">>> Running integration tests (DB-only)..."
 
-# Set connection string for test database (port 5051)
 export POSTGRES__CONNECTION_STRING="postgresql://rem:rem@localhost:5051/rem"
 
-# Run only stable DB tests - exclude LLM-dependent and brittle tests
 TEST_RESULT=0
 uv run pytest tests/integration \
     --ignore=tests/integration/test_natural_language_to_rem.py \
@@ -65,26 +49,18 @@ uv run pytest tests/integration \
     --ignore=tests/integration/test_contract_extractor.py \
     --ignore=tests/integration/test_dreaming_moments.py \
     --ignore=tests/integration/test_schema_introspection.py \
-    --ignore=tests/integration/test_shared_sessions.py \
-    --ignore=tests/integration/test_merge_strategies_demo.py \
-    --ignore=tests/integration/run_rem_agent_eval.py \
     -q --tb=short || TEST_RESULT=$?
 
-# ---------------------------------------------------------------------------
-# Step 3: Cleanup
-# ---------------------------------------------------------------------------
+# Cleanup
 echo ""
 echo ">>> Cleaning up test database..."
 docker compose -f docker-compose.test.yml down -v
 
 if [ $TEST_RESULT -ne 0 ]; then
     echo ""
-    echo "✗ Integration tests failed"
+    echo "Integration tests failed"
     exit 1
 fi
 
 echo ""
 echo "=== Pre-push: OK ==="
-echo ""
-echo "Note: LLM-dependent tests skipped. Run full suite with:"
-echo "  POSTGRES__CONNECTION_STRING=... uv run pytest tests/integration -v"
