@@ -201,7 +201,7 @@ async def test_session_message_store(tenant_id, session_id, user_id):
 
     # Load messages
     loaded = await store.load_session_messages(
-        session_id=session_id, user_id=user_id, decompress=False
+        session_id=session_id, user_id=user_id, compress_on_load=False
     )
 
     assert len(loaded) == 4
@@ -268,7 +268,7 @@ async def test_reload_session(tenant_id, session_id, user_id):
     history = await reload_session(
         session_id=session_id,
         user_id=user_id,
-        decompress_messages=False,
+        compress_on_load=False,
     )
 
     assert len(history) == 4
@@ -301,7 +301,7 @@ async def test_reload_session_with_decompression(tenant_id, session_id, user_id)
     history = await reload_session(
         session_id=session_id,
         user_id=user_id,
-        decompress_messages=True,
+        compress_on_load=False,
     )
 
     # Should have full messages

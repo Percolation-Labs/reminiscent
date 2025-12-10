@@ -4,7 +4,7 @@
 # =============================================================================
 # Before pushing:
 # 1. Starts test database (docker-compose.test.yml)
-# 2. Runs integration tests against isolated test DB
+# 2. Runs integration tests against isolated test DB (excluding LLM tests)
 # 3. Tears down test database
 #
 # Skip with: git push --no-verify
@@ -43,17 +43,21 @@ for i in {1..30}; do
 done
 
 # ---------------------------------------------------------------------------
-# Step 2: Run integration tests
+# Step 2: Run integration tests (excluding LLM-dependent tests)
 # ---------------------------------------------------------------------------
 echo ""
-echo ">>> Running integration tests..."
+echo ">>> Running integration tests (DB-only, excluding LLM tests)..."
 
 # Set connection string for test database (port 5051)
 export POSTGRES__CONNECTION_STRING="postgresql://rem:rem@localhost:5051/rem"
 
-# Run integration tests
+# Tests that require LLM calls - skip in automated hooks
+# These should be run manually or in CI with LLM access
+LLM_TESTS="test_natural_language_to_rem.py or test_agent_end_to_end.py or test_agent_tool_invocation.py or test_agent_with_tools.py or test_completions_with_sessions.py or test_rem_query_agent.py or test_rem_query_agent_structured.py or test_contract_extractor.py or test_dreaming_moments.py or test_schema_introspection.py"
+
+# Run integration tests excluding LLM-dependent ones
 TEST_RESULT=0
-uv run pytest tests/integration -q --tb=short || TEST_RESULT=$?
+uv run pytest tests/integration -q --tb=short --ignore-glob="**/test_natural_language*" --ignore-glob="**/test_agent_*" --ignore-glob="**/test_completions*" --ignore-glob="**/test_rem_query_agent*" --ignore-glob="**/test_contract_extractor*" --ignore-glob="**/test_dreaming*" --ignore-glob="**/test_schema_introspection*" || TEST_RESULT=$?
 
 # ---------------------------------------------------------------------------
 # Step 3: Cleanup
@@ -70,3 +74,6 @@ fi
 
 echo ""
 echo "=== Pre-push: OK ==="
+echo ""
+echo "Note: LLM-dependent tests were skipped. Run manually with:"
+echo "  uv run pytest tests/integration -v"

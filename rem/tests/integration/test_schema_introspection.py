@@ -395,7 +395,7 @@ async def test_agent_with_schema_tools():
             "the database schema and answer questions about what data is stored."
         ),
         tools=[
-            Tool(agent_list_tables, takes_ctx=False),
+            Tool(agent_list_schema, takes_ctx=False),
             Tool(agent_get_schema, takes_ctx=False),
         ],
     )
