@@ -1,7 +1,7 @@
 -- REM Model Schema (install_models.sql)
 -- Generated from Pydantic models
 -- Source: model registry
--- Generated at: 2025-12-10T08:24:23.881380
+-- Generated at: 2025-12-11T07:54:56.914558
 --
 -- DO NOT EDIT MANUALLY - Regenerate with: rem db schema generate
 --
@@ -84,7 +84,7 @@ BEGIN
             graph_edges,
             updated_at
         ) VALUES (
-            NEW.id::VARCHAR,
+            normalize_key(NEW.id::VARCHAR),
             'feedbacks',
             NEW.id,
             NEW.tenant_id,
@@ -189,7 +189,7 @@ BEGIN
             graph_edges,
             updated_at
         ) VALUES (
-            NEW.id::VARCHAR,
+            normalize_key(NEW.id::VARCHAR),
             'files',
             NEW.id,
             NEW.tenant_id,
@@ -302,7 +302,7 @@ BEGIN
             graph_edges,
             updated_at
         ) VALUES (
-            NEW.name::VARCHAR,
+            normalize_key(NEW.name::VARCHAR),
             'image_resources',
             NEW.id,
             NEW.tenant_id,
@@ -408,7 +408,7 @@ BEGIN
             graph_edges,
             updated_at
         ) VALUES (
-            NEW.id::VARCHAR,
+            normalize_key(NEW.id::VARCHAR),
             'messages',
             NEW.id,
             NEW.tenant_id,
@@ -516,7 +516,7 @@ BEGIN
             graph_edges,
             updated_at
         ) VALUES (
-            NEW.name::VARCHAR,
+            normalize_key(NEW.name::VARCHAR),
             'moments',
             NEW.id,
             NEW.tenant_id,
@@ -553,11 +553,12 @@ CREATE TABLE IF NOT EXISTS ontologies (
     tenant_id VARCHAR(100) NOT NULL,
     user_id VARCHAR(256),
     name VARCHAR(256) NOT NULL,
-    file_id UUID NOT NULL,
-    agent_schema_id VARCHAR(256) NOT NULL,
-    provider_name VARCHAR(256) NOT NULL,
-    model_name VARCHAR(256) NOT NULL,
-    extracted_data JSONB NOT NULL,
+    uri VARCHAR(256),
+    file_id UUID,
+    agent_schema_id VARCHAR(256),
+    provider_name VARCHAR(256),
+    model_name VARCHAR(256),
+    extracted_data JSONB,
     confidence_score DOUBLE PRECISION,
     extraction_timestamp VARCHAR(256),
     content TEXT,
@@ -623,7 +624,7 @@ BEGIN
             graph_edges,
             updated_at
         ) VALUES (
-            NEW.id::VARCHAR,
+            normalize_key(NEW.id::VARCHAR),
             'ontologies',
             NEW.id,
             NEW.tenant_id,
@@ -731,7 +732,7 @@ BEGIN
             graph_edges,
             updated_at
         ) VALUES (
-            NEW.id::VARCHAR,
+            normalize_key(NEW.id::VARCHAR),
             'ontology_configs',
             NEW.id,
             NEW.tenant_id,
@@ -836,7 +837,7 @@ BEGIN
             graph_edges,
             updated_at
         ) VALUES (
-            NEW.name::VARCHAR,
+            normalize_key(NEW.name::VARCHAR),
             'resources',
             NEW.id,
             NEW.tenant_id,
@@ -940,7 +941,7 @@ BEGIN
             graph_edges,
             updated_at
         ) VALUES (
-            NEW.id::VARCHAR,
+            normalize_key(NEW.id::VARCHAR),
             'schemas',
             NEW.id,
             NEW.tenant_id,
@@ -1047,7 +1048,7 @@ BEGIN
             graph_edges,
             updated_at
         ) VALUES (
-            NEW.name::VARCHAR,
+            normalize_key(NEW.name::VARCHAR),
             'sessions',
             NEW.id,
             NEW.tenant_id,
@@ -1122,7 +1123,7 @@ BEGIN
             graph_edges,
             updated_at
         ) VALUES (
-            NEW.id::VARCHAR,
+            normalize_key(NEW.id::VARCHAR),
             'shared_sessions',
             NEW.id,
             NEW.tenant_id,
@@ -1231,7 +1232,7 @@ BEGIN
             graph_edges,
             updated_at
         ) VALUES (
-            NEW.name::VARCHAR,
+            normalize_key(NEW.name::VARCHAR),
             'users',
             NEW.id,
             NEW.tenant_id,
@@ -2034,18 +2035,19 @@ VALUES (
     'Ontology',
     '# Ontology
 
-Domain-specific knowledge extracted from files using custom agents.
+Domain-specific knowledge - either agent-extracted or direct-loaded.
 
     Attributes:
         name: Human-readable label for this ontology instance
-        file_id: Foreign key to File entity that was processed
-        agent_schema_id: Foreign key to Schema entity that performed extraction
-        provider_name: LLM provider used for extraction (e.g., "anthropic", "openai")
-        model_name: Specific model used (e.g., "claude-sonnet-4-5")
-        extracted_data: Structured data extracted by agent (arbitrary JSON)
+        uri: External source reference (git://, s3://, https://) for direct-loaded ontologies
+        file_id: Foreign key to File entity (optional - only for agent-extracted)
+        agent_schema_id: Schema that performed extraction (optional - only for agent-extracted)
+        provider_name: LLM provider used for extraction (optional)
+        model_name: Specific model used (optional)
+        extracted_data: Structured data - either extracted by agent or parsed from source
         confidence_score: Optional confidence score from extraction (0.0-1.0)
         extraction_timestamp: When extraction was performed
-        content: Text used for generating embedding (derived from extracted_data)
+        content: Text used for generating embedding
 
     Inherited from CoreModel:
         id: UUID or string identifier
@@ -2057,10 +2059,9 @@ Domain-specific knowledge extracted from files using custom agents.
         graph_edges: Relationships to other entities
         metadata: Flexible metadata storage
         tags: Classification tags
-        column: Database schema metadata
 
     Example Usage:
-        # CV extraction
+        # Agent-extracted: CV parsing
         cv_ontology = Ontology(
             name="john-doe-cv-2024",
             file_id="file-uuid-123",
@@ -2069,51 +2070,38 @@ Domain-specific knowledge extracted from files using custom agents.
             model_name="claude-sonnet-4-5-20250929",
             extracted_data={
                 "candidate_name": "John Doe",
-                "email": "john@example.com",
                 "skills": ["Python", "PostgreSQL", "Kubernetes"],
-                "experience": [
-                    {
-                        "company": "TechCorp",
-                        "role": "Senior Engineer",
-                        "years": 3,
-                        "achievements": ["Led migration to k8s", "Reduced costs 40%"]
-                    }
-                ],
-                "education": [
-                    {"degree": "BS Computer Science", "institution": "MIT", "year": 2018}
-                ]
             },
             confidence_score=0.95,
-            tags=["cv", "engineering", "senior-level"]
+            tags=["cv", "engineering"]
         )
 
-        # Contract extraction
-        contract_ontology = Ontology(
-            name="acme-supplier-agreement-2024",
-            file_id="file-uuid-456",
-            agent_schema_id="contract-parser-v2",
-            provider_name="openai",
-            model_name="gpt-4.1",
+        # Direct-loaded: Medical knowledge base from git
+        disorder_ontology = Ontology(
+            name="panic-disorder",
+            uri="git://bwolfson-siggie/Siggy-MVP/ontology/disorders/anxiety/panic-disorder.md",
+            content="# Panic Disorder\n\nPanic disorder is characterized by...",
             extracted_data={
-                "contract_type": "supplier_agreement",
-                "parties": [
-                    {"name": "ACME Corp", "role": "buyer"},
-                    {"name": "SupplyChain Inc", "role": "supplier"}
-                ],
-                "effective_date": "2024-01-01",
-                "termination_date": "2026-12-31",
-                "payment_terms": {
-                    "amount": 500000,
-                    "currency": "USD",
-                    "frequency": "quarterly"
-                },
-                "key_obligations": [
-                    "Supplier must deliver within 30 days",
-                    "Buyer must pay within 60 days of invoice"
-                ]
+                "type": "disorder",
+                "category": "anxiety",
+                "icd10": "F41.0",
+                "dsm5_criteria": ["A", "B", "C", "D"],
             },
-            confidence_score=0.92,
-            tags=["contract", "supplier", "procurement"]
+            tags=["disorder", "anxiety", "dsm5"]
+        )
+
+        # Direct-loaded: Clinical procedure from git
+        scid_node = Ontology(
+            name="scid-5-f1",
+            uri="git://bwolfson-siggie/Siggy-MVP/ontology/procedures/scid-5/module-f/scid-5-f1.md",
+            content="# scid-5-f1: Panic Attack Screening\n\n...",
+            extracted_data={
+                "type": "procedure",
+                "module": "F",
+                "section": "Panic Disorder",
+                "dsm5_criterion": "Panic Attack Specifier",
+            },
+            tags=["scid-5", "procedure", "anxiety"]
         )
     
 
@@ -2190,25 +2178,29 @@ This schema includes the `search_rem` tool which supports:
 - **Type**: `<class ''str''>`
 - **Required**
 
+### `uri`
+- **Type**: `typing.Optional[str]`
+- **Optional**
+
 ### `file_id`
-- **Type**: `uuid.UUID | str`
-- **Required**
+- **Type**: `typing.Union[uuid.UUID, str, NoneType]`
+- **Optional**
 
 ### `agent_schema_id`
-- **Type**: `<class ''str''>`
-- **Required**
+- **Type**: `typing.Optional[str]`
+- **Optional**
 
 ### `provider_name`
-- **Type**: `<class ''str''>`
-- **Required**
+- **Type**: `typing.Optional[str]`
+- **Optional**
 
 ### `model_name`
-- **Type**: `<class ''str''>`
-- **Required**
+- **Type**: `typing.Optional[str]`
+- **Optional**
 
 ### `extracted_data`
-- **Type**: `dict[str, typing.Any]`
-- **Required**
+- **Type**: `typing.Optional[dict[str, typing.Any]]`
+- **Optional**
 
 ### `confidence_score`
 - **Type**: `typing.Optional[float]`
@@ -2223,7 +2215,7 @@ This schema includes the `search_rem` tool which supports:
 - **Optional**
 
 ',
-    '{"type": "object", "description": "Domain-specific knowledge extracted from files using custom agents.\n\n    Attributes:\n        name: Human-readable label for this ontology instance\n        file_id: Foreign key to File entity that was processed\n        agent_schema_id: Foreign key to Schema entity that performed extraction\n        provider_name: LLM provider used for extraction (e.g., \"anthropic\", \"openai\")\n        model_name: Specific model used (e.g., \"claude-sonnet-4-5\")\n        extracted_data: Structured data extracted by agent (arbitrary JSON)\n        confidence_score: Optional confidence score from extraction (0.0-1.0)\n        extraction_timestamp: When extraction was performed\n        content: Text used for generating embedding (derived from extracted_data)\n\n    Inherited from CoreModel:\n        id: UUID or string identifier\n        created_at: Entity creation timestamp\n        updated_at: Last update timestamp\n        deleted_at: Soft deletion timestamp\n        tenant_id: Multi-tenancy isolation\n        user_id: Ownership\n        graph_edges: Relationships to other entities\n        metadata: Flexible metadata storage\n        tags: Classification tags\n        column: Database schema metadata\n\n    Example Usage:\n        # CV extraction\n        cv_ontology = Ontology(\n            name=\"john-doe-cv-2024\",\n            file_id=\"file-uuid-123\",\n            agent_schema_id=\"cv-parser-v1\",\n            provider_name=\"anthropic\",\n            model_name=\"claude-sonnet-4-5-20250929\",\n            extracted_data={\n                \"candidate_name\": \"John Doe\",\n                \"email\": \"john@example.com\",\n                \"skills\": [\"Python\", \"PostgreSQL\", \"Kubernetes\"],\n                \"experience\": [\n                    {\n                        \"company\": \"TechCorp\",\n                        \"role\": \"Senior Engineer\",\n                        \"years\": 3,\n                        \"achievements\": [\"Led migration to k8s\", \"Reduced costs 40%\"]\n                    }\n                ],\n                \"education\": [\n                    {\"degree\": \"BS Computer Science\", \"institution\": \"MIT\", \"year\": 2018}\n                ]\n            },\n            confidence_score=0.95,\n            tags=[\"cv\", \"engineering\", \"senior-level\"]\n        )\n\n        # Contract extraction\n        contract_ontology = Ontology(\n            name=\"acme-supplier-agreement-2024\",\n            file_id=\"file-uuid-456\",\n            agent_schema_id=\"contract-parser-v2\",\n            provider_name=\"openai\",\n            model_name=\"gpt-4.1\",\n            extracted_data={\n                \"contract_type\": \"supplier_agreement\",\n                \"parties\": [\n                    {\"name\": \"ACME Corp\", \"role\": \"buyer\"},\n                    {\"name\": \"SupplyChain Inc\", \"role\": \"supplier\"}\n                ],\n                \"effective_date\": \"2024-01-01\",\n                \"termination_date\": \"2026-12-31\",\n                \"payment_terms\": {\n                    \"amount\": 500000,\n                    \"currency\": \"USD\",\n                    \"frequency\": \"quarterly\"\n                },\n                \"key_obligations\": [\n                    \"Supplier must deliver within 30 days\",\n                    \"Buyer must pay within 60 days of invoice\"\n                ]\n            },\n            confidence_score=0.92,\n            tags=[\"contract\", \"supplier\", \"procurement\"]\n        )\n    \n\nThis agent can search the `ontologies` table using the `search_rem` tool. Use REM query syntax: LOOKUP for exact match, FUZZY for typo-tolerant search, SEARCH for semantic similarity, or SQL for complex queries.", "properties": {"id": {"anyOf": [{"format": "uuid", "type": "string"}, {"type": "string"}, {"type": "null"}], "default": null, "description": "Unique identifier (UUID or string, generated per model type). Generated automatically if not provided.", "title": "Id"}, "created_at": {"description": "Entity creation timestamp", "format": "date-time", "title": "Created At", "type": "string"}, "updated_at": {"description": "Last update timestamp", "format": "date-time", "title": "Updated At", "type": "string"}, "deleted_at": {"anyOf": [{"format": "date-time", "type": "string"}, {"type": "null"}], "default": null, "description": "Soft deletion timestamp", "title": "Deleted At"}, "tenant_id": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "description": "Tenant identifier for multi-tenancy isolation", "title": "Tenant Id"}, "user_id": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "description": "Owner user identifier (tenant-scoped). This is a VARCHAR(256), not a UUID, to allow flexibility for external identity providers. Typically generated as a hash of the user''s email address. In future, other strong unique claims (e.g., OAuth sub, verified phone) could also be used for generation.", "title": "User Id"}, "graph_edges": {"description": "Knowledge graph edges stored as InlineEdge dicts", "items": {"additionalProperties": true, "type": "object"}, "title": "Graph Edges", "type": "array"}, "metadata": {"additionalProperties": true, "description": "Flexible metadata storage", "title": "Metadata", "type": "object"}, "tags": {"description": "Entity tags", "items": {"type": "string"}, "title": "Tags", "type": "array"}, "name": {"title": "Name", "type": "string"}, "file_id": {"anyOf": [{"format": "uuid", "type": "string"}, {"type": "string"}], "title": "File Id"}, "agent_schema_id": {"title": "Agent Schema Id", "type": "string"}, "provider_name": {"title": "Provider Name", "type": "string"}, "model_name": {"title": "Model Name", "type": "string"}, "extracted_data": {"additionalProperties": true, "title": "Extracted Data", "type": "object"}, "confidence_score": {"anyOf": [{"type": "number"}, {"type": "null"}], "default": null, "title": "Confidence Score"}, "extraction_timestamp": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "title": "Extraction Timestamp"}, "content": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "title": "Content"}}, "required": ["name", "file_id", "agent_schema_id", "provider_name", "model_name", "extracted_data"], "json_schema_extra": {"table_name": "ontologies", "entity_key_field": "id", "embedding_fields": ["content"], "fully_qualified_name": "rem.models.entities.ontology.Ontology", "tools": ["search_rem"], "default_search_table": "ontologies", "has_embeddings": true}}'::jsonb,
+    '{"type": "object", "description": "Domain-specific knowledge - either agent-extracted or direct-loaded.\n\n    Attributes:\n        name: Human-readable label for this ontology instance\n        uri: External source reference (git://, s3://, https://) for direct-loaded ontologies\n        file_id: Foreign key to File entity (optional - only for agent-extracted)\n        agent_schema_id: Schema that performed extraction (optional - only for agent-extracted)\n        provider_name: LLM provider used for extraction (optional)\n        model_name: Specific model used (optional)\n        extracted_data: Structured data - either extracted by agent or parsed from source\n        confidence_score: Optional confidence score from extraction (0.0-1.0)\n        extraction_timestamp: When extraction was performed\n        content: Text used for generating embedding\n\n    Inherited from CoreModel:\n        id: UUID or string identifier\n        created_at: Entity creation timestamp\n        updated_at: Last update timestamp\n        deleted_at: Soft deletion timestamp\n        tenant_id: Multi-tenancy isolation\n        user_id: Ownership\n        graph_edges: Relationships to other entities\n        metadata: Flexible metadata storage\n        tags: Classification tags\n\n    Example Usage:\n        # Agent-extracted: CV parsing\n        cv_ontology = Ontology(\n            name=\"john-doe-cv-2024\",\n            file_id=\"file-uuid-123\",\n            agent_schema_id=\"cv-parser-v1\",\n            provider_name=\"anthropic\",\n            model_name=\"claude-sonnet-4-5-20250929\",\n            extracted_data={\n                \"candidate_name\": \"John Doe\",\n                \"skills\": [\"Python\", \"PostgreSQL\", \"Kubernetes\"],\n            },\n            confidence_score=0.95,\n            tags=[\"cv\", \"engineering\"]\n        )\n\n        # Direct-loaded: Medical knowledge base from git\n        disorder_ontology = Ontology(\n            name=\"panic-disorder\",\n            uri=\"git://bwolfson-siggie/Siggy-MVP/ontology/disorders/anxiety/panic-disorder.md\",\n            content=\"# Panic Disorder\\n\\nPanic disorder is characterized by...\",\n            extracted_data={\n                \"type\": \"disorder\",\n                \"category\": \"anxiety\",\n                \"icd10\": \"F41.0\",\n                \"dsm5_criteria\": [\"A\", \"B\", \"C\", \"D\"],\n            },\n            tags=[\"disorder\", \"anxiety\", \"dsm5\"]\n        )\n\n        # Direct-loaded: Clinical procedure from git\n        scid_node = Ontology(\n            name=\"scid-5-f1\",\n            uri=\"git://bwolfson-siggie/Siggy-MVP/ontology/procedures/scid-5/module-f/scid-5-f1.md\",\n            content=\"# scid-5-f1: Panic Attack Screening\\n\\n...\",\n            extracted_data={\n                \"type\": \"procedure\",\n                \"module\": \"F\",\n                \"section\": \"Panic Disorder\",\n                \"dsm5_criterion\": \"Panic Attack Specifier\",\n            },\n            tags=[\"scid-5\", \"procedure\", \"anxiety\"]\n        )\n    \n\nThis agent can search the `ontologies` table using the `search_rem` tool. Use REM query syntax: LOOKUP for exact match, FUZZY for typo-tolerant search, SEARCH for semantic similarity, or SQL for complex queries.", "properties": {"id": {"anyOf": [{"format": "uuid", "type": "string"}, {"type": "string"}, {"type": "null"}], "default": null, "description": "Unique identifier (UUID or string, generated per model type). Generated automatically if not provided.", "title": "Id"}, "created_at": {"description": "Entity creation timestamp", "format": "date-time", "title": "Created At", "type": "string"}, "updated_at": {"description": "Last update timestamp", "format": "date-time", "title": "Updated At", "type": "string"}, "deleted_at": {"anyOf": [{"format": "date-time", "type": "string"}, {"type": "null"}], "default": null, "description": "Soft deletion timestamp", "title": "Deleted At"}, "tenant_id": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "description": "Tenant identifier for multi-tenancy isolation", "title": "Tenant Id"}, "user_id": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "description": "Owner user identifier (tenant-scoped). This is a VARCHAR(256), not a UUID, to allow flexibility for external identity providers. Typically generated as a hash of the user''s email address. In future, other strong unique claims (e.g., OAuth sub, verified phone) could also be used for generation.", "title": "User Id"}, "graph_edges": {"description": "Knowledge graph edges stored as InlineEdge dicts", "items": {"additionalProperties": true, "type": "object"}, "title": "Graph Edges", "type": "array"}, "metadata": {"additionalProperties": true, "description": "Flexible metadata storage", "title": "Metadata", "type": "object"}, "tags": {"description": "Entity tags", "items": {"type": "string"}, "title": "Tags", "type": "array"}, "name": {"title": "Name", "type": "string"}, "uri": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "title": "Uri"}, "file_id": {"anyOf": [{"format": "uuid", "type": "string"}, {"type": "string"}, {"type": "null"}], "default": null, "title": "File Id"}, "agent_schema_id": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "title": "Agent Schema Id"}, "provider_name": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "title": "Provider Name"}, "model_name": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "title": "Model Name"}, "extracted_data": {"anyOf": [{"additionalProperties": true, "type": "object"}, {"type": "null"}], "default": null, "title": "Extracted Data"}, "confidence_score": {"anyOf": [{"type": "number"}, {"type": "null"}], "default": null, "title": "Confidence Score"}, "extraction_timestamp": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "title": "Extraction Timestamp"}, "content": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": null, "title": "Content"}}, "required": ["name"], "json_schema_extra": {"table_name": "ontologies", "entity_key_field": "id", "embedding_fields": ["content"], "fully_qualified_name": "rem.models.entities.ontology.Ontology", "tools": ["search_rem"], "default_search_table": "ontologies", "has_embeddings": true}}'::jsonb,
     'entity',
     '{"table_name": "ontologies", "entity_key_field": "id", "embedding_fields": ["content"], "fqn": "rem.models.entities.ontology.Ontology"}'::jsonb
 )

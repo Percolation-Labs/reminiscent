@@ -1,63 +1,55 @@
-"""Ontology entity for tenant-specific knowledge extensions.
+"""Ontology entity for domain-specific knowledge.
 
-**What is Ontology Extraction?**
+**What are Ontologies?**
 
-Ontologies are **domain-specific structured knowledge** extracted from files using custom
-agent schemas. They extend REM's normal file processing pipeline with tenant-specific
-parsers that extract structured data the standard chunking pipeline would miss.
+Ontologies are **domain-specific structured knowledge** that can be:
+1. **Extracted** from files using custom agent schemas (agent-extracted)
+2. **Loaded directly** from external sources like git repos or S3 (direct-loaded)
 
-**Normal File Processing:**
-File → extract text → chunk → embed → resources (semantic search ready)
+**Use Case 1: Agent-Extracted Ontologies**
 
-**Ontology Processing (Tenant Knowledge Extensions):**
 File → custom agent → structured JSON → ontology (domain knowledge)
 
-**Why Ontologies?**
-- Standard chunking gives you semantic search over raw content
-- Ontologies give you **structured queryable fields** from domain logic
-- Example: A contract PDF becomes both searchable chunks AND a structured record with
-  parties, dates, payment terms, obligations as queryable fields
+Example: A contract PDF becomes a structured record with parties, dates, payment terms.
+
+**Use Case 2: Direct-Loaded Ontologies (Knowledge Bases)**
+
+External source (git/S3) → load → ontology (reference knowledge)
+
+Example: A psychiatric ontology of disorders, symptoms, and drugs loaded from markdown
+files in a git repository. Each markdown file becomes an ontology node with:
+- `uri`: git path (e.g., `git://org/repo/ontology/disorders/anxiety/panic-disorder.md`)
+- `content`: markdown content for embedding/search
+- `extracted_data`: parsed frontmatter or structure
 
 **Architecture:**
-- Runs as part of dreaming worker (background knowledge extraction)
-- OntologyConfig defines which files trigger which extractors (MIME type, URI pattern, tags)
+- Runs as part of dreaming worker (background knowledge extraction) OR
+- Loaded directly via `rem db load` for external knowledge bases
+- OntologyConfig defines which files trigger which extractors
 - Multiple ontologies per file (apply different domain lenses)
-- Tenant-scoped: Each tenant can define their own extractors
+- Tenant-scoped: Each tenant can define their own extractors and knowledge bases
 
 **Use Cases:**
 
-1. **Recruitment (CV Parsing)**
-   - Standard pipeline: Chunks for "find me candidates with Python experience"
-   - Ontology: Structured fields for filtering/sorting (years_experience, seniority_level, skills[])
+1. **Recruitment (CV Parsing)** - Agent-extracted
+   - Ontology: Structured fields for filtering/sorting (years_experience, skills[])
 
-2. **Legal (Contract Analysis)**
-   - Standard pipeline: Semantic search over contract text
-   - Ontology: Queryable fields (parties, effective_date, payment_amount, key_obligations[])
+2. **Legal (Contract Analysis)** - Agent-extracted
+   - Ontology: Queryable fields (parties, effective_date, payment_amount)
 
-3. **Medical (Health Records)**
-   - Standard pipeline: Find mentions of conditions
-   - Ontology: Structured diagnoses, medications, dosages, treatment plans
+3. **Medical Knowledge Base** - Direct-loaded
+   - Ontology: Disorders, symptoms, medications from curated markdown files
+   - Enables semantic search over psychiatric/medical domain knowledge
 
-4. **Finance (Report Analysis)**
-   - Standard pipeline: Search for financial terms
-   - Ontology: Extracted metrics, risk_flags, trends, forecasts
-
-**Example Flow:**
-1. Tenant creates OntologyConfig: "Run cv-parser-v1 on files with mime_type='application/pdf' and tags=['resume']"
-2. File uploaded with tags=["resume"]
-3. Normal processing: File → chunks → resources
-4. Dreaming worker detects matching OntologyConfig
-5. Loads cv-parser-v1 agent schema from database
-6. Runs agent on file content → extracts structured data
-7. Stores Ontology with extracted_data = {candidate_name, skills, experience, education, ...}
-8. Ontology is now queryable via LOOKUP, SEARCH, or direct SQL
+4. **Documentation/Procedures** - Direct-loaded
+   - Ontology: Clinical procedures (e.g., SCID-5 assessment steps)
+   - Reference material accessible via RAG
 
 **Design:**
-- Each ontology links to a File via file_id
-- Agent schema tracked via agent_schema_id (human-readable label, not UUID)
-- Structured data in `extracted_data` (arbitrary JSON, schema defined by agent)
-- Embeddings generated for semantic search (configurable fields via agent schema)
-- Multiple ontologies per file using different schemas
+- `file_id` and `agent_schema_id` are optional (only needed for agent-extracted)
+- `uri` field for external source references (git://, s3://, https://)
+- Structured data in `extracted_data` (arbitrary JSON)
+- Embeddings generated for semantic search via `content` field
 - Tenant-isolated: OntologyConfigs are tenant-scoped
 """
 
@@ -70,18 +62,19 @@ from ..core.core_model import CoreModel
 
 
 class Ontology(CoreModel):
-    """Domain-specific knowledge extracted from files using custom agents.
+    """Domain-specific knowledge - either agent-extracted or direct-loaded.
 
     Attributes:
         name: Human-readable label for this ontology instance
-        file_id: Foreign key to File entity that was processed
-        agent_schema_id: Foreign key to Schema entity that performed extraction
-        provider_name: LLM provider used for extraction (e.g., "anthropic", "openai")
-        model_name: Specific model used (e.g., "claude-sonnet-4-5")
-        extracted_data: Structured data extracted by agent (arbitrary JSON)
+        uri: External source reference (git://, s3://, https://) for direct-loaded ontologies
+        file_id: Foreign key to File entity (optional - only for agent-extracted)
+        agent_schema_id: Schema that performed extraction (optional - only for agent-extracted)
+        provider_name: LLM provider used for extraction (optional)
+        model_name: Specific model used (optional)
+        extracted_data: Structured data - either extracted by agent or parsed from source
         confidence_score: Optional confidence score from extraction (0.0-1.0)
         extraction_timestamp: When extraction was performed
-        content: Text used for generating embedding (derived from extracted_data)
+        content: Text used for generating embedding
 
     Inherited from CoreModel:
         id: UUID or string identifier
@@ -93,10 +86,9 @@ class Ontology(CoreModel):
         graph_edges: Relationships to other entities
         metadata: Flexible metadata storage
         tags: Classification tags
-        column: Database schema metadata
 
     Example Usage:
-        # CV extraction
+        # Agent-extracted: CV parsing
         cv_ontology = Ontology(
             name="john-doe-cv-2024",
             file_id="file-uuid-123",
@@ -105,73 +97,74 @@ class Ontology(CoreModel):
             model_name="claude-sonnet-4-5-20250929",
             extracted_data={
                 "candidate_name": "John Doe",
-                "email": "john@example.com",
                 "skills": ["Python", "PostgreSQL", "Kubernetes"],
-                "experience": [
-                    {
-                        "company": "TechCorp",
-                        "role": "Senior Engineer",
-                        "years": 3,
-                        "achievements": ["Led migration to k8s", "Reduced costs 40%"]
-                    }
-                ],
-                "education": [
-                    {"degree": "BS Computer Science", "institution": "MIT", "year": 2018}
-                ]
             },
             confidence_score=0.95,
-            tags=["cv", "engineering", "senior-level"]
+            tags=["cv", "engineering"]
         )
 
-        # Contract extraction
-        contract_ontology = Ontology(
-            name="acme-supplier-agreement-2024",
-            file_id="file-uuid-456",
-            agent_schema_id="contract-parser-v2",
-            provider_name="openai",
-            model_name="gpt-4.1",
+        # Direct-loaded: Medical knowledge base from git
+        disorder_ontology = Ontology(
+            name="panic-disorder",
+            uri="git://bwolfson-siggie/Siggy-MVP/ontology/disorders/anxiety/panic-disorder.md",
+            content="# Panic Disorder\\n\\nPanic disorder is characterized by...",
             extracted_data={
-                "contract_type": "supplier_agreement",
-                "parties": [
-                    {"name": "ACME Corp", "role": "buyer"},
-                    {"name": "SupplyChain Inc", "role": "supplier"}
-                ],
-                "effective_date": "2024-01-01",
-                "termination_date": "2026-12-31",
-                "payment_terms": {
-                    "amount": 500000,
-                    "currency": "USD",
-                    "frequency": "quarterly"
-                },
-                "key_obligations": [
-                    "Supplier must deliver within 30 days",
-                    "Buyer must pay within 60 days of invoice"
-                ]
+                "type": "disorder",
+                "category": "anxiety",
+                "icd10": "F41.0",
+                "dsm5_criteria": ["A", "B", "C", "D"],
             },
-            confidence_score=0.92,
-            tags=["contract", "supplier", "procurement"]
+            tags=["disorder", "anxiety", "dsm5"]
+        )
+
+        # Direct-loaded: Clinical procedure from git
+        scid_node = Ontology(
+            name="scid-5-f1",
+            uri="git://bwolfson-siggie/Siggy-MVP/ontology/procedures/scid-5/module-f/scid-5-f1.md",
+            content="# scid-5-f1: Panic Attack Screening\\n\\n...",
+            extracted_data={
+                "type": "procedure",
+                "module": "F",
+                "section": "Panic Disorder",
+                "dsm5_criterion": "Panic Attack Specifier",
+            },
+            tags=["scid-5", "procedure", "anxiety"]
         )
     """
 
     # Core fields
     name: str
-    file_id: UUID | str
-    agent_schema_id: str  # Natural language label of Schema entity
+    uri: Optional[str] = None  # External source: git://, s3://, https://
 
-    # Extraction metadata
-    provider_name: str  # LLM provider (anthropic, openai, etc.)
-    model_name: str  # Specific model used
-    extracted_data: dict[str, Any]  # Arbitrary structured data from agent
+    # Agent extraction fields (optional - only for agent-extracted ontologies)
+    file_id: Optional[UUID | str] = None  # FK to File entity
+    agent_schema_id: Optional[str] = None  # Schema that performed extraction
+    provider_name: Optional[str] = None  # LLM provider (anthropic, openai, etc.)
+    model_name: Optional[str] = None  # Specific model used
+
+    # Data fields
+    extracted_data: Optional[dict[str, Any]] = None  # Structured data
     confidence_score: Optional[float] = None  # 0.0-1.0 if provided by agent
     extraction_timestamp: Optional[str] = None  # ISO8601 timestamp
 
     # Semantic search support - 'content' is a default embeddable field name
-    content: Optional[str] = None  # Text for embedding generation (derived from extracted_data)
+    content: Optional[str] = None  # Text for embedding generation
 
     model_config = ConfigDict(
         json_schema_extra={
-            "description": "Domain-specific knowledge extracted from files using custom agents",
+            "description": "Domain-specific knowledge - agent-extracted or direct-loaded from external sources",
             "examples": [
+                {
+                    "name": "panic-disorder",
+                    "uri": "git://org/repo/ontology/disorders/anxiety/panic-disorder.md",
+                    "content": "# Panic Disorder\n\nPanic disorder is characterized by...",
+                    "extracted_data": {
+                        "type": "disorder",
+                        "category": "anxiety",
+                        "icd10": "F41.0"
+                    },
+                    "tags": ["disorder", "anxiety"]
+                },
                 {
                     "name": "john-doe-cv-2024",
                     "file_id": "550e8400-e29b-41d4-a716-446655440000",
@@ -180,8 +173,7 @@ class Ontology(CoreModel):
                     "model_name": "claude-sonnet-4-5-20250929",
                     "extracted_data": {
                         "candidate_name": "John Doe",
-                        "skills": ["Python", "PostgreSQL"],
-                        "experience": []
+                        "skills": ["Python", "PostgreSQL"]
                     },
                     "confidence_score": 0.95,
                     "tags": ["cv", "engineering"]
