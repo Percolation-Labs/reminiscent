@@ -155,6 +155,10 @@ async def search_rem(
     - Fast exact match across all tables
     - Uses indexed label_vector for instant retrieval
     - Example: LOOKUP "Sarah Chen" returns all entities named "Sarah Chen"
+    - **Ontology Note**: Ontology content may contain markdown links like
+      `[sertraline](../../drugs/antidepressants/sertraline.md)`. The link name
+      (e.g., "sertraline") can be used as a LOOKUP subject, while the relative
+      path provides semantic context (e.g., it's a drug, specifically an antidepressant).
 
     **FUZZY** - Fuzzy text matching with similarity threshold:
     - Finds partial matches and typos

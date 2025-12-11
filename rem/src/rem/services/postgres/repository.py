@@ -74,7 +74,7 @@ class Repository(Generic[T]):
         self,
         records: T | list[T],
         embeddable_fields: list[str] | None = None,
-        generate_embeddings: bool = False,
+        generate_embeddings: bool = True,
     ) -> T | list[T]:
         """
         Upsert single record or list of records (create or update on ID conflict).
@@ -84,8 +84,9 @@ class Repository(Generic[T]):
 
         Args:
             records: Single model instance or list of model instances
-            embeddable_fields: Optional list of fields to generate embeddings for
-            generate_embeddings: Whether to queue embedding generation tasks
+            embeddable_fields: Optional list of fields to generate embeddings for.
+                              If None, auto-detects 'content' field if present.
+            generate_embeddings: Whether to queue embedding generation tasks (default: True)
 
         Returns:
             Single record or list of records with generated IDs (matches input type)
@@ -118,25 +119,35 @@ class Repository(Generic[T]):
                     record.id = row["id"]  # type: ignore[attr-defined]
 
         # Queue embedding generation if requested and worker is available
-        if generate_embeddings and embeddable_fields and self.db.embedding_worker:
+        if generate_embeddings and self.db.embedding_worker:
             from rem.services.embeddings import EmbeddingTask
+            from .register_type import should_embed_field
 
-            for record in records_list:
-                for field_name in embeddable_fields:
-                    content = getattr(record, field_name, None)
-                    if content and isinstance(content, str):
-                        task = EmbeddingTask(
-                            task_id=f"{record.id}-{field_name}",  # type: ignore[attr-defined]
-                            entity_id=str(record.id),  # type: ignore[attr-defined]
-                            table_name=self.table_name,
-                            field_name=field_name,
-                            content=content,
-                            provider="openai",  # Default provider
-                            model="text-embedding-3-small",  # Default model
-                        )
-                        await self.db.embedding_worker.queue_task(task)
+            # Auto-detect embeddable fields if not specified
+            if embeddable_fields is None:
+                embeddable_fields = [
+                    field_name
+                    for field_name, field_info in self.model_class.model_fields.items()
+                    if should_embed_field(field_name, field_info)
+                ]
 
-            logger.debug(f"Queued {len(records_list) * len(embeddable_fields)} embedding tasks")
+            if embeddable_fields:
+                for record in records_list:
+                    for field_name in embeddable_fields:
+                        content = getattr(record, field_name, None)
+                        if content and isinstance(content, str):
+                            task = EmbeddingTask(
+                                task_id=f"{record.id}-{field_name}",  # type: ignore[attr-defined]
+                                entity_id=str(record.id),  # type: ignore[attr-defined]
+                                table_name=self.table_name,
+                                field_name=field_name,
+                                content=content,
+                                provider="openai",  # Default provider
+                                model="text-embedding-3-small",  # Default model
+                            )
+                            await self.db.embedding_worker.queue_task(task)
+
+                logger.debug(f"Queued {len(records_list) * len(embeddable_fields)} embedding tasks")
 
         # Return single item or list to match input type
         return records_list[0] if is_single else records_list

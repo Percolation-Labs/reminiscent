@@ -351,10 +351,10 @@ class SchemaGenerator:
 
         Priority:
         1. Field with json_schema_extra={\"entity_key\": True}
-        2. Field named \"name\"
+        2. Field named \"name\" (human-readable identifier)
         3. Field named \"key\"
-        4. Field named \"label\"
-        5. First string field
+        4. Field named \"uri\"
+        5. Field named \"id\" (fallback)
 
         Args:
             model: Pydantic model class
@@ -369,9 +369,9 @@ class SchemaGenerator:
                 if json_extra.get("entity_key"):
                     return field_name
 
-        # Check for key fields in priority order: id -> uri -> key -> name
+        # Check for key fields in priority order: name -> key -> uri -> id
         # (matching sql_builder.get_entity_key convention)
-        for candidate in ["id", "uri", "key", "name"]:
+        for candidate in ["name", "key", "uri", "id"]:
             if candidate in model.model_fields:
                 return candidate
 

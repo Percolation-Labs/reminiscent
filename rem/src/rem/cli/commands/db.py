@@ -375,8 +375,10 @@ async def _load_async(file_path: Path, table: str | None, user_id: str | None, d
     import polars as pl
     import yaml
     from ...models.core.inline_edge import InlineEdge
-    from ...models.entities import Resource, Moment, User, Message, SharedSession, Schema
+    from ...models.entities import SharedSession
     from ...services.postgres import get_postgres_service
+    from ...utils.model_helpers import get_table_name
+    from ... import get_model_registry
 
     logger.info(f"Loading data from: {file_path}")
     scope_msg = f"user: {user_id}" if user_id else "public"
@@ -385,13 +387,12 @@ async def _load_async(file_path: Path, table: str | None, user_id: str | None, d
     suffix = file_path.suffix.lower()
     is_yaml = suffix in {".yaml", ".yml"}
 
-    # Map table names to model classes
+    # Build MODEL_MAP dynamically from registry
+    registry = get_model_registry()
+    registry.register_core_models()
     MODEL_MAP = {
-        "users": User,
-        "moments": Moment,
-        "resources": Resource,
-        "messages": Message,
-        "schemas": Schema,
+        get_table_name(model): model
+        for model in registry.get_model_classes().values()
     }
 
     # Non-CoreModel tables that need direct SQL insertion
@@ -432,12 +433,9 @@ async def _load_async(file_path: Path, table: str | None, user_id: str | None, d
             logger.info(f"Columns: {list(df.columns)}")
 
             # Validate first row against model if table is known
-            if table in {"users", "moments", "resources", "messages", "schemas"} and rows:
-                from ...models.entities import Resource, Moment, User, Message, Schema
+            if table in MODEL_MAP and rows:
                 from ...utils.model_helpers import validate_data_for_model
-                model_map = {"users": User, "moments": Moment, "resources": Resource,
-                            "messages": Message, "schemas": Schema}
-                result = validate_data_for_model(model_map[table], rows[0])
+                result = validate_data_for_model(MODEL_MAP[table], rows[0])
                 if result.extra_fields:
                     logger.warning(f"Unknown fields (ignored): {result.extra_fields}")
                 if result.valid:
@@ -456,6 +454,10 @@ async def _load_async(file_path: Path, table: str | None, user_id: str | None, d
         raise click.Abort()
 
     await pg.connect()
+
+    # Start embedding worker for generating embeddings
+    if pg.embedding_worker:
+        await pg.embedding_worker.start()
 
     try:
         total_loaded = 0
@@ -492,10 +494,10 @@ async def _load_async(file_path: Path, table: str | None, user_id: str | None, d
             model_class = MODEL_MAP[table_name]
 
             for row_idx, row_data in enumerate(rows):
-                if "user_id" not in row_data and user_id is not None:
-                    row_data["user_id"] = user_id
+                # user_id stays NULL for public data (accessible by any user)
+                # Only set tenant_id for scoping - the --user-id flag controls tenant scope
                 if "tenant_id" not in row_data and user_id is not None:
-                    row_data["tenant_id"] = row_data.get("user_id", user_id)
+                    row_data["tenant_id"] = user_id
 
                 # Convert graph_edges to InlineEdge format if present
                 if "graph_edges" in row_data:
@@ -529,6 +531,14 @@ async def _load_async(file_path: Path, table: str | None, user_id: str | None, d
                 logger.success(f"Loaded {table_name[:-1]}: {name}")
 
         logger.success(f"Data loaded successfully! Total rows: {total_loaded}")
+
+        # Wait for embeddings to complete
+        if pg.embedding_worker and pg.embedding_worker.running:
+            queue_size = pg.embedding_worker.task_queue.qsize()
+            if queue_size > 0:
+                logger.info(f"Waiting for {queue_size} embeddings to complete...")
+            await pg.embedding_worker.stop()
+            logger.success("Embeddings generated successfully")
 
     finally:
         await pg.disconnect()

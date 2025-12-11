@@ -23,6 +23,8 @@ Future:
 import asyncio
 import os
 from typing import Any, Optional
+import hashlib
+import uuid
 from uuid import uuid4
 
 import httpx
@@ -108,6 +110,7 @@ class EmbeddingWorker:
         self.task_queue: asyncio.Queue = asyncio.Queue()
         self.workers: list[asyncio.Task] = []
         self.running = False
+        self._in_flight_count = 0  # Track tasks being processed (not just in queue)
 
         # Store API key for direct HTTP requests
         from ...settings import settings
@@ -143,17 +146,18 @@ class EmbeddingWorker:
             return
 
         queue_size = self.task_queue.qsize()
-        logger.debug(f"Stopping EmbeddingWorker (processing {queue_size} queued tasks first)")
+        in_flight = self._in_flight_count
+        logger.debug(f"Stopping EmbeddingWorker (queue={queue_size}, in_flight={in_flight})")
 
-        # Wait for queue to drain (with timeout)
+        # Wait for both queue to drain AND in-flight tasks to complete
         max_wait = 30  # 30 seconds max
         waited = 0.0
-        while not self.task_queue.empty() and waited < max_wait:
+        while (not self.task_queue.empty() or self._in_flight_count > 0) and waited < max_wait:
             await asyncio.sleep(0.5)
             waited += 0.5
 
-        if not self.task_queue.empty():
-            remaining = self.task_queue.qsize()
+        if not self.task_queue.empty() or self._in_flight_count > 0:
+            remaining = self.task_queue.qsize() + self._in_flight_count
             logger.warning(
                 f"EmbeddingWorker timeout: {remaining} tasks remaining after {max_wait}s"
             )
@@ -205,12 +209,18 @@ class EmbeddingWorker:
                 if not batch:
                     continue
 
+                # Track in-flight tasks
+                self._in_flight_count += len(batch)
+
                 logger.debug(f"Worker {worker_id} processing batch of {len(batch)} tasks")
 
-                # Generate embeddings for batch
-                await self._process_batch(batch)
-
-                logger.debug(f"Worker {worker_id} completed batch")
+                try:
+                    # Generate embeddings for batch
+                    await self._process_batch(batch)
+                    logger.debug(f"Worker {worker_id} completed batch")
+                finally:
+                    # Always decrement in-flight count, even on error
+                    self._in_flight_count -= len(batch)
 
             except asyncio.CancelledError:
                 logger.debug(f"Worker {worker_id} cancelled")
@@ -373,7 +383,11 @@ class EmbeddingWorker:
         for task, embedding in zip(tasks, embeddings):
             table_name = f"embeddings_{task.table_name}"
 
-            # Build upsert SQL
+            # Generate deterministic ID from key fields (entity_id, field_name, provider)
+            key_string = f"{task.entity_id}:{task.field_name}:{task.provider}"
+            embedding_id = str(uuid.UUID(hashlib.md5(key_string.encode()).hexdigest()))
+
+            # Build upsert SQL - conflict on deterministic ID
             sql = f"""
                 INSERT INTO {table_name} (
                     id,
@@ -386,7 +400,7 @@ class EmbeddingWorker:
                     updated_at
                 )
                 VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                ON CONFLICT (entity_id, field_name, provider)
+                ON CONFLICT (id)
                 DO UPDATE SET
                     model = EXCLUDED.model,
                     embedding = EXCLUDED.embedding,
@@ -400,7 +414,7 @@ class EmbeddingWorker:
                 await self.postgres_service.execute(
                     sql,
                     (
-                        str(uuid4()),
+                        embedding_id,
                         task.entity_id,
                         task.field_name,
                         task.provider,

@@ -35,10 +35,11 @@ def get_natural_key(model: BaseModel) -> str | None:
 
 def get_entity_key(model: BaseModel) -> str:
     """
-    Get entity key for KV store following precedence: id -> uri -> key -> name.
+    Get entity key for KV store following precedence: name -> key -> uri -> id.
 
-    For KV store lookups, we prefer globally unique identifiers first (id),
-    then natural keys (uri/key/name). Always returns a value (id as fallback).
+    For KV store lookups, we prefer human-readable identifiers first (name/key),
+    then URIs, with id as the fallback. This allows users to lookup entities
+    by their natural names like "panic-disorder" instead of UUIDs.
 
     Args:
         model: Pydantic model instance
@@ -46,13 +47,13 @@ def get_entity_key(model: BaseModel) -> str:
     Returns:
         Entity key string (guaranteed to exist)
     """
-    for field in ["id", "uri", "key", "name"]:
+    for field in ["name", "key", "uri", "id"]:
         if hasattr(model, field):
             value = getattr(model, field)
             if value:
                 return str(value)
     # Should never reach here since id always exists in CoreModel
-    raise ValueError(f"Model {type(model)} has no id, uri, key, or name field")
+    raise ValueError(f"Model {type(model)} has no name, key, uri, or id field")
 
 
 def generate_deterministic_id(user_id: str | None, entity_key: str) -> uuid.UUID:

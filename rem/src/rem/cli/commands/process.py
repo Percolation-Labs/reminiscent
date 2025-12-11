@@ -11,39 +11,74 @@ from rem.services.content import ContentService
 
 
 @click.command(name="ingest")
-@click.argument("file_path", type=click.Path(exists=True))
-@click.option("--user-id", default=None, help="User ID to scope file privately (default: public/shared)")
+@click.argument("path", type=click.Path(exists=True))
+@click.option("--table", "-t", default=None, help="Target table (e.g., ontologies, resources). Auto-detected for schemas.")
+@click.option("--user-id", default=None, help="[OPTIONAL] User ID for PRIVATE files only. Leave empty for shared/public data.")
 @click.option("--category", help="Optional file category")
 @click.option("--tags", help="Optional comma-separated tags")
+@click.option("--pattern", "-p", default="**/*.md", help="Glob pattern for directory ingestion (default: **/*.md)")
+@click.option("--dry-run", is_flag=True, help="Show what would be ingested without making changes")
 def process_ingest(
-    file_path: str,
+    path: str,
+    table: str | None,
     user_id: str | None,
     category: str | None,
     tags: str | None,
+    pattern: str,
+    dry_run: bool,
 ):
     """
-    Ingest a file into REM (storage + parsing + embedding).
+    Ingest files into REM (storage + parsing + embedding).
 
-    This command performs the full ingestion pipeline:
-    1. Reads the file from the local path.
-    2. Stores it in the configured storage (local/S3).
-    3. Parses the content.
-    4. Chunks and embeds the content into Resources.
-    5. Creates a File entity record.
+    Supports both single files and directories. For directories, recursively
+    processes files matching the pattern (default: **/*.md).
+
+    Target table is auto-detected for schemas (agent.yaml → schemas table).
+    Use --table to explicitly set the target (e.g., ontologies for clinical knowledge).
 
     Examples:
         rem process ingest sample.pdf
         rem process ingest contract.docx --category legal --tags contract,2023
         rem process ingest agent.yaml  # Auto-detects kind=agent, saves to schemas table
+
+        # Directory ingestion into ontologies table
+        rem process ingest ontology/procedures/scid-5/ --table ontologies
+        rem process ingest ontology/ --table ontologies --pattern "**/*.md"
+
+        # Preview what would be ingested
+        rem process ingest ontology/ --table ontologies --dry-run
     """
     import asyncio
+    from pathlib import Path
     from ...services.content import ContentService
 
     async def _ingest():
-        # Initialize ContentService with repositories for proper resource saving
         from rem.services.postgres import get_postgres_service
         from rem.services.postgres.repository import Repository
-        from rem.models.entities import File, Resource
+        from rem.models.entities import File, Resource, Ontology
+
+        input_path = Path(path)
+        tag_list = tags.split(",") if tags else None
+
+        # Collect files to process
+        if input_path.is_dir():
+            files_to_process = list(input_path.glob(pattern))
+            if not files_to_process:
+                logger.error(f"No files matching '{pattern}' found in {input_path}")
+                sys.exit(1)
+            logger.info(f"Found {len(files_to_process)} files matching '{pattern}'")
+        else:
+            files_to_process = [input_path]
+
+        # Dry run: just show what would be processed
+        if dry_run:
+            logger.info("DRY RUN - Would ingest:")
+            for f in files_to_process[:20]:
+                entity_key = f.stem  # filename without extension
+                logger.info(f"  {f} → {table or 'auto-detect'} (key: {entity_key})")
+            if len(files_to_process) > 20:
+                logger.info(f"  ... and {len(files_to_process) - 20} more files")
+            return
 
         db = get_postgres_service()
         if not db:
@@ -51,52 +86,117 @@ def process_ingest(
         await db.connect()
 
         try:
-            file_repo = Repository(File, "files", db=db)
-            resource_repo = Repository(Resource, "resources", db=db)
-            service = ContentService(file_repo=file_repo, resource_repo=resource_repo)
-
-            tag_list = tags.split(",") if tags else None
-
-            scope_msg = f"user: {user_id}" if user_id else "public"
-            logger.info(f"Ingesting file: {file_path} ({scope_msg})")
-            result = await service.ingest_file(
-                file_uri=file_path,
-                user_id=user_id,
-                category=category,
-                tags=tag_list,
-                is_local_server=True, # CLI is local
-            )
-
-            # Handle schema ingestion (agents/evaluators)
-            if result.get("schema_name"):
-                logger.success(f"Schema ingested: {result['schema_name']} (kind={result.get('kind', 'agent')})")
-                logger.info(f"Version: {result.get('version', '1.0.0')}")
-            # Handle file ingestion
-            elif result.get("processing_status") == "completed":
-                logger.success(f"File ingested: {result['file_name']}")
-                logger.info(f"File ID: {result['file_id']}")
-                logger.info(f"Resources created: {result['resources_created']}")
+            # Direct table ingestion (ontologies, etc.)
+            if table:
+                await _ingest_to_table(
+                    db=db,
+                    files=files_to_process,
+                    table_name=table,
+                    user_id=user_id,
+                    category=category,
+                    tag_list=tag_list,
+                )
             else:
-                logger.error(f"Ingestion failed: {result.get('message', 'Unknown error')}")
-                sys.exit(1)
+                # Standard file ingestion via ContentService
+                file_repo = Repository(File, "files", db=db)
+                resource_repo = Repository(Resource, "resources", db=db)
+                service = ContentService(file_repo=file_repo, resource_repo=resource_repo)
+
+                for file_path in files_to_process:
+                    scope_msg = f"user: {user_id}" if user_id else "public"
+                    logger.info(f"Ingesting: {file_path} ({scope_msg})")
+
+                    result = await service.ingest_file(
+                        file_uri=str(file_path),
+                        user_id=user_id,
+                        category=category,
+                        tags=tag_list,
+                        is_local_server=True,
+                    )
+
+                    # Handle schema ingestion (agents/evaluators)
+                    if result.get("schema_name"):
+                        logger.success(f"Schema: {result['schema_name']} (kind={result.get('kind', 'agent')})")
+                    elif result.get("processing_status") == "completed":
+                        logger.success(f"File: {result['file_name']} ({result['resources_created']} resources)")
+                    else:
+                        logger.error(f"Failed: {result.get('message', 'Unknown error')}")
 
         except Exception as e:
             logger.error(f"Error during ingestion: {e}")
             sys.exit(1)
         finally:
-            # Wait for global embedding worker to finish queued tasks
+            # Wait for embedding worker to finish
             from rem.services.embeddings.worker import get_global_embedding_worker
             try:
                 worker = get_global_embedding_worker()
                 if worker and worker.running and not worker.task_queue.empty():
-                    logger.info(f"Waiting for {worker.task_queue.qsize()} embedding tasks to complete...")
-                    # Worker.stop() waits for queue to drain (see worker.py line ~148)
+                    logger.info(f"Waiting for {worker.task_queue.qsize()} embedding tasks...")
                     await worker.stop()
             except RuntimeError:
-                # Worker doesn't exist yet - no tasks queued
                 pass
 
             await db.disconnect()
+
+    async def _ingest_to_table(db, files, table_name, user_id, category, tag_list):
+        """Direct ingestion of files to a specific table (ontologies, etc.)."""
+        from rem.services.postgres.repository import Repository
+        from rem import get_model_registry
+        from rem.utils.model_helpers import get_table_name
+
+        # Get model class for table
+        registry = get_model_registry()
+        registry.register_core_models()
+        model_class = None
+        for model in registry.get_model_classes().values():
+            if get_table_name(model) == table_name:
+                model_class = model
+                break
+
+        if not model_class:
+            logger.error(f"Unknown table: {table_name}")
+            sys.exit(1)
+
+        repo = Repository(model_class, table_name, db=db)
+        processed = 0
+        failed = 0
+
+        for file_path in files:
+            try:
+                # Read file content
+                content = file_path.read_text(encoding="utf-8")
+                entity_key = file_path.stem  # filename without extension
+
+                # Build entity based on table
+                entity_data = {
+                    "name": entity_key,
+                    "content": content,
+                    "tags": tag_list or [],
+                }
+
+                # Add optional fields
+                if category:
+                    entity_data["category"] = category
+
+                # Tenant scoping: user_id for private, "system" for shared/public
+                entity_data["tenant_id"] = user_id or "system"
+                if user_id:
+                    entity_data["user_id"] = user_id
+
+                # For ontologies, add URI
+                if table_name == "ontologies":
+                    entity_data["uri"] = f"file://{file_path.absolute()}"
+
+                entity = model_class(**entity_data)
+                await repo.upsert(entity, embeddable_fields=["content"], generate_embeddings=True)
+                processed += 1
+                logger.success(f"  ✓ {entity_key}")
+
+            except Exception as e:
+                failed += 1
+                logger.error(f"  ✗ {file_path.name}: {e}")
+
+        logger.info(f"Completed: {processed} succeeded, {failed} failed")
 
     asyncio.run(_ingest())
 
