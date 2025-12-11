@@ -393,7 +393,7 @@ BEGIN
             JOIN kv_store source_kv ON source_kv.entity_key = gt.entity_key
                 AND (source_kv.user_id = effective_user_id OR source_kv.user_id IS NULL)
             CROSS JOIN LATERAL jsonb_array_elements(COALESCE(source_kv.graph_edges, '[]'::jsonb)) AS edge
-            JOIN kv_store target_kv ON target_kv.entity_key = (edge->>'dst')::VARCHAR(255)
+            JOIN kv_store target_kv ON target_kv.entity_key = normalize_key((edge->>'dst')::VARCHAR(255))
                 AND (target_kv.user_id = effective_user_id OR target_kv.user_id IS NULL)
             WHERE gt.depth < p_max_depth
             AND (p_rel_type IS NULL OR (edge->>'rel_type')::VARCHAR(100) = p_rel_type)

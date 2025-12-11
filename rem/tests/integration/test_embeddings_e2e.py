@@ -118,14 +118,17 @@ async def test_embeddings_e2e_workflow(
     print("\nWaiting for background embedding generation...")
     await asyncio.sleep(3)
 
-    # Check if embeddings were created
-    embeddings = await postgres_service.execute(
+    # Check if embeddings were created for our specific resources
+    resource_ids = [str(r.id) for r in resources]
+    embeddings = await postgres_service.fetch(
         """
         SELECT entity_id, field_name, provider, model,
                vector_dims(embedding) as dims
         FROM embeddings_resources
+        WHERE entity_id = ANY($1::uuid[])
         ORDER BY created_at
-        """
+        """,
+        resource_ids
     )
 
     if os.getenv("OPENAI_API_KEY"):

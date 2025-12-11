@@ -97,11 +97,11 @@ def generate_table_schema(
     # Add tenant_id if tenant scoped
     if tenant_scoped:
         columns.append("tenant_id VARCHAR(100) NOT NULL")
-        indexes.append(f"CREATE INDEX idx_{table_name}_tenant ON {table_name} (tenant_id);")
+        indexes.append(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_tenant ON {table_name} (tenant_id);")
 
     # Add user_id (owner field)
     columns.append("user_id VARCHAR(256)")
-    indexes.append(f"CREATE INDEX idx_{table_name}_user ON {table_name} (user_id);")
+    indexes.append(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_user ON {table_name} (user_id);")
 
     # Process Pydantic fields (skip system fields)
     for field_name, field_info in model.model_fields.items():
@@ -125,19 +125,19 @@ def generate_table_schema(
     # Add graph_edges JSONB field
     columns.append("graph_edges JSONB DEFAULT '[]'::jsonb")
     indexes.append(
-        f"CREATE INDEX idx_{table_name}_graph_edges ON {table_name} USING GIN (graph_edges);"
+        f"CREATE INDEX IF NOT EXISTS idx_{table_name}_graph_edges ON {table_name} USING GIN (graph_edges);"
     )
 
     # Add metadata JSONB field
     columns.append("metadata JSONB DEFAULT '{}'::jsonb")
     indexes.append(
-        f"CREATE INDEX idx_{table_name}_metadata ON {table_name} USING GIN (metadata);"
+        f"CREATE INDEX IF NOT EXISTS idx_{table_name}_metadata ON {table_name} USING GIN (metadata);"
     )
 
     # Add tags field (TEXT[] for list[str])
     columns.append("tags TEXT[] DEFAULT ARRAY[]::TEXT[]")
     indexes.append(
-        f"CREATE INDEX idx_{table_name}_tags ON {table_name} USING GIN (tags);"
+        f"CREATE INDEX IF NOT EXISTS idx_{table_name}_tags ON {table_name} USING GIN (tags);"
     )
 
     # Generate CREATE TABLE statement
@@ -202,10 +202,10 @@ CREATE TABLE IF NOT EXISTS {embeddings_table} (
 );
 
 -- Index for entity lookup (get all embeddings for entity)
-CREATE INDEX idx_{embeddings_table}_entity ON {embeddings_table} (entity_id);
+CREATE INDEX IF NOT EXISTS idx_{embeddings_table}_entity ON {embeddings_table} (entity_id);
 
 -- Index for field + provider lookup
-CREATE INDEX idx_{embeddings_table}_field_provider ON {embeddings_table} (field_name, provider);
+CREATE INDEX IF NOT EXISTS idx_{embeddings_table}_field_provider ON {embeddings_table} (field_name, provider);
 
 -- HNSW index for vector similarity search (created in background)
 -- Note: This will be created by background thread after data load

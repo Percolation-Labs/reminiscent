@@ -70,9 +70,10 @@ async def seed_graph_data(tenant_id: str) -> dict[str, str]:
                 await repo.upsert(instance)
 
         # Return root key (last resource loaded - "Project Plan")
-        # Use name as entity_key (matches KV store trigger and model config)
+        # Use normalized name as entity_key (KV store trigger uses normalize_key())
+        # normalize_key converts "Project Plan" -> "project-plan"
         return {
-            "root": "Project Plan",
+            "root": "project-plan",
             "tenant_id": tenant_id
         }
     finally:
@@ -119,10 +120,10 @@ async def test_recursive_graph_traversal():
             print(f"Depth {row['depth']}: {row['entity_key']} ({row['entity_type']}) via {row['rel_type']}")
 
         results = {row['entity_key']: row for row in rows}
-        # Note: all entities use name as entity_key (configured via json_schema_extra)
-        assert "Meeting Notes" in results  # Resource name
-        assert "Engineering Sync" in results  # Moment name
-        assert "Sarah Chen" in results  # User name
+        # Note: entity_key is normalized (lowercase kebab-case) via normalize_key()
+        assert "meeting-notes" in results  # Resource name
+        assert "engineering-sync" in results  # Moment name
+        assert "sarah-chen" in results  # User name
 
         # 3. Execute Traversal (With Array Filter)
         # Filter only for 'referenced_by' and 'documented_in'
@@ -144,13 +145,13 @@ async def test_recursive_graph_traversal():
         results_filtered = {row['entity_key']: row for row in rows_filtered}
 
         # Should find B via referenced_by
-        assert "Meeting Notes" in results_filtered  # Resource name
+        assert "meeting-notes" in results_filtered  # Resource name (normalized)
 
         # Should NOT find C (different rel_type: documented_in)
-        assert "Engineering Sync" not in results_filtered, "Engineering Sync should be filtered out (wrong rel_type)"
+        assert "engineering-sync" not in results_filtered, "engineering-sync should be filtered out (wrong rel_type)"
 
         # Should NOT find D (different rel_type: attendee)
-        assert "Sarah Chen" not in results_filtered, "Sarah Chen should be filtered out (wrong rel_type)"
+        assert "sarah-chen" not in results_filtered, "sarah-chen should be filtered out (wrong rel_type)"
 
         
     finally:

@@ -146,14 +146,17 @@ class TestEmbeddingWorker:
             # Wait for worker to process tasks
             await asyncio.sleep(2)
 
-            # Verify embeddings were created in database
-            embeddings = await postgres_service.execute(
+            # Verify embeddings were created for our specific resources
+            resource_ids = [str(r.id) for r in resources]
+            embeddings = await postgres_service.fetch(
                 """
                 SELECT entity_id, field_name, provider, model,
                        vector_dims(embedding) as dims
                 FROM embeddings_resources
+                WHERE entity_id = ANY($1::uuid[])
                 ORDER BY created_at
-                """
+                """,
+                resource_ids
             )
 
             # Should have 2 embeddings (one per resource)
@@ -172,6 +175,7 @@ class TestEmbeddingWorker:
     async def test_batch_processing(self, postgres_service):
         """Test that worker batches tasks efficiently."""
         from uuid import uuid4
+        from rem.models.entities import Resource
 
         worker = EmbeddingWorker(
             postgres_service=postgres_service,
@@ -184,11 +188,21 @@ class TestEmbeddingWorker:
         try:
             from rem.services.embeddings import EmbeddingTask
 
-            # Queue 5 tasks
+            # First create the resource records (required for FK constraint)
+            resource_ids = []
             for i in range(5):
+                resource_id = str(uuid4())
+                resource_ids.append(resource_id)
+                await postgres_service.execute(
+                    "INSERT INTO resources (id, name, uri, content, tenant_id) VALUES ($1, $2, $3, $4, $5)",
+                    [resource_id, f"test-resource-{i}", f"test://resource-{i}", f"Test content {i}", "test-tenant"]
+                )
+
+            # Queue 5 tasks
+            for i, resource_id in enumerate(resource_ids):
                 task = EmbeddingTask(
                     task_id=f"test-{i}",
-                    entity_id=str(uuid4()),
+                    entity_id=resource_id,
                     table_name="resources",
                     field_name="content",
                     content=f"Test content {i}",
