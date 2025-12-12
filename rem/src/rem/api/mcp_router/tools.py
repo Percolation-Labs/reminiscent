@@ -128,198 +128,168 @@ def mcp_tool_error_handler(func: Callable) -> Callable:
 
 @mcp_tool_error_handler
 async def search_rem(
-    query_type: Literal["lookup", "fuzzy", "search", "sql", "traverse"],
-    # LOOKUP parameters
-    entity_key: str | None = None,
-    # FUZZY parameters
-    query_text: str | None = None,
-    threshold: float = 0.7,
-    # SEARCH parameters
-    table: str | None = None,
+    query: str,
     limit: int = 20,
-    # SQL parameters
-    sql_query: str | None = None,
-    # TRAVERSE parameters
-    initial_query: str | None = None,
-    edge_types: list[str] | None = None,
-    depth: int = 1,
-    # Optional context override (defaults to authenticated user)
-    user_id: str | None = None,
 ) -> dict[str, Any]:
     """
-    Execute REM queries for entity lookup, semantic search, and graph traversal.
+    Execute a REM query using the REM query dialect.
 
-    REM supports multiple query types for different retrieval patterns:
+    **REM Query Syntax:**
 
-    **LOOKUP** - O(1) entity resolution by natural language key:
-    - Fast exact match across all tables
-    - Uses indexed label_vector for instant retrieval
-    - Example: LOOKUP "Sarah Chen" returns all entities named "Sarah Chen"
-    - **Ontology Note**: Ontology content may contain markdown links like
-      `[sertraline](../../drugs/antidepressants/sertraline.md)`. The link name
-      (e.g., "sertraline") can be used as a LOOKUP subject, while the relative
-      path provides semantic context (e.g., it's a drug, specifically an antidepressant).
+    LOOKUP <entity_key>
+        Find entity by exact name/key. Searches across all tables.
+        Example: LOOKUP phq-9-procedure
+        Example: LOOKUP sertraline
 
-    **FUZZY** - Fuzzy text matching with similarity threshold:
-    - Finds partial matches and typos
-    - Example: FUZZY "sara" threshold=0.7 finds "Sarah Chen", "Sara Martinez"
+    SEARCH <text> IN <table>
+        Semantic vector search within a specific table.
+        Tables: 'ontologies' (clinical knowledge, procedures, drugs, DSM criteria)
+                'resources' (documents, files, user content)
+        Example: SEARCH depression IN ontologies
+        Example: SEARCH Module F IN ontologies
 
-    **SEARCH** - Semantic vector search (table-specific):
-    - Finds conceptually similar entities
-    - Example: SEARCH "database migration" table=resources returns related documents
+    FUZZY <text>
+        Fuzzy text matching for partial matches and typos.
+        Example: FUZZY setraline
 
-    **SQL** - Direct SQL queries for structured data:
-    - Full PostgreSQL query power (scoped to table)
-    - Example: SQL "role = 'engineer'" (WHERE clause only)
-
-    **TRAVERSE** - Graph traversal following relationships:
-    - Explores entity neighborhood via graph edges
-    - Supports depth control and edge type filtering
-    - Example: TRAVERSE "Sarah Chen" edge_types=["manages", "reports_to"] depth=2
+    TRAVERSE <start_entity>
+        Graph traversal from a starting entity.
+        Example: TRAVERSE sarah-chen
 
     Args:
-        query_type: Type of query (lookup, fuzzy, search, sql, traverse)
-        entity_key: Entity key for LOOKUP (e.g., "Sarah Chen")
-        query_text: Search text for FUZZY or SEARCH
-        threshold: Similarity threshold for FUZZY (0.0-1.0)
-        table: Target table for SEARCH (resources, moments, users, etc.)
-        limit: Max results for SEARCH
-        sql_query: SQL WHERE clause for SQL type (e.g. "id = '123'")
-        initial_query: Starting entity for TRAVERSE
-        edge_types: Edge types to follow for TRAVERSE (e.g., ["manages", "reports_to"])
-        depth: Traversal depth for TRAVERSE (0=plan only, 1-5=actual traversal)
-        user_id: Optional user identifier (defaults to authenticated user or "default")
+        query: REM query string (e.g., "LOOKUP phq-9-procedure", "SEARCH depression IN ontologies")
+        limit: Maximum results to return (default: 20)
 
     Returns:
-        Dict with query results, metadata, and execution info
+        Dict with query results and metadata. If no results found, includes
+        'suggestions' with alternative search strategies.
 
     Examples:
-        # Lookup entity (uses authenticated user context)
-        search_rem(
-            query_type="lookup",
-            entity_key="Sarah Chen"
-        )
-
-        # Semantic search
-        search_rem(
-            query_type="search",
-            query_text="database migration",
-            table="resources",
-            limit=10
-        )
-
-        # SQL query (WHERE clause only)
-        search_rem(
-            query_type="sql",
-            table="resources",
-            sql_query="category = 'document'"
-        )
-
-        # Graph traversal
-        search_rem(
-            query_type="traverse",
-            initial_query="Sarah Chen",
-            edge_types=["manages", "reports_to"],
-            depth=2
-        )
+        search_rem("LOOKUP phq-9-procedure")
+        search_rem("SEARCH depression IN ontologies")
+        search_rem("SEARCH anxiety treatment IN ontologies", limit=10)
+        search_rem("FUZZY setraline")
     """
     # Get RemService instance (lazy initialization)
     rem_service = await get_rem_service()
 
-    # Get user_id from context if not provided
-    # TODO: Extract from authenticated session context when auth is enabled
-    user_id = AgentContext.get_user_id_or_default(user_id, source="search_rem")
+    # Get user_id from context
+    user_id = AgentContext.get_user_id_or_default(None, source="search_rem")
 
-    # Normalize query_type to lowercase for case-insensitive REM dialect
-    query_type = cast(Literal["lookup", "fuzzy", "search", "sql", "traverse"], query_type.lower())
+    # Parse the REM query string
+    if not query or not query.strip():
+        return {
+            "status": "error",
+            "error": "Empty query. Use REM syntax: LOOKUP <key>, SEARCH <text> IN <table>, FUZZY <text>, or TRAVERSE <entity>",
+        }
+
+    query = query.strip()
+    parts = query.split(None, 1)  # Split on first whitespace
+
+    if len(parts) < 2:
+        return {
+            "status": "error",
+            "error": f"Invalid query format: '{query}'. Expected: LOOKUP <key>, SEARCH <text> IN <table>, FUZZY <text>, or TRAVERSE <entity>",
+        }
+
+    query_type = parts[0].upper()
+    remainder = parts[1].strip()
 
     # Build RemQuery based on query_type
-    if query_type == "lookup":
-        if not entity_key:
-            return {"status": "error", "error": "entity_key required for LOOKUP"}
+    if query_type == "LOOKUP":
+        if not remainder:
+            return {
+                "status": "error",
+                "error": "LOOKUP requires an entity key. Example: LOOKUP phq-9-procedure",
+            }
 
-        query = RemQuery(
+        rem_query = RemQuery(
             query_type=QueryType.LOOKUP,
             parameters=LookupParameters(
-                key=entity_key,
+                key=remainder,
                 user_id=user_id,
             ),
             user_id=user_id,
         )
+        table = None  # LOOKUP searches all tables
 
-    elif query_type == "fuzzy":
-        if not query_text:
-            return {"status": "error", "error": "query_text required for FUZZY"}
-
-        query = RemQuery(
-            query_type=QueryType.FUZZY,
-            parameters=FuzzyParameters(
-                query_text=query_text,
-                threshold=threshold,
-                limit=limit, # Limit was missing in original logic but likely intended
-            ),
-            user_id=user_id,
-        )
-
-    elif query_type == "search":
-        if not query_text:
-            return {"status": "error", "error": "query_text required for SEARCH"}
-        if not table:
-            return {"status": "error", "error": "table required for SEARCH"}
-
-        query = RemQuery(
-            query_type=QueryType.SEARCH,
-            parameters=SearchParameters(
-                query_text=query_text,
-                table_name=table,
-                limit=limit,
-            ),
-            user_id=user_id,
-        )
-
-    elif query_type == "sql":
-        if not sql_query:
-            return {"status": "error", "error": "sql_query required for SQL"}
-        
-        # SQLParameters requires table_name. If not provided, we cannot execute.
-        # Assuming sql_query is just the WHERE clause based on RemService implementation,
-        # OR if table is provided we use it.
-        if not table:
-             return {"status": "error", "error": "table required for SQL queries (parameter: table)"}
-
-        query = RemQuery(
-            query_type=QueryType.SQL,
-            parameters=SQLParameters(
-                table_name=table,
-                where_clause=sql_query,
-                limit=limit,
-            ),
-            user_id=user_id,
-        )
-
-    elif query_type == "traverse":
-        if not initial_query:
+    elif query_type == "SEARCH":
+        # Parse "text IN table" format
+        if " IN " in remainder.upper():
+            # Find the last " IN " to handle cases like "SEARCH pain IN back IN ontologies"
+            in_pos = remainder.upper().rfind(" IN ")
+            search_text = remainder[:in_pos].strip()
+            table = remainder[in_pos + 4:].strip().lower()
+        else:
             return {
                 "status": "error",
-                "error": "initial_query required for TRAVERSE",
+                "error": f"SEARCH requires table: SEARCH <text> IN <table>. "
+                "Use 'ontologies' for clinical knowledge or 'resources' for documents. "
+                f"Example: SEARCH {remainder} IN ontologies",
             }
 
-        query = RemQuery(
-            query_type=QueryType.TRAVERSE,
-            parameters=TraverseParameters(
-                initial_query=initial_query,
-                edge_types=edge_types or [],
-                max_depth=depth,
+        if not search_text:
+            return {
+                "status": "error",
+                "error": "SEARCH requires search text. Example: SEARCH depression IN ontologies",
+            }
+
+        rem_query = RemQuery(
+            query_type=QueryType.SEARCH,
+            parameters=SearchParameters(
+                query_text=search_text,
+                table_name=table,
+                limit=limit,
             ),
             user_id=user_id,
         )
 
+    elif query_type == "FUZZY":
+        if not remainder:
+            return {
+                "status": "error",
+                "error": "FUZZY requires search text. Example: FUZZY setraline",
+            }
+
+        rem_query = RemQuery(
+            query_type=QueryType.FUZZY,
+            parameters=FuzzyParameters(
+                query_text=remainder,
+                threshold=0.7,
+                limit=limit,
+            ),
+            user_id=user_id,
+        )
+        table = None
+
+    elif query_type == "TRAVERSE":
+        if not remainder:
+            return {
+                "status": "error",
+                "error": "TRAVERSE requires a starting entity. Example: TRAVERSE sarah-chen",
+            }
+
+        rem_query = RemQuery(
+            query_type=QueryType.TRAVERSE,
+            parameters=TraverseParameters(
+                initial_query=remainder,
+                edge_types=[],
+                max_depth=1,
+            ),
+            user_id=user_id,
+        )
+        table = None
+
     else:
-        return {"status": "error", "error": f"Unknown query_type: {query_type}"}
+        return {
+            "status": "error",
+            "error": f"Unknown query type: '{query_type}'. Valid types: LOOKUP, SEARCH, FUZZY, TRAVERSE. "
+            "Examples: LOOKUP phq-9-procedure, SEARCH depression IN ontologies",
+        }
 
     # Execute query (errors handled by decorator)
     logger.info(f"Executing REM query: {query_type} for user {user_id}")
-    result = await rem_service.execute_query(query)
+    result = await rem_service.execute_query(rem_query)
 
     logger.info(f"Query completed successfully: {query_type}")
 
@@ -345,35 +315,34 @@ async def search_rem(
         # Build helpful suggestions based on query type
         suggestions = []
 
-        if query_type in ("lookup", "fuzzy"):
+        if query_type in ("LOOKUP", "FUZZY"):
             suggestions.append(
                 "LOOKUP/FUZZY searches across ALL tables. If you expected results, "
                 "verify the entity name is spelled correctly."
             )
 
-        if query_type == "search":
+        if query_type == "SEARCH":
             if table == "resources":
                 suggestions.append(
-                    "No results in 'resources' table. Try searching 'ontologies' table instead - "
+                    "No results in 'resources' table. Try: SEARCH <text> IN ontologies - "
                     "clinical procedures, drug info, and diagnostic criteria are stored there."
                 )
             elif table == "ontologies":
                 suggestions.append(
-                    "No results in 'ontologies' table. Try searching 'resources' table for "
-                    "user-uploaded documents and general content."
+                    "No results in 'ontologies' table. Try: SEARCH <text> IN resources - "
+                    "for user-uploaded documents and general content."
                 )
             else:
                 suggestions.append(
-                    "Try searching different tables: 'ontologies' (clinical knowledge, procedures, drugs) "
-                    "or 'resources' (documents, files, user content)."
+                    "Try: SEARCH <text> IN ontologies (clinical knowledge, procedures, drugs) "
+                    "or SEARCH <text> IN resources (documents, files)."
                 )
 
         # Always suggest both tables if no specific table guidance given
         if not suggestions:
             suggestions.append(
-                "No results found. Key tables to search: "
-                "'ontologies' (clinical procedures, drug info, DSM criteria) and "
-                "'resources' (documents, files). Use SEARCH with table parameter."
+                "No results found. Try: SEARCH <text> IN ontologies (clinical procedures, drugs) "
+                "or SEARCH <text> IN resources (documents, files)."
             )
 
         response["suggestions"] = suggestions
