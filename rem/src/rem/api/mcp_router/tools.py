@@ -322,10 +322,52 @@ async def search_rem(
     result = await rem_service.execute_query(query)
 
     logger.info(f"Query completed successfully: {query_type}")
-    return {
+
+    # Provide helpful guidance when no results found
+    response: dict[str, Any] = {
         "query_type": query_type,
         "results": result,
     }
+
+    if not result or (isinstance(result, list) and len(result) == 0):
+        # Build helpful suggestions based on query type
+        suggestions = []
+
+        if query_type in ("lookup", "fuzzy"):
+            suggestions.append(
+                "LOOKUP/FUZZY searches across ALL tables. If you expected results, "
+                "verify the entity name is spelled correctly."
+            )
+
+        if query_type == "search":
+            if table == "resources":
+                suggestions.append(
+                    "No results in 'resources' table. Try searching 'ontologies' table instead - "
+                    "clinical procedures, drug info, and diagnostic criteria are stored there."
+                )
+            elif table == "ontologies":
+                suggestions.append(
+                    "No results in 'ontologies' table. Try searching 'resources' table for "
+                    "user-uploaded documents and general content."
+                )
+            else:
+                suggestions.append(
+                    "Try searching different tables: 'ontologies' (clinical knowledge, procedures, drugs) "
+                    "or 'resources' (documents, files, user content)."
+                )
+
+        # Always suggest both tables if no specific table guidance given
+        if not suggestions:
+            suggestions.append(
+                "No results found. Key tables to search: "
+                "'ontologies' (clinical procedures, drug info, DSM criteria) and "
+                "'resources' (documents, files). Use SEARCH with table parameter."
+            )
+
+        response["suggestions"] = suggestions
+        response["hint"] = "0 results returned. See 'suggestions' for alternative search strategies."
+
+    return response
 
 
 @mcp_tool_error_handler
