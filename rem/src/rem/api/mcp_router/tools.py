@@ -329,7 +329,19 @@ async def search_rem(
         "results": result,
     }
 
-    if not result or (isinstance(result, list) and len(result) == 0):
+    # Check if results are empty - handle both list and dict result formats
+    is_empty = False
+    if not result:
+        is_empty = True
+    elif isinstance(result, list) and len(result) == 0:
+        is_empty = True
+    elif isinstance(result, dict):
+        # RemService returns dict with 'results' key containing actual matches
+        inner_results = result.get("results", [])
+        count = result.get("count", len(inner_results) if isinstance(inner_results, list) else 0)
+        is_empty = count == 0 or (isinstance(inner_results, list) and len(inner_results) == 0)
+
+    if is_empty:
         # Build helpful suggestions based on query type
         suggestions = []
 
