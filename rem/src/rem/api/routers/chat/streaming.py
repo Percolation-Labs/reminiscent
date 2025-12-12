@@ -838,7 +838,7 @@ async def stream_openai_response_with_save(
 
         # Update session description with session_name (non-blocking, after all yields)
         for tool_call in tool_calls:
-            if tool_call.get("tool_name") == "register_metadata" and tool_call.get("is_metadata"):
+            if tool_call and tool_call.get("tool_name") == "register_metadata" and tool_call.get("is_metadata"):
                 session_name = tool_call.get("arguments", {}).get("session_name")
                 if session_name:
                     try:
