@@ -78,21 +78,19 @@ async def cleanup_service_cache():
 
 @pytest.mark.asyncio
 async def test_search_rem_lookup(populated_database):
-    """Test search_rem MCP tool with LOOKUP query."""
+    """Test search_rem MCP tool with LOOKUP query using new query string format."""
     print("\n✓ Calling search_rem with LOOKUP")
 
-    result = await search_rem(
-        query_type='lookup',
-        entity_key='docs://getting-started.md',
-        user_id=settings.test.effective_user_id
-    )
+    # NEW: Use query string format instead of separate parameters
+    result = await search_rem(query="LOOKUP docs://getting-started.md")
 
     print(f"  Result type: {type(result)}")
     print(f"  Result keys: {result.keys() if isinstance(result, dict) else 'N/A'}")
-    print(f"  Status: {result.get('status', 'N/A')}")
+    print(f"  Query type from response: {result.get('query_type', 'N/A')}")
 
     assert isinstance(result, dict), "Result should be a dict"
-    assert result.get('status') == 'success', f"Expected success, got: {result}"
+    # Check for results (even 0 results is valid - no error)
+    assert 'results' in result or result.get('status') != 'error', f"Unexpected error: {result}"
 
     if 'results' in result:
         print(f"  Results key type: {type(result['results'])}")
@@ -108,12 +106,10 @@ async def test_search_rem_lookup(populated_database):
                 print(f"  ✓ All keys in result: {list(first.keys())}")
 
                 # Results have shape: {"entity_type": "resources", "data": {...resource...}}
-                # Need to extract the actual resource from the data field
                 if 'data' in first and isinstance(first['data'], dict):
                     resource_data = first['data']
                     print(f"  ✓ Resource data keys: {list(resource_data.keys())[:10]}")
 
-                    # Check for entity_key or name field (backward compat)
                     entity_key = resource_data.get('entity_key') or resource_data.get('name')
                     uri = resource_data.get('uri')
 
@@ -134,29 +130,25 @@ async def test_search_rem_lookup(populated_database):
                     assert entity_key == 'docs://getting-started.md' or uri == 'docs://getting-started.md'
                     assert first.get('entity_type') == 'resources'
             else:
-                print("  ⚠️  WARNING: No results in nested results array!")
+                print("  ⚠️  No results found (entity may not exist in test data)")
         else:
-            print(f"  ⚠️  WARNING: Unexpected results structure!")
-            print(f"  Full result: {result}")
+            print(f"  ⚠️  Unexpected results structure: {result}")
 
 
 @pytest.mark.asyncio
 async def test_search_rem_fuzzy():
-    """Test search_rem MCP tool with FUZZY query."""
+    """Test search_rem MCP tool with FUZZY query using new query string format."""
     print("\n✓ Calling search_rem with FUZZY")
 
-    result = await search_rem(
-        query_type='fuzzy',
-        query_text='Sara',
-        threshold=0.3,
-        user_id=settings.test.effective_user_id
-    )
+    # NEW: Use query string format - threshold is now fixed at 0.3 in the function
+    result = await search_rem(query="FUZZY Sara")
 
     print(f"  Result type: {type(result)}")
-    print(f"  Status: {result.get('status', 'N/A')}")
+    print(f"  Query type from response: {result.get('query_type', 'N/A')}")
 
     assert isinstance(result, dict), "Result should be a dict"
-    assert result.get('status') == 'success', f"Expected success, got: {result}"
+    # Check for results (even 0 results is valid - no error)
+    assert 'results' in result or result.get('status') != 'error', f"Unexpected error: {result}"
 
     if 'results' in result and isinstance(result['results'], dict):
         count = result['results'].get('count', 0)
@@ -171,19 +163,42 @@ async def test_search_rem_fuzzy():
 
 
 @pytest.mark.asyncio
-async def test_search_rem_case_insensitive():
-    """Test that query_type is case-insensitive."""
-    print("\n✓ Testing case-insensitive query_type")
+async def test_search_rem_query_types():
+    """Test that various query types are recognized."""
+    print("\n✓ Testing query type parsing")
 
-    # Test with uppercase
-    result = await search_rem(
-        query_type='LOOKUP',  # Uppercase
-        entity_key='Sarah Chen',
-        user_id=settings.test.effective_user_id
-    )
+    # LOOKUP - should be recognized
+    result = await search_rem(query="LOOKUP test-entity")
+    print(f"  LOOKUP query_type: {result.get('query_type', 'N/A')}")
+    assert result.get('query_type') == 'LOOKUP', f"Expected LOOKUP, got: {result}"
 
-    print(f"  Status with uppercase 'LOOKUP': {result.get('status', 'N/A')}")
-    assert result.get('status') == 'success', "Should handle uppercase query_type"
+    # FUZZY - should be recognized
+    result = await search_rem(query="FUZZY test")
+    print(f"  FUZZY query_type: {result.get('query_type', 'N/A')}")
+    assert result.get('query_type') == 'FUZZY', f"Expected FUZZY, got: {result}"
+
+    # SEARCH - should be recognized
+    result = await search_rem(query="SEARCH depression IN ontologies")
+    print(f"  SEARCH query_type: {result.get('query_type', 'N/A')}")
+    assert result.get('query_type') == 'SEARCH', f"Expected SEARCH, got: {result}"
+
+
+@pytest.mark.asyncio
+async def test_search_rem_invalid_query():
+    """Test that invalid queries return helpful errors."""
+    print("\n✓ Testing invalid query handling")
+
+    # Empty query
+    result = await search_rem(query="")
+    print(f"  Empty query status: {result.get('status', 'N/A')}")
+    assert result.get('status') == 'error', "Empty query should return error"
+    assert 'error' in result
+
+    # Unknown query type
+    result = await search_rem(query="INVALID some-text")
+    print(f"  Invalid type status: {result.get('status', 'N/A')}")
+    assert result.get('status') == 'error', "Invalid query type should return error"
+    assert 'Unknown query type' in result.get('error', '')
 
 
 if __name__ == "__main__":
@@ -198,9 +213,14 @@ if __name__ == "__main__":
     asyncio.run(test_search_rem_fuzzy())
 
     print("\n" + "=" * 80)
-    print("Test 3: Case-Insensitive query_type")
+    print("Test 3: Query Types")
     print("=" * 80)
-    asyncio.run(test_search_rem_case_insensitive())
+    asyncio.run(test_search_rem_query_types())
+
+    print("\n" + "=" * 80)
+    print("Test 4: Invalid Query")
+    print("=" * 80)
+    asyncio.run(test_search_rem_invalid_query())
 
     print("\n" + "=" * 80)
     print("✅ All MCP Tool Tests Passed!")

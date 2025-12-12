@@ -255,7 +255,7 @@ async def search_rem(
             query_type=QueryType.FUZZY,
             parameters=FuzzyParameters(
                 query_text=remainder,
-                threshold=0.7,
+                threshold=0.3,  # pg_trgm similarity - 0.3 is reasonable for typo correction
                 limit=limit,
             ),
             user_id=user_id,
