@@ -644,7 +644,7 @@ async def _diff_async(
 
         if not result.has_changes:
             click.secho("✓ No schema drift detected", fg="green")
-            click.echo("  Database matches Pydantic models")
+            click.echo("  Database matches source (tables, functions, triggers, views)")
             if result.filtered_count > 0:
                 click.echo()
                 click.secho(f"  ({result.filtered_count} destructive change(s) hidden by '{strategy}' strategy)", fg="yellow")
@@ -656,17 +656,34 @@ async def _diff_async(
         if result.filtered_count > 0:
             click.secho(f"   ({result.filtered_count} destructive change(s) hidden by '{strategy}' strategy)", fg="yellow")
         click.echo()
-        click.echo("Changes:")
-        for line in result.summary:
-            if line.startswith("+"):
-                click.secho(f"  {line}", fg="green")
-            elif line.startswith("-"):
-                click.secho(f"  {line}", fg="red")
-            elif line.startswith("~"):
-                click.secho(f"  {line}", fg="yellow")
-            else:
-                click.echo(f"  {line}")
-        click.echo()
+
+        # Table/column changes (Alembic)
+        if result.summary:
+            click.echo("Table Changes:")
+            for line in result.summary:
+                if line.startswith("+"):
+                    click.secho(f"  {line}", fg="green")
+                elif line.startswith("-"):
+                    click.secho(f"  {line}", fg="red")
+                elif line.startswith("~"):
+                    click.secho(f"  {line}", fg="yellow")
+                else:
+                    click.echo(f"  {line}")
+            click.echo()
+
+        # Programmable object changes (functions, triggers, views)
+        if result.programmable_summary:
+            click.echo("Programmable Objects (functions/triggers/views):")
+            for line in result.programmable_summary:
+                if line.startswith("+"):
+                    click.secho(f"  {line}", fg="green")
+                elif line.startswith("-"):
+                    click.secho(f"  {line}", fg="red")
+                elif line.startswith("~"):
+                    click.secho(f"  {line}", fg="yellow")
+                else:
+                    click.echo(f"  {line}")
+            click.echo()
 
         # Generate migration if requested
         if generate:

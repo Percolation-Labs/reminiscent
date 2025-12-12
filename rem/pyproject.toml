@@ -1,6 +1,6 @@
 [project]
 name = "remdb"
-version = "0.3.183"
+version = "0.3.184"
 description = "Resources Entities Moments - Bio-inspired memory system for agentic AI workloads"
 readme = "README.md"
 authors = [

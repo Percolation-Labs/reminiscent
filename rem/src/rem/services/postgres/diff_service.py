@@ -5,12 +5,17 @@ Uses Alembic autogenerate to detect differences between:
 - Target schema (derived from Pydantic models)
 - Current database schema
 
+Also compares programmable objects (functions, triggers, views) which
+Alembic does not track.
+
 This enables:
 1. Local development: See what would change before applying migrations
 2. CI validation: Detect drift between code and database (--check mode)
 3. Migration generation: Create incremental migration files
 """
 
+import asyncio
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -51,11 +56,14 @@ class SchemaDiff:
     sql: str = ""
     upgrade_ops: Optional[ops.UpgradeOps] = None
     filtered_count: int = 0  # Number of operations filtered out by strategy
+    # Programmable objects (functions, triggers, views)
+    programmable_summary: list[str] = field(default_factory=list)
+    programmable_sql: str = ""
 
     @property
     def change_count(self) -> int:
         """Total number of detected changes."""
-        return len(self.summary)
+        return len(self.summary) + len(self.programmable_summary)
 
 
 class DiffService:
@@ -127,9 +135,12 @@ class DiffService:
             # These are now generated in pydantic_to_sqlalchemy
         return True
 
-    def compute_diff(self) -> SchemaDiff:
+    def compute_diff(self, include_programmable: bool = True) -> SchemaDiff:
         """
         Compare Pydantic models against database and return differences.
+
+        Args:
+            include_programmable: If True, also diff functions/triggers/views
 
         Returns:
             SchemaDiff with detected changes
@@ -167,12 +178,20 @@ class DiffService:
                 for op in filtered_ops:
                     summary.extend(self._describe_operation(op))
 
-        has_changes = len(summary) > 0
-
         # Generate SQL if there are changes
         sql = ""
-        if has_changes and upgrade_ops:
+        if summary and upgrade_ops:
             sql = self._render_sql(upgrade_ops, engine)
+
+        # Programmable objects diff (functions, triggers, views)
+        programmable_summary = []
+        programmable_sql = ""
+        if include_programmable:
+            prog_summary, prog_sql = self._compute_programmable_diff()
+            programmable_summary = prog_summary
+            programmable_sql = prog_sql
+
+        has_changes = len(summary) > 0 or len(programmable_summary) > 0
 
         return SchemaDiff(
             has_changes=has_changes,
@@ -180,7 +199,40 @@ class DiffService:
             sql=sql,
             upgrade_ops=upgrade_ops,
             filtered_count=filtered_count,
+            programmable_summary=programmable_summary,
+            programmable_sql=programmable_sql,
         )
+
+    def _compute_programmable_diff(self) -> tuple[list[str], str]:
+        """
+        Compute diff for programmable objects (functions, triggers, views).
+
+        Returns:
+            Tuple of (summary_lines, sync_sql)
+        """
+        from .programmable_diff_service import ProgrammableDiffService
+
+        service = ProgrammableDiffService()
+
+        # Run async diff in sync context
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+        result = loop.run_until_complete(service.compute_diff())
+
+        summary = []
+        for diff in result.diffs:
+            if diff.status == "missing":
+                summary.append(f"+ {diff.object_type.value.upper()} {diff.name} (missing)")
+            elif diff.status == "different":
+                summary.append(f"~ {diff.object_type.value.upper()} {diff.name} (different)")
+            elif diff.status == "extra":
+                summary.append(f"- {diff.object_type.value.upper()} {diff.name} (extra in db)")
+
+        return summary, result.sync_sql
 
     def _filter_operations(self, operations: list) -> tuple[list, int]:
         """

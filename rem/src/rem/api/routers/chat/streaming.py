@@ -793,6 +793,8 @@ async def stream_openai_response_with_save(
 
         # First, store tool call messages (message_type: "tool")
         for tool_call in tool_calls:
+            if not tool_call:
+                continue
             tool_message = {
                 "role": "tool",
                 "content": json.dumps(tool_call.get("result", {}), default=str),

@@ -271,8 +271,12 @@ BEGIN
     AND kv.entity_key = normalize_key(p_entity_key)
     LIMIT 1;
 
-    -- If not found, return empty
+    -- If not found, check if cache is empty and maybe trigger rebuild
     IF entity_table IS NULL THEN
+        -- SELF-HEALING: Check if this is because cache is empty
+        IF rem_kv_store_empty(effective_user_id) THEN
+            PERFORM maybe_trigger_kv_rebuild(effective_user_id, 'rem_lookup');
+        END IF;
         RETURN;
     END IF;
 
@@ -357,6 +361,7 @@ DECLARE
     entities_by_table JSONB := '{}'::jsonb;
     table_keys JSONB;
     effective_user_id VARCHAR(100);
+    v_found_any BOOLEAN := FALSE;
 BEGIN
     effective_user_id := COALESCE(p_user_id, p_tenant_id);
 
@@ -373,6 +378,7 @@ BEGIN
         ORDER BY sim_score DESC
         LIMIT p_limit
     LOOP
+        v_found_any := TRUE;
         -- Build JSONB mapping {table: [keys]}
         IF entities_by_table ? kv_matches.entity_type THEN
             table_keys := entities_by_table->kv_matches.entity_type;
@@ -389,6 +395,11 @@ BEGIN
             );
         END IF;
     END LOOP;
+
+    -- SELF-HEALING: If no matches and cache is empty, trigger rebuild
+    IF NOT v_found_any AND rem_kv_store_empty(effective_user_id) THEN
+        PERFORM maybe_trigger_kv_rebuild(effective_user_id, 'rem_fuzzy');
+    END IF;
 
     -- Fetch full records using rem_fetch (which now supports NULL user_id)
     RETURN QUERY
@@ -436,8 +447,24 @@ DECLARE
     entities_by_table JSONB := '{}'::jsonb;
     table_keys JSONB;
     effective_user_id VARCHAR(100);
+    v_found_start BOOLEAN := FALSE;
 BEGIN
     effective_user_id := COALESCE(p_user_id, p_tenant_id);
+
+    -- Check if start entity exists in kv_store
+    SELECT TRUE INTO v_found_start
+    FROM kv_store kv
+    WHERE (kv.user_id = effective_user_id OR kv.user_id IS NULL)
+    AND kv.entity_key = normalize_key(p_entity_key)
+    LIMIT 1;
+
+    -- SELF-HEALING: If start not found and cache is empty, trigger rebuild
+    IF NOT COALESCE(v_found_start, FALSE) THEN
+        IF rem_kv_store_empty(effective_user_id) THEN
+            PERFORM maybe_trigger_kv_rebuild(effective_user_id, 'rem_traverse');
+        END IF;
+        RETURN;
+    END IF;
 
     FOR graph_keys IN
         WITH RECURSIVE graph_traversal AS (
