@@ -434,6 +434,68 @@ Ensure you're using the correct model format:
 - OpenAI: `openai:gpt-4o-mini`, `openai:gpt-4o`
 - Anthropic: `anthropic:claude-sonnet-4-5-20250929`
 
+## Data Visibility: PUBLIC vs PRIVATE
+
+**IMPORTANT: All ingested data is PUBLIC by default.** This is the correct behavior
+for shared knowledge bases (ontologies, procedures, reference data).
+
+### Why PUBLIC by Default?
+
+Most data in REM should be searchable by all users:
+- Clinical ontologies (disorders, symptoms, drugs)
+- Procedures and protocols (SCID-5, PHQ-9, etc.)
+- Reference documentation
+- Shared domain knowledge
+
+The `rem_lookup()` function searches for data where `user_id IS NULL`, which means
+public data. If you set `user_id` on data, it becomes invisible to other users.
+
+### Ingesting Public Data (Default)
+
+```bash
+# Standard ingestion - data is PUBLIC
+rem process ingest ontology/procedures/ --table ontologies
+
+# From S3 - also PUBLIC
+rem process ingest s3://bucket/docs/reference.pdf
+```
+
+### Ingesting Private Data (Rare)
+
+Private data requires explicit `--make-private` flag:
+
+```bash
+# Private user data - requires --make-private and --user-id
+rem process ingest personal-notes.md --make-private --user-id user-123
+```
+
+**When to use private data:**
+- User-uploaded personal documents
+- Session-specific content
+- User notes and annotations
+
+**NEVER use private data for:**
+- Ontologies and reference material
+- Clinical procedures and protocols
+- Shared knowledge bases
+- Anything that should be searchable by agents
+
+### Common Mistake
+
+If agents can't find data via `search_rem`, the most common cause is that the data
+was ingested with a `user_id` set. Check with:
+
+```sql
+SELECT name, user_id FROM ontologies WHERE name = 'phq-9-procedure';
+-- user_id should be NULL for public data
+```
+
+Fix by setting user_id to NULL:
+```sql
+UPDATE ontologies SET user_id = NULL WHERE user_id IS NOT NULL;
+UPDATE kv_store SET user_id = NULL WHERE entity_type = 'ontologies' AND user_id IS NOT NULL;
+```
+
 ## Next Steps
 
 1. **Implement Schema Registry**

@@ -13,7 +13,8 @@ from rem.services.content import ContentService
 @click.command(name="ingest")
 @click.argument("path", type=click.Path(exists=True))
 @click.option("--table", "-t", default=None, help="Target table (e.g., ontologies, resources). Auto-detected for schemas.")
-@click.option("--user-id", default=None, help="[OPTIONAL] User ID for PRIVATE files only. Leave empty for shared/public data.")
+@click.option("--make-private", is_flag=True, help="Make data private to a specific user. RARELY NEEDED - most data should be public/shared.")
+@click.option("--user-id", default=None, help="User ID for private data. REQUIRES --make-private flag.")
 @click.option("--category", help="Optional file category")
 @click.option("--tags", help="Optional comma-separated tags")
 @click.option("--pattern", "-p", default="**/*.md", help="Glob pattern for directory ingestion (default: **/*.md)")
@@ -21,6 +22,7 @@ from rem.services.content import ContentService
 def process_ingest(
     path: str,
     table: str | None,
+    make_private: bool,
     user_id: str | None,
     category: str | None,
     tags: str | None,
@@ -33,6 +35,10 @@ def process_ingest(
     Supports both single files and directories. For directories, recursively
     processes files matching the pattern (default: **/*.md).
 
+    **IMPORTANT: Data is PUBLIC by default.** This is the correct behavior for
+    shared knowledge bases (ontologies, procedures, reference data). Private
+    user-scoped data is rarely needed and requires explicit --make-private flag.
+
     Target table is auto-detected for schemas (agent.yaml → schemas table).
     Use --table to explicitly set the target (e.g., ontologies for clinical knowledge).
 
@@ -41,14 +47,36 @@ def process_ingest(
         rem process ingest contract.docx --category legal --tags contract,2023
         rem process ingest agent.yaml  # Auto-detects kind=agent, saves to schemas table
 
-        # Directory ingestion into ontologies table
+        # Directory ingestion into ontologies table (PUBLIC - no user-id needed)
         rem process ingest ontology/procedures/scid-5/ --table ontologies
         rem process ingest ontology/ --table ontologies --pattern "**/*.md"
 
         # Preview what would be ingested
         rem process ingest ontology/ --table ontologies --dry-run
+
+        # RARE: Private user-scoped data (requires --make-private)
+        rem process ingest private-notes.md --make-private --user-id user-123
     """
     import asyncio
+
+    # Validate: user_id requires --make-private flag
+    if user_id and not make_private:
+        raise click.UsageError(
+            "Setting --user-id requires the --make-private flag.\n\n"
+            "Data should be PUBLIC by default (no user-id). Private user-scoped data\n"
+            "is rarely needed - only use --make-private for truly personal content.\n\n"
+            "Example: rem process ingest file.md --make-private --user-id user-123"
+        )
+
+    # If --make-private is set, user_id is required
+    if make_private and not user_id:
+        raise click.UsageError(
+            "--make-private requires --user-id to specify which user owns the data.\n\n"
+            "Example: rem process ingest file.md --make-private --user-id user-123"
+        )
+
+    # Clear user_id if not making private (ensure None for public data)
+    effective_user_id = user_id if make_private else None
     from pathlib import Path
     from ...services.content import ContentService
 
@@ -92,7 +120,7 @@ def process_ingest(
                     db=db,
                     files=files_to_process,
                     table_name=table,
-                    user_id=user_id,
+                    user_id=effective_user_id,
                     category=category,
                     tag_list=tag_list,
                 )
@@ -103,12 +131,12 @@ def process_ingest(
                 service = ContentService(file_repo=file_repo, resource_repo=resource_repo)
 
                 for file_path in files_to_process:
-                    scope_msg = f"user: {user_id}" if user_id else "public"
+                    scope_msg = f"user: {effective_user_id}" if effective_user_id else "public"
                     logger.info(f"Ingesting: {file_path} ({scope_msg})")
 
                     result = await service.ingest_file(
                         file_uri=str(file_path),
-                        user_id=user_id,
+                        user_id=effective_user_id,
                         category=category,
                         tags=tag_list,
                         is_local_server=True,
@@ -179,9 +207,9 @@ def process_ingest(
                     entity_data["category"] = category
 
                 # Tenant scoping: user_id for private, "system" for shared/public
+                # user_id=None means PUBLIC data (visible to all users via rem_lookup)
                 entity_data["tenant_id"] = user_id or "system"
-                if user_id:
-                    entity_data["user_id"] = user_id
+                entity_data["user_id"] = user_id  # None = public/shared
 
                 # For ontologies, add URI
                 if table_name == "ontologies":

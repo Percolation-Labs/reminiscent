@@ -430,15 +430,18 @@ async def ingest_into_rem(
     category: str | None = None,
     tags: list[str] | None = None,
     is_local_server: bool = False,
-    user_id: str | None = None,
     resource_type: str | None = None,
 ) -> dict[str, Any]:
     """
-    Ingest file into REM, creating searchable resources and embeddings.
+    Ingest file into REM, creating searchable PUBLIC resources and embeddings.
+
+    **IMPORTANT: All ingested data is PUBLIC by default.** This is correct for
+    shared knowledge bases (ontologies, procedures, reference data). Private
+    user-scoped data requires different handling via the CLI with --make-private.
 
     This tool provides the complete file ingestion pipeline:
     1. **Read**: File from local/S3/HTTP
-    2. **Store**: To user-scoped internal storage
+    2. **Store**: To internal storage (public namespace)
     3. **Parse**: Extract content, metadata, tables, images
     4. **Chunk**: Semantic chunking for embeddings
     5. **Embed**: Create Resource chunks with vector embeddings
@@ -457,7 +460,6 @@ async def ingest_into_rem(
         category: Optional category (document, code, audio, etc.)
         tags: Optional tags for file
         is_local_server: True if running as local/stdio MCP server
-        user_id: Optional user identifier (defaults to authenticated user or "default")
         resource_type: Optional resource type for storing chunks (case-insensitive).
             Supports flexible naming:
             - "resource", "resources", "Resource" → Resource (default)
@@ -476,10 +478,10 @@ async def ingest_into_rem(
         - message: Human-readable status message
 
     Examples:
-        # Ingest local file (local server only, uses authenticated user context)
+        # Ingest local file (local server only)
         ingest_into_rem(
-            file_uri="/Users/me/contract.pdf",
-            category="legal",
+            file_uri="/Users/me/procedure.pdf",
+            category="medical",
             is_local_server=True
         )
 
@@ -503,15 +505,14 @@ async def ingest_into_rem(
     """
     from ...services.content import ContentService
 
-    # Get user_id from context if not provided
-    # TODO: Extract from authenticated session context when auth is enabled
-    user_id = AgentContext.get_user_id_or_default(user_id, source="ingest_into_rem")
+    # Data is PUBLIC by default (user_id=None)
+    # Private user-scoped data requires CLI with --make-private flag
 
     # Delegate to ContentService for centralized ingestion (errors handled by decorator)
     content_service = ContentService()
     result = await content_service.ingest_file(
         file_uri=file_uri,
-        user_id=user_id,
+        user_id=None,  # PUBLIC - all ingested data is shared/public
         category=category,
         tags=tags,
         is_local_server=is_local_server,

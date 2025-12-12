@@ -274,7 +274,7 @@ class ContentService:
     async def ingest_file(
         self,
         file_uri: str,
-        user_id: str,
+        user_id: str | None = None,
         category: str | None = None,
         tags: list[str] | None = None,
         is_local_server: bool = False,
@@ -282,6 +282,10 @@ class ContentService:
     ) -> dict[str, Any]:
         """
         Complete file ingestion pipeline: read → store → parse → chunk → embed.
+
+        **IMPORTANT: Data is PUBLIC by default (user_id=None).**
+        This is correct for shared knowledge bases (ontologies, procedures, reference data).
+        Private user-scoped data is rarely needed - only set user_id for truly personal content.
 
         **CENTRALIZED INGESTION**: This is the single entry point for all file ingestion
         in REM. It handles:
@@ -319,7 +323,9 @@ class ContentService:
 
         Args:
             file_uri: Source file location (local path, s3://, or https://)
-            user_id: User identifier for data isolation and ownership
+            user_id: User identifier for PRIVATE data only. Default None = PUBLIC/shared.
+                Leave as None for shared knowledge bases, ontologies, reference data.
+                Only set for truly private user-specific content.
             category: Optional category tag (document, code, audio, etc.)
             tags: Optional list of tags
             is_local_server: True if running as local/stdio MCP server
@@ -347,12 +353,19 @@ class ContentService:
 
         Example:
             >>> service = ContentService()
+            >>> # PUBLIC data (default) - visible to all users
             >>> result = await service.ingest_file(
-            ...     file_uri="s3://bucket/contract.pdf",
-            ...     user_id="user-123",
-            ...     category="legal"
+            ...     file_uri="s3://bucket/procedure.pdf",
+            ...     category="medical"
             ... )
             >>> print(f"Created {result['resources_created']} searchable chunks")
+            >>>
+            >>> # PRIVATE data (rare) - only for user-specific content
+            >>> result = await service.ingest_file(
+            ...     file_uri="s3://bucket/personal-notes.pdf",
+            ...     user_id="user-123",  # Only this user can access
+            ...     category="personal"
+            ... )
         """
         from pathlib import Path
         from uuid import uuid4
