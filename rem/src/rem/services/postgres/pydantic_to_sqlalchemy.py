@@ -386,8 +386,8 @@ def _build_table(model: type[BaseModel], table_name: str, metadata: MetaData) ->
         )
     )
 
-    # Tenant and user scoping
-    columns.append(Column("tenant_id", String(100), nullable=False))
+    # Tenant and user scoping (tenant_id nullable - NULL means public/shared)
+    columns.append(Column("tenant_id", String(100), nullable=True))
     columns.append(Column("user_id", String(256), nullable=True))
 
     # Process Pydantic fields (skip system fields)

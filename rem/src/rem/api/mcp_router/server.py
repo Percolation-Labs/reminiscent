@@ -34,6 +34,7 @@ from .resources import (
     register_status_resources,
 )
 from .tools import (
+    ask_agent,
     ask_rem_agent,
     get_schema,
     ingest_into_rem,
@@ -202,6 +203,9 @@ def create_mcp_server(is_local: bool = False) -> FastMCP:
     mcp.tool()(list_schema)
     mcp.tool()(get_schema)
     mcp.tool()(save_agent)
+
+    # Register multi-agent tools
+    mcp.tool()(ask_agent)
 
     # Register test tool only in development environment (not staging/production)
     if settings.environment not in ("staging", "production"):

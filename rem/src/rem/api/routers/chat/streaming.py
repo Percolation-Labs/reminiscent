@@ -15,6 +15,11 @@ Key Insight
 - Use PartEndEvent to detect tool completion
 - Use FunctionToolResultEvent to get tool results
 
+Multi-Agent Context Propagation:
+- AgentContext is set via agent_context_scope() before agent.iter()
+- Child agents (via ask_agent tool) can access parent context via get_current_context()
+- Context includes user_id, tenant_id, session_id, is_eval for proper scoping
+
 SSE Format (OpenAI-compatible):
     data: {"id": "chatcmpl-...", "choices": [{"delta": {"content": "..."}}]}\\n\\n
     data: [DONE]\\n\\n
@@ -28,10 +33,12 @@ Extended SSE Format (Custom Events):
 See sse_events.py for the full event type definitions.
 """
 
+from __future__ import annotations
+
 import json
 import time
 import uuid
-from typing import AsyncGenerator
+from typing import TYPE_CHECKING, AsyncGenerator
 
 from loguru import logger
 from pydantic_ai.agent import Agent
@@ -55,12 +62,16 @@ from .models import (
 )
 from .sse_events import (
     DoneEvent,
+    ErrorEvent,
     MetadataEvent,
     ProgressEvent,
     ReasoningEvent,
     ToolCallEvent,
     format_sse_event,
 )
+
+if TYPE_CHECKING:
+    from ....agentic.context import AgentContext
 
 
 async def stream_openai_response(
@@ -79,6 +90,11 @@ async def stream_openai_response(
     # Mutable container to capture tool calls for persistence
     # Format: list of {"tool_name": str, "tool_id": str, "arguments": dict, "result": any}
     tool_calls_out: list | None = None,
+    # Agent context for multi-agent propagation
+    # When set, enables child agents to access parent context via get_current_context()
+    agent_context: "AgentContext | None" = None,
+    # Pydantic-ai native message history for proper tool call/return pairing
+    message_history: list | None = None,
 ) -> AsyncGenerator[str, None]:
     """
     Stream Pydantic AI agent responses with rich SSE events.
@@ -153,6 +169,17 @@ async def stream_openai_response(
     # Maps tool_id -> {"tool_name": str, "tool_id": str, "arguments": dict}
     pending_tool_data: dict[str, dict] = {}
 
+    # Import context functions for multi-agent support
+    from ....agentic.context import set_current_context
+
+    # Set up context for multi-agent propagation
+    # This allows child agents (via ask_agent tool) to access parent context
+    previous_context = None
+    if agent_context is not None:
+        from ....agentic.context import get_current_context
+        previous_context = get_current_context()
+        set_current_context(agent_context)
+
     try:
         # Emit initial progress event
         current_step = 1
@@ -164,7 +191,9 @@ async def stream_openai_response(
         ))
 
         # Use agent.iter() to get complete execution with tool calls
-        async with agent.iter(prompt) as agent_run:
+        # Pass message_history if available for proper tool call/return pairing
+        iter_kwargs = {"message_history": message_history} if message_history else {}
+        async with agent.iter(prompt, **iter_kwargs) as agent_run:
             # Capture trace context IMMEDIATELY inside agent execution
             # This is deterministic - it's the OTEL context from Pydantic AI instrumentation
             # NOT dependent on any AI-generated content
@@ -587,24 +616,76 @@ async def stream_openai_response(
 
     except Exception as e:
         import traceback
+        import re
 
         error_msg = str(e)
-        logger.error(f"Streaming error: {error_msg}")
-        logger.error(traceback.format_exc())
 
-        # Send error as final chunk
-        error_data = {
-            "error": {
-                "message": error_msg,
-                "type": "internal_error",
-                "code": "stream_error",
-            }
-        }
-        yield f"data: {json.dumps(error_data)}\n\n"
+        # Parse error details for better client handling
+        error_code = "stream_error"
+        error_details: dict = {}
+        recoverable = True
+
+        # Check for rate limit errors (OpenAI 429)
+        if "429" in error_msg or "rate_limit" in error_msg.lower() or "RateLimitError" in type(e).__name__:
+            error_code = "rate_limit_exceeded"
+            recoverable = True
+
+            # Extract retry-after time from error message
+            # Pattern: "Please try again in X.XXs" or "Please try again in Xs"
+            retry_match = re.search(r"try again in (\d+(?:\.\d+)?)\s*s", error_msg)
+            if retry_match:
+                retry_seconds = float(retry_match.group(1))
+                error_details["retry_after_seconds"] = retry_seconds
+                error_details["retry_after_ms"] = int(retry_seconds * 1000)
+
+            # Extract token usage info if available
+            used_match = re.search(r"Used (\d+)", error_msg)
+            limit_match = re.search(r"Limit (\d+)", error_msg)
+            requested_match = re.search(r"Requested (\d+)", error_msg)
+            if used_match:
+                error_details["tokens_used"] = int(used_match.group(1))
+            if limit_match:
+                error_details["tokens_limit"] = int(limit_match.group(1))
+            if requested_match:
+                error_details["tokens_requested"] = int(requested_match.group(1))
+
+            logger.error(f"🔴 Streaming error: status_code: 429, model_name: {model}, body: {error_msg[:200]}")
+
+        # Check for authentication errors
+        elif "401" in error_msg or "AuthenticationError" in type(e).__name__:
+            error_code = "authentication_error"
+            recoverable = False
+            logger.error(f"🔴 Streaming error: Authentication failed")
+
+        # Check for model not found / invalid model
+        elif "404" in error_msg or "model" in error_msg.lower() and "not found" in error_msg.lower():
+            error_code = "model_not_found"
+            recoverable = False
+            logger.error(f"🔴 Streaming error: Model not found")
+
+        # Generic error
+        else:
+            logger.error(f"🔴 Streaming error: {error_msg}")
+
+        logger.error(f"🔴 {traceback.format_exc()}")
+
+        # Emit proper ErrorEvent via SSE (with event: prefix for client parsing)
+        yield format_sse_event(ErrorEvent(
+            code=error_code,
+            message=error_msg,
+            details=error_details if error_details else None,
+            recoverable=recoverable,
+        ))
 
         # Emit done event with error reason
         yield format_sse_event(DoneEvent(reason="error"))
         yield "data: [DONE]\n\n"
+
+    finally:
+        # Restore previous context for multi-agent support
+        # This ensures nested agent calls don't pollute the parent's context
+        if agent_context is not None:
+            set_current_context(previous_context)
 
 
 async def stream_simulator_response(
@@ -716,6 +797,10 @@ async def stream_openai_response_with_save(
     agent_schema: str | None = None,
     session_id: str | None = None,
     user_id: str | None = None,
+    # Agent context for multi-agent propagation
+    agent_context: "AgentContext | None" = None,
+    # Pydantic-ai native message history for proper tool call/return pairing
+    message_history: list | None = None,
 ) -> AsyncGenerator[str, None]:
     """
     Wrapper around stream_openai_response that saves the assistant response after streaming.
@@ -731,6 +816,7 @@ async def stream_openai_response_with_save(
         agent_schema: Agent schema name
         session_id: Session ID for message storage
         user_id: User ID for message storage
+        agent_context: Agent context for multi-agent propagation (enables child agents)
 
     Yields:
         SSE-formatted strings
@@ -763,6 +849,8 @@ async def stream_openai_response_with_save(
         message_id=message_id,
         trace_context_out=trace_context,  # Pass container to capture trace IDs
         tool_calls_out=tool_calls,  # Capture tool calls for persistence
+        agent_context=agent_context,  # Pass context for multi-agent support
+        message_history=message_history,  # Native pydantic-ai message history
     ):
         yield chunk
 
@@ -841,7 +929,8 @@ async def stream_openai_response_with_save(
         # Update session description with session_name (non-blocking, after all yields)
         for tool_call in tool_calls:
             if tool_call and tool_call.get("tool_name") == "register_metadata" and tool_call.get("is_metadata"):
-                session_name = tool_call.get("arguments", {}).get("session_name")
+                arguments = tool_call.get("arguments") or {}
+                session_name = arguments.get("session_name")
                 if session_name:
                     try:
                         from ....models.entities import Session

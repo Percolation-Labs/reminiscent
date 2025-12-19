@@ -14,15 +14,14 @@ Design Pattern:
 - MCP paths always require authentication (protected service)
 
 Authentication Flow:
-1. If API key enabled: Validate X-API-Key header (access gate)
-2. Check JWT token for user identity (primary)
-3. Check dev token for testing (non-production only)
-4. Check session for user (backward compatibility)
-5. If allow_anonymous=True: Allow as anonymous (rate-limited)
-6. If allow_anonymous=False: Return 401 / redirect to login
+1. Check JWT/dev token/session for user identity first
+2. If user is admin: bypass API key check (admin privilege)
+3. If API key enabled and user is not admin: Validate X-API-Key header
+4. If allow_anonymous=True: Allow as anonymous (rate-limited)
+5. If allow_anonymous=False: Return 401 / redirect to login
 
 IMPORTANT: API key validates ACCESS, JWT identifies USER.
-Both can be required: API key for access + JWT for user identity.
+Admin users bypass the API key requirement (trusted identity).
 
 Access Modes (configured in settings.auth):
 - enabled=true, allow_anonymous=true: Auth available, anonymous gets rate-limited access
@@ -195,6 +194,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         return None
 
+    def _is_admin(self, user: dict | None) -> bool:
+        """Check if user has admin role."""
+        if not user:
+            return False
+        return "admin" in user.get("roles", [])
+
     async def dispatch(self, request: Request, call_next):
         """
         Check authentication for protected paths.
@@ -219,8 +224,35 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if not is_protected or is_excluded:
             return await call_next(request)
 
-        # API key validation (access control, not user identity)
-        # API key is a guardrail for access - JWT identifies the actual user
+        # Check for user identity FIRST (JWT, dev token, session)
+        # This allows admin users to bypass API key requirement
+        user = None
+
+        # Check for JWT token in Authorization header (primary user identity)
+        jwt_user = self._check_jwt_token(request)
+        if jwt_user:
+            user = jwt_user
+
+        # Check for dev token (non-production only)
+        if not user:
+            dev_user = self._check_dev_token(request)
+            if dev_user:
+                user = dev_user
+
+        # Check for valid session (backward compatibility)
+        if not user:
+            session_user = request.session.get("user")
+            if session_user:
+                user = session_user
+
+        # If user is admin, bypass API key check entirely
+        if self._is_admin(user):
+            logger.debug(f"Admin user {user.get('email')} bypassing API key check")
+            request.state.user = user
+            request.state.is_anonymous = False
+            return await call_next(request)
+
+        # API key validation for non-admin users (access control guardrail)
         if settings.api.api_key_enabled:
             api_key = request.headers.get("x-api-key")
             if not api_key:
@@ -238,27 +270,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     headers={"WWW-Authenticate": 'ApiKey realm="REM API"'},
                 )
             logger.debug("X-API-Key validated for access")
-            # API key valid - continue to check JWT for user identity
 
-        # Check for JWT token in Authorization header (primary user identity)
-        jwt_user = self._check_jwt_token(request)
-        if jwt_user:
-            request.state.user = jwt_user
-            request.state.is_anonymous = False
-            return await call_next(request)
-
-        # Check for dev token (non-production only)
-        dev_user = self._check_dev_token(request)
-        if dev_user:
-            request.state.user = dev_user
-            request.state.is_anonymous = False
-            return await call_next(request)
-
-        # Check for valid session (backward compatibility)
-        user = request.session.get("user")
-
+        # If we have a valid user (non-admin, but passed API key check), allow access
         if user:
-            # Authenticated user - add to request state
             request.state.user = user
             request.state.is_anonymous = False
             return await call_next(request)

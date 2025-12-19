@@ -322,7 +322,7 @@ def create_app() -> FastAPI:
 
     app.add_middleware(
         AuthMiddleware,
-        protected_paths=["/api/v1"],
+        protected_paths=["/api/v1", "/api/admin"],
         excluded_paths=["/api/auth", "/api/dev", "/api/v1/mcp/auth", "/api/v1/slack"],
         # Allow anonymous when auth is disabled, otherwise use setting
         allow_anonymous=(not settings.auth.enabled) or settings.auth.allow_anonymous,

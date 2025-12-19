@@ -217,11 +217,21 @@ class ContextBuilder:
                 )
 
                 # Convert to ContextMessage format
+                # For tool messages, wrap content with clear markers so the agent
+                # can see previous tool results when the prompt is concatenated
                 for msg_dict in session_history:
+                    role = msg_dict["role"]
+                    content = msg_dict["content"]
+
+                    if role == "tool":
+                        # Wrap tool results with clear markers for visibility
+                        tool_name = msg_dict.get("tool_name", "unknown")
+                        content = f"[TOOL RESULT: {tool_name}]\n{content}\n[/TOOL RESULT]"
+
                     messages.append(
                         ContextMessage(
-                            role=msg_dict["role"],
-                            content=msg_dict["content"],
+                            role=role,
+                            content=content,
                         )
                     )
 

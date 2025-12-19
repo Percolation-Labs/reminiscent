@@ -94,9 +94,9 @@ def generate_table_schema(
     # Always add id as primary key
     columns.append("id UUID PRIMARY KEY DEFAULT uuid_generate_v4()")
 
-    # Add tenant_id if tenant scoped
+    # Add tenant_id if tenant scoped (nullable - NULL means public/shared)
     if tenant_scoped:
-        columns.append("tenant_id VARCHAR(100) NOT NULL")
+        columns.append("tenant_id VARCHAR(100)")
         indexes.append(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_tenant ON {table_name} (tenant_id);")
 
     # Add user_id (owner field)
@@ -258,6 +258,7 @@ BEGIN
         RETURN OLD;
     ELSIF (TG_OP = 'INSERT' OR TG_OP = 'UPDATE') THEN
         -- Upsert to KV_STORE (O(1) lookup by entity_key)
+        -- tenant_id can be NULL (meaning public/shared data)
         INSERT INTO kv_store (
             entity_key,
             entity_type,
@@ -277,7 +278,7 @@ BEGIN
             COALESCE(NEW.graph_edges, '[]'::jsonb),
             CURRENT_TIMESTAMP
         )
-        ON CONFLICT (tenant_id, entity_key)
+        ON CONFLICT (COALESCE(tenant_id, ''), entity_key)
         DO UPDATE SET
             entity_id = EXCLUDED.entity_id,
             user_id = EXCLUDED.user_id,

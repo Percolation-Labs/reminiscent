@@ -206,9 +206,9 @@ def process_ingest(
                 if category:
                     entity_data["category"] = category
 
-                # Tenant scoping: user_id for private, "system" for shared/public
-                # user_id=None means PUBLIC data (visible to all users via rem_lookup)
-                entity_data["tenant_id"] = user_id or "system"
+                # Scoping: user_id for private data, None for public/shared
+                # tenant_id=None and user_id=None means PUBLIC data (visible to all)
+                entity_data["tenant_id"] = user_id  # None = public/shared
                 entity_data["user_id"] = user_id  # None = public/shared
 
                 # For ontologies, add URI

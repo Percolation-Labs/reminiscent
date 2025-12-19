@@ -121,17 +121,17 @@ CREATE UNLOGGED TABLE IF NOT EXISTS kv_store (
     entity_key VARCHAR(255) NOT NULL,
     entity_type VARCHAR(100) NOT NULL,
     entity_id UUID NOT NULL,
-    tenant_id VARCHAR(100) NOT NULL,
+    tenant_id VARCHAR(100),  -- NULL = public/shared data
     user_id VARCHAR(100),
     content_summary TEXT,
     metadata JSONB DEFAULT '{}',
     graph_edges JSONB DEFAULT '[]'::jsonb,  -- Cached edges for fast graph traversal
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-    -- Composite primary key: entity_key unique per tenant
-    PRIMARY KEY (tenant_id, entity_key)
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Unique constraint on (tenant_id, entity_key) using COALESCE to handle NULL tenant_id
+CREATE UNIQUE INDEX IF NOT EXISTS idx_kv_store_tenant_key ON kv_store (COALESCE(tenant_id, ''), entity_key);
 
 -- Index for user-scoped lookups (when user_id IS NOT NULL)
 CREATE INDEX IF NOT EXISTS idx_kv_store_user ON kv_store (tenant_id, user_id)
@@ -173,7 +173,7 @@ COMMENT ON COLUMN kv_store.entity_id IS
 'UUID from primary table for reverse lookup';
 
 COMMENT ON COLUMN kv_store.tenant_id IS
-'Tenant identifier for multi-tenancy isolation';
+'Tenant identifier for multi-tenancy isolation. NULL = public/shared data visible to all.';
 
 COMMENT ON COLUMN kv_store.user_id IS
 'Optional user scoping. NULL = system-level entity, visible to all users in tenant';

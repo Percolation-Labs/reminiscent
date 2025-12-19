@@ -503,15 +503,33 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
             logger.error(f"Failed to transcribe audio: {e}")
             # Fall through with original content (will likely fail at agent)
 
-    # Use ContextBuilder to construct complete message list with:
-    # 1. System context hint (date + user profile)
-    # 2. Session history (if session_id provided)
-    # 3. New messages from request body (transcribed if audio)
+    # Use ContextBuilder to construct context and basic messages
+    # Note: We load session history separately for proper pydantic-ai message_history
     context, messages = await ContextBuilder.build_from_headers(
         headers=dict(request.headers),
         new_messages=new_messages,
         user_id=temp_context.user_id,  # From JWT token (source of truth)
     )
+
+    # Load raw session history for proper pydantic-ai message_history format
+    # This enables proper tool call/return pairing for LLM API compatibility
+    from ....services.session import SessionMessageStore, session_to_pydantic_messages
+
+    pydantic_message_history = None
+    if context.session_id and settings.postgres.enabled:
+        try:
+            store = SessionMessageStore(user_id=context.user_id or settings.test.effective_user_id)
+            raw_session_history = await store.load_session_messages(
+                session_id=context.session_id,
+                user_id=context.user_id,
+                compress_on_load=False,  # Don't compress - we need full data for reconstruction
+            )
+            if raw_session_history:
+                pydantic_message_history = session_to_pydantic_messages(raw_session_history)
+                logger.debug(f"Converted {len(raw_session_history)} session messages to {len(pydantic_message_history)} pydantic-ai messages")
+        except Exception as e:
+            logger.warning(f"Failed to load session history for message_history: {e}")
+            # Fall back to old behavior (concatenated prompt)
 
     logger.info(f"Built context with {len(messages)} total messages (includes history + user context)")
 
@@ -533,9 +551,17 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
         model_override=body.model,  # type: ignore[arg-type]
     )
 
-    # Combine all messages into single prompt for agent
-    # ContextBuilder already assembled: system context + history + new messages
-    prompt = "\n".join(msg.content for msg in messages)
+    # Build the prompt for the agent
+    # If we have proper message_history, use just the latest user message as prompt
+    # Otherwise, fall back to concatenating all messages (legacy behavior)
+    if pydantic_message_history:
+        # Use the latest user message as the prompt, with history passed separately
+        user_prompt = body.messages[-1].content if body.messages else ""
+        prompt = user_prompt
+        logger.debug(f"Using message_history with {len(pydantic_message_history)} messages")
+    else:
+        # Legacy: Combine all messages into single prompt for agent
+        prompt = "\n".join(msg.content for msg in messages)
 
     # Generate OpenAI-compatible request ID
     request_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
@@ -570,6 +596,8 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
                 agent_schema=schema_name,
                 session_id=context.session_id,
                 user_id=context.user_id,
+                agent_context=context,  # Pass context for multi-agent support
+                message_history=pydantic_message_history,  # Native pydantic-ai message history
             ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
@@ -592,10 +620,16 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
         ) as span:
             # Capture trace context from the span we just created
             trace_id, span_id = get_current_trace_context()
-            result = await agent.run(prompt)
+            if pydantic_message_history:
+                result = await agent.run(prompt, message_history=pydantic_message_history)
+            else:
+                result = await agent.run(prompt)
     else:
         # No tracer available, run without tracing
-        result = await agent.run(prompt)
+        if pydantic_message_history:
+            result = await agent.run(prompt, message_history=pydantic_message_history)
+        else:
+            result = await agent.run(prompt)
 
     # Determine content format based on response_format request
     if body.response_format and body.response_format.type == "json_object":

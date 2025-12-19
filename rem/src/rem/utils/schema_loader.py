@@ -291,14 +291,14 @@ def load_agent_schema(
 
     # Check cache first (only for package resources, not custom paths)
     path = Path(schema_name_or_path)
-    is_custom_path = path.exists() or '/' in str(schema_name_or_path) or '\\' in str(schema_name_or_path)
+    is_custom_path = (path.exists() and path.is_file()) or '/' in str(schema_name_or_path) or '\\' in str(schema_name_or_path)
 
     if use_cache and not is_custom_path and cache_key in _fs_schema_cache:
         logger.debug(f"Loading schema from cache: {cache_key}")
         return _fs_schema_cache[cache_key]
 
-    # 1. Try exact path first (absolute or relative to cwd)
-    if path.exists():
+    # 1. Try exact path first (absolute or relative to cwd) - must be a file, not directory
+    if path.exists() and path.is_file():
         logger.debug(f"Loading schema from exact path: {path}")
         with open(path, "r") as f:
             schema = yaml.safe_load(f)
@@ -432,15 +432,15 @@ async def load_agent_schema_async(
     if cache_key.endswith('.yaml') or cache_key.endswith('.yml'):
         cache_key = cache_key.rsplit('.', 1)[0]
 
-    is_custom_path = path.exists() or '/' in str(schema_name_or_path) or '\\' in str(schema_name_or_path)
+    is_custom_path = (path.exists() and path.is_file()) or '/' in str(schema_name_or_path) or '\\' in str(schema_name_or_path)
 
     # Check cache
     if not is_custom_path and cache_key in _fs_schema_cache:
         logger.debug(f"Loading schema from cache: {cache_key}")
         return _fs_schema_cache[cache_key]
 
-    # Try exact path
-    if path.exists():
+    # Try exact path (must be a file, not directory)
+    if path.exists() and path.is_file():
         logger.debug(f"Loading schema from exact path: {path}")
         with open(path, "r") as f:
             schema = yaml.safe_load(f)

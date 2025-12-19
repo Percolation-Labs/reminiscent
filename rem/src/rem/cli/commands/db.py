@@ -469,8 +469,7 @@ async def _load_async(file_path: Path, table: str | None, user_id: str | None, d
             # Handle direct insert tables (non-CoreModel)
             if table_name in DIRECT_INSERT_TABLES:
                 for row_data in rows:
-                    if "tenant_id" not in row_data:
-                        row_data["tenant_id"] = "default"
+                    # tenant_id is optional - NULL means public/shared
 
                     if table_name == "shared_sessions":
                         await pg.fetch(
@@ -481,7 +480,7 @@ async def _load_async(file_path: Path, table: str | None, user_id: str | None, d
                             row_data["session_id"],
                             row_data["owner_user_id"],
                             row_data["shared_with_user_id"],
-                            row_data["tenant_id"],
+                            row_data.get("tenant_id"),  # Optional - NULL means public
                         )
                         total_loaded += 1
                         logger.success(f"Loaded shared_session: {row_data['owner_user_id']} -> {row_data['shared_with_user_id']}")
@@ -494,10 +493,8 @@ async def _load_async(file_path: Path, table: str | None, user_id: str | None, d
             model_class = MODEL_MAP[table_name]
 
             for row_idx, row_data in enumerate(rows):
-                # user_id stays NULL for public data (accessible by any user)
-                # Only set tenant_id for scoping - the --user-id flag controls tenant scope
-                if "tenant_id" not in row_data and user_id is not None:
-                    row_data["tenant_id"] = user_id
+                # tenant_id and user_id are optional - NULL means public/shared data
+                # Data files can explicitly set tenant_id/user_id if needed
 
                 # Convert graph_edges to InlineEdge format if present
                 if "graph_edges" in row_data:

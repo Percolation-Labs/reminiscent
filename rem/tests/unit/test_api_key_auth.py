@@ -131,3 +131,75 @@ class TestApiKeyAuth:
                 headers={"x-api-key": "test-secret-key"}
             )
             assert response.status_code == 200
+
+    def test_admin_user_bypasses_api_key(self, app_with_middleware):
+        """Admin users should bypass API key requirement."""
+        app, mock_settings = app_with_middleware
+        mock_settings.api.api_key_enabled = True
+        mock_settings.api.api_key = "test-secret-key"
+
+        # Mock JWT verification to return admin user
+        admin_user = {
+            "id": "admin-123",
+            "email": "admin@test.com",
+            "roles": ["admin"],
+        }
+
+        with patch("rem.auth.middleware.settings", mock_settings):
+            with patch("rem.auth.middleware.AuthMiddleware._check_jwt_token", return_value=admin_user):
+                client = TestClient(app)
+                # No API key header - should still pass for admin
+                response = client.get(
+                    "/api/v1/test",
+                    headers={"Authorization": "Bearer fake-jwt-token"}
+                )
+                assert response.status_code == 200
+
+    def test_non_admin_user_requires_api_key(self, app_with_middleware):
+        """Non-admin users should still require API key when enabled."""
+        app, mock_settings = app_with_middleware
+        mock_settings.api.api_key_enabled = True
+        mock_settings.api.api_key = "test-secret-key"
+
+        # Mock JWT verification to return regular user (not admin)
+        regular_user = {
+            "id": "user-123",
+            "email": "user@test.com",
+            "roles": ["user"],
+        }
+
+        with patch("rem.auth.middleware.settings", mock_settings):
+            with patch("rem.auth.middleware.AuthMiddleware._check_jwt_token", return_value=regular_user):
+                client = TestClient(app)
+                # No API key header - should fail for non-admin
+                response = client.get(
+                    "/api/v1/test",
+                    headers={"Authorization": "Bearer fake-jwt-token"}
+                )
+                assert response.status_code == 401
+                assert "API key required" in response.json()["detail"]
+
+    def test_non_admin_user_with_api_key_passes(self, app_with_middleware):
+        """Non-admin users with valid API key should pass."""
+        app, mock_settings = app_with_middleware
+        mock_settings.api.api_key_enabled = True
+        mock_settings.api.api_key = "test-secret-key"
+
+        # Mock JWT verification to return regular user
+        regular_user = {
+            "id": "user-123",
+            "email": "user@test.com",
+            "roles": ["user"],
+        }
+
+        with patch("rem.auth.middleware.settings", mock_settings):
+            with patch("rem.auth.middleware.AuthMiddleware._check_jwt_token", return_value=regular_user):
+                client = TestClient(app)
+                response = client.get(
+                    "/api/v1/test",
+                    headers={
+                        "Authorization": "Bearer fake-jwt-token",
+                        "X-API-Key": "test-secret-key"
+                    }
+                )
+                assert response.status_code == 200

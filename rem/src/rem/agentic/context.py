@@ -22,12 +22,79 @@ Key Design Pattern:
 - Enables session tracking across API, CLI, and test execution
 - Supports header-based configuration override (model, schema URI)
 - Clean separation: context (who/what) vs agent (how)
+
+Multi-Agent Context Propagation:
+- ContextVar (_current_agent_context) threads context through nested agent calls
+- Parent context is automatically available to child agents via get_current_context()
+- Use agent_context_scope() context manager for scoped context setting
+- Child agents inherit user_id, tenant_id, session_id, is_eval from parent
 """
+
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Generator
 
 from loguru import logger
 from pydantic import BaseModel, Field
 
 from ..settings import settings
+
+
+# Thread-local context for current agent execution
+# This enables context propagation through nested agent calls (multi-agent)
+_current_agent_context: ContextVar["AgentContext | None"] = ContextVar(
+    "current_agent_context", default=None
+)
+
+
+def get_current_context() -> "AgentContext | None":
+    """
+    Get the current agent context from context var.
+
+    Used by MCP tools (like ask_agent) to inherit context from parent agent.
+    Returns None if no context is set (e.g., direct CLI invocation without context).
+
+    Example:
+        # In an MCP tool
+        parent_context = get_current_context()
+        if parent_context:
+            # Inherit user_id, session_id, etc. from parent
+            child_context = parent_context.child_context(agent_schema_uri="child-agent")
+    """
+    return _current_agent_context.get()
+
+
+def set_current_context(ctx: "AgentContext | None") -> None:
+    """
+    Set the current agent context.
+
+    Called by streaming layer before agent execution.
+    Should be cleared (set to None) after execution completes.
+    """
+    _current_agent_context.set(ctx)
+
+
+@contextmanager
+def agent_context_scope(ctx: "AgentContext") -> Generator["AgentContext", None, None]:
+    """
+    Context manager for scoped context setting.
+
+    Automatically restores previous context when exiting scope.
+    Safe for nested agent calls - each level preserves its parent's context.
+
+    Example:
+        context = AgentContext(user_id="user-123")
+        with agent_context_scope(context):
+            # Context is available via get_current_context()
+            result = await agent.run(...)
+        # Previous context (or None) is restored
+    """
+    previous = _current_agent_context.get()
+    _current_agent_context.set(ctx)
+    try:
+        yield ctx
+    finally:
+        _current_agent_context.set(previous)
 
 
 class AgentContext(BaseModel):
@@ -84,6 +151,40 @@ class AgentContext(BaseModel):
     )
 
     model_config = {"populate_by_name": True}
+
+    def child_context(
+        self,
+        agent_schema_uri: str | None = None,
+        model_override: str | None = None,
+    ) -> "AgentContext":
+        """
+        Create a child context for nested agent calls.
+
+        Inherits user_id, tenant_id, session_id, is_eval from parent.
+        Allows overriding agent_schema_uri and default_model for the child.
+
+        Args:
+            agent_schema_uri: Agent schema for the child agent (required for lineage)
+            model_override: Optional model override for child agent
+
+        Returns:
+            New AgentContext for the child agent
+
+        Example:
+            parent_context = get_current_context()
+            child_context = parent_context.child_context(
+                agent_schema_uri="sentiment-analyzer"
+            )
+            agent = await create_agent(context=child_context)
+        """
+        return AgentContext(
+            user_id=self.user_id,
+            tenant_id=self.tenant_id,
+            session_id=self.session_id,
+            default_model=model_override or self.default_model,
+            agent_schema_uri=agent_schema_uri or self.agent_schema_uri,
+            is_eval=self.is_eval,
+        )
 
     @staticmethod
     def get_user_id_or_default(

@@ -1,7 +1,7 @@
 -- REM Model Schema (install_models.sql)
 -- Generated from Pydantic models
 -- Source: model registry
--- Generated at: 2025-12-11T09:19:38.236774
+-- Generated at: 2025-12-15T09:58:08.880060
 --
 -- DO NOT EDIT MANUALLY - Regenerate with: rem db schema generate
 --
@@ -36,7 +36,7 @@ END $$;
 
 CREATE TABLE IF NOT EXISTS feedbacks (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tenant_id VARCHAR(100) NOT NULL,
+    tenant_id VARCHAR(100),
     user_id VARCHAR(256),
     session_id VARCHAR(256) NOT NULL,
     message_id VARCHAR(256),
@@ -74,6 +74,7 @@ BEGIN
         RETURN OLD;
     ELSIF (TG_OP = 'INSERT' OR TG_OP = 'UPDATE') THEN
         -- Upsert to KV_STORE (O(1) lookup by entity_key)
+        -- tenant_id can be NULL (meaning public/shared data)
         INSERT INTO kv_store (
             entity_key,
             entity_type,
@@ -93,7 +94,7 @@ BEGIN
             COALESCE(NEW.graph_edges, '[]'::jsonb),
             CURRENT_TIMESTAMP
         )
-        ON CONFLICT (tenant_id, entity_key)
+        ON CONFLICT (COALESCE(tenant_id, ''), entity_key)
         DO UPDATE SET
             entity_id = EXCLUDED.entity_id,
             user_id = EXCLUDED.user_id,
@@ -118,7 +119,7 @@ FOR EACH ROW EXECUTE FUNCTION fn_feedbacks_kv_store_upsert();
 
 CREATE TABLE IF NOT EXISTS files (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tenant_id VARCHAR(100) NOT NULL,
+    tenant_id VARCHAR(100),
     user_id VARCHAR(256),
     name VARCHAR(256) NOT NULL,
     uri VARCHAR(256) NOT NULL,
@@ -179,6 +180,7 @@ BEGIN
         RETURN OLD;
     ELSIF (TG_OP = 'INSERT' OR TG_OP = 'UPDATE') THEN
         -- Upsert to KV_STORE (O(1) lookup by entity_key)
+        -- tenant_id can be NULL (meaning public/shared data)
         INSERT INTO kv_store (
             entity_key,
             entity_type,
@@ -198,7 +200,7 @@ BEGIN
             COALESCE(NEW.graph_edges, '[]'::jsonb),
             CURRENT_TIMESTAMP
         )
-        ON CONFLICT (tenant_id, entity_key)
+        ON CONFLICT (COALESCE(tenant_id, ''), entity_key)
         DO UPDATE SET
             entity_id = EXCLUDED.entity_id,
             user_id = EXCLUDED.user_id,
@@ -223,7 +225,7 @@ FOR EACH ROW EXECUTE FUNCTION fn_files_kv_store_upsert();
 
 CREATE TABLE IF NOT EXISTS image_resources (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tenant_id VARCHAR(100) NOT NULL,
+    tenant_id VARCHAR(100),
     user_id VARCHAR(256),
     name VARCHAR(256),
     uri VARCHAR(256),
@@ -292,6 +294,7 @@ BEGIN
         RETURN OLD;
     ELSIF (TG_OP = 'INSERT' OR TG_OP = 'UPDATE') THEN
         -- Upsert to KV_STORE (O(1) lookup by entity_key)
+        -- tenant_id can be NULL (meaning public/shared data)
         INSERT INTO kv_store (
             entity_key,
             entity_type,
@@ -311,7 +314,7 @@ BEGIN
             COALESCE(NEW.graph_edges, '[]'::jsonb),
             CURRENT_TIMESTAMP
         )
-        ON CONFLICT (tenant_id, entity_key)
+        ON CONFLICT (COALESCE(tenant_id, ''), entity_key)
         DO UPDATE SET
             entity_id = EXCLUDED.entity_id,
             user_id = EXCLUDED.user_id,
@@ -336,7 +339,7 @@ FOR EACH ROW EXECUTE FUNCTION fn_image_resources_kv_store_upsert();
 
 CREATE TABLE IF NOT EXISTS messages (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tenant_id VARCHAR(100) NOT NULL,
+    tenant_id VARCHAR(100),
     user_id VARCHAR(256),
     content TEXT NOT NULL,
     message_type VARCHAR(256),
@@ -398,6 +401,7 @@ BEGIN
         RETURN OLD;
     ELSIF (TG_OP = 'INSERT' OR TG_OP = 'UPDATE') THEN
         -- Upsert to KV_STORE (O(1) lookup by entity_key)
+        -- tenant_id can be NULL (meaning public/shared data)
         INSERT INTO kv_store (
             entity_key,
             entity_type,
@@ -417,7 +421,7 @@ BEGIN
             COALESCE(NEW.graph_edges, '[]'::jsonb),
             CURRENT_TIMESTAMP
         )
-        ON CONFLICT (tenant_id, entity_key)
+        ON CONFLICT (COALESCE(tenant_id, ''), entity_key)
         DO UPDATE SET
             entity_id = EXCLUDED.entity_id,
             user_id = EXCLUDED.user_id,
@@ -442,7 +446,7 @@ FOR EACH ROW EXECUTE FUNCTION fn_messages_kv_store_upsert();
 
 CREATE TABLE IF NOT EXISTS moments (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tenant_id VARCHAR(100) NOT NULL,
+    tenant_id VARCHAR(100),
     user_id VARCHAR(256),
     name VARCHAR(256),
     moment_type VARCHAR(256),
@@ -506,6 +510,7 @@ BEGIN
         RETURN OLD;
     ELSIF (TG_OP = 'INSERT' OR TG_OP = 'UPDATE') THEN
         -- Upsert to KV_STORE (O(1) lookup by entity_key)
+        -- tenant_id can be NULL (meaning public/shared data)
         INSERT INTO kv_store (
             entity_key,
             entity_type,
@@ -525,7 +530,7 @@ BEGIN
             COALESCE(NEW.graph_edges, '[]'::jsonb),
             CURRENT_TIMESTAMP
         )
-        ON CONFLICT (tenant_id, entity_key)
+        ON CONFLICT (COALESCE(tenant_id, ''), entity_key)
         DO UPDATE SET
             entity_id = EXCLUDED.entity_id,
             user_id = EXCLUDED.user_id,
@@ -550,7 +555,7 @@ FOR EACH ROW EXECUTE FUNCTION fn_moments_kv_store_upsert();
 
 CREATE TABLE IF NOT EXISTS ontologies (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tenant_id VARCHAR(100) NOT NULL,
+    tenant_id VARCHAR(100),
     user_id VARCHAR(256),
     name VARCHAR(256) NOT NULL,
     uri VARCHAR(256),
@@ -614,6 +619,7 @@ BEGIN
         RETURN OLD;
     ELSIF (TG_OP = 'INSERT' OR TG_OP = 'UPDATE') THEN
         -- Upsert to KV_STORE (O(1) lookup by entity_key)
+        -- tenant_id can be NULL (meaning public/shared data)
         INSERT INTO kv_store (
             entity_key,
             entity_type,
@@ -633,7 +639,7 @@ BEGIN
             COALESCE(NEW.graph_edges, '[]'::jsonb),
             CURRENT_TIMESTAMP
         )
-        ON CONFLICT (tenant_id, entity_key)
+        ON CONFLICT (COALESCE(tenant_id, ''), entity_key)
         DO UPDATE SET
             entity_id = EXCLUDED.entity_id,
             user_id = EXCLUDED.user_id,
@@ -658,7 +664,7 @@ FOR EACH ROW EXECUTE FUNCTION fn_ontologies_kv_store_upsert();
 
 CREATE TABLE IF NOT EXISTS ontology_configs (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tenant_id VARCHAR(100) NOT NULL,
+    tenant_id VARCHAR(100),
     user_id VARCHAR(256),
     name VARCHAR(256) NOT NULL,
     agent_schema_id VARCHAR(256) NOT NULL,
@@ -722,6 +728,7 @@ BEGIN
         RETURN OLD;
     ELSIF (TG_OP = 'INSERT' OR TG_OP = 'UPDATE') THEN
         -- Upsert to KV_STORE (O(1) lookup by entity_key)
+        -- tenant_id can be NULL (meaning public/shared data)
         INSERT INTO kv_store (
             entity_key,
             entity_type,
@@ -741,7 +748,7 @@ BEGIN
             COALESCE(NEW.graph_edges, '[]'::jsonb),
             CURRENT_TIMESTAMP
         )
-        ON CONFLICT (tenant_id, entity_key)
+        ON CONFLICT (COALESCE(tenant_id, ''), entity_key)
         DO UPDATE SET
             entity_id = EXCLUDED.entity_id,
             user_id = EXCLUDED.user_id,
@@ -766,7 +773,7 @@ FOR EACH ROW EXECUTE FUNCTION fn_ontology_configs_kv_store_upsert();
 
 CREATE TABLE IF NOT EXISTS resources (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tenant_id VARCHAR(100) NOT NULL,
+    tenant_id VARCHAR(100),
     user_id VARCHAR(256),
     name VARCHAR(256),
     uri VARCHAR(256),
@@ -827,6 +834,7 @@ BEGIN
         RETURN OLD;
     ELSIF (TG_OP = 'INSERT' OR TG_OP = 'UPDATE') THEN
         -- Upsert to KV_STORE (O(1) lookup by entity_key)
+        -- tenant_id can be NULL (meaning public/shared data)
         INSERT INTO kv_store (
             entity_key,
             entity_type,
@@ -846,7 +854,7 @@ BEGIN
             COALESCE(NEW.graph_edges, '[]'::jsonb),
             CURRENT_TIMESTAMP
         )
-        ON CONFLICT (tenant_id, entity_key)
+        ON CONFLICT (COALESCE(tenant_id, ''), entity_key)
         DO UPDATE SET
             entity_id = EXCLUDED.entity_id,
             user_id = EXCLUDED.user_id,
@@ -871,7 +879,7 @@ FOR EACH ROW EXECUTE FUNCTION fn_resources_kv_store_upsert();
 
 CREATE TABLE IF NOT EXISTS schemas (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tenant_id VARCHAR(100) NOT NULL,
+    tenant_id VARCHAR(100),
     user_id VARCHAR(256),
     name VARCHAR(256) NOT NULL,
     content TEXT,
@@ -931,6 +939,7 @@ BEGIN
         RETURN OLD;
     ELSIF (TG_OP = 'INSERT' OR TG_OP = 'UPDATE') THEN
         -- Upsert to KV_STORE (O(1) lookup by entity_key)
+        -- tenant_id can be NULL (meaning public/shared data)
         INSERT INTO kv_store (
             entity_key,
             entity_type,
@@ -950,7 +959,7 @@ BEGIN
             COALESCE(NEW.graph_edges, '[]'::jsonb),
             CURRENT_TIMESTAMP
         )
-        ON CONFLICT (tenant_id, entity_key)
+        ON CONFLICT (COALESCE(tenant_id, ''), entity_key)
         DO UPDATE SET
             entity_id = EXCLUDED.entity_id,
             user_id = EXCLUDED.user_id,
@@ -975,7 +984,7 @@ FOR EACH ROW EXECUTE FUNCTION fn_schemas_kv_store_upsert();
 
 CREATE TABLE IF NOT EXISTS sessions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tenant_id VARCHAR(100) NOT NULL,
+    tenant_id VARCHAR(100),
     user_id VARCHAR(256),
     name VARCHAR(256) NOT NULL,
     mode TEXT,
@@ -1038,6 +1047,7 @@ BEGIN
         RETURN OLD;
     ELSIF (TG_OP = 'INSERT' OR TG_OP = 'UPDATE') THEN
         -- Upsert to KV_STORE (O(1) lookup by entity_key)
+        -- tenant_id can be NULL (meaning public/shared data)
         INSERT INTO kv_store (
             entity_key,
             entity_type,
@@ -1057,7 +1067,7 @@ BEGIN
             COALESCE(NEW.graph_edges, '[]'::jsonb),
             CURRENT_TIMESTAMP
         )
-        ON CONFLICT (tenant_id, entity_key)
+        ON CONFLICT (COALESCE(tenant_id, ''), entity_key)
         DO UPDATE SET
             entity_id = EXCLUDED.entity_id,
             user_id = EXCLUDED.user_id,
@@ -1082,7 +1092,7 @@ FOR EACH ROW EXECUTE FUNCTION fn_sessions_kv_store_upsert();
 
 CREATE TABLE IF NOT EXISTS shared_sessions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tenant_id VARCHAR(100) NOT NULL,
+    tenant_id VARCHAR(100),
     user_id VARCHAR(256),
     session_id VARCHAR(256) NOT NULL,
     owner_user_id VARCHAR(256) NOT NULL,
@@ -1113,6 +1123,7 @@ BEGIN
         RETURN OLD;
     ELSIF (TG_OP = 'INSERT' OR TG_OP = 'UPDATE') THEN
         -- Upsert to KV_STORE (O(1) lookup by entity_key)
+        -- tenant_id can be NULL (meaning public/shared data)
         INSERT INTO kv_store (
             entity_key,
             entity_type,
@@ -1132,7 +1143,7 @@ BEGIN
             COALESCE(NEW.graph_edges, '[]'::jsonb),
             CURRENT_TIMESTAMP
         )
-        ON CONFLICT (tenant_id, entity_key)
+        ON CONFLICT (COALESCE(tenant_id, ''), entity_key)
         DO UPDATE SET
             entity_id = EXCLUDED.entity_id,
             user_id = EXCLUDED.user_id,
@@ -1157,7 +1168,7 @@ FOR EACH ROW EXECUTE FUNCTION fn_shared_sessions_kv_store_upsert();
 
 CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tenant_id VARCHAR(100) NOT NULL,
+    tenant_id VARCHAR(100),
     user_id VARCHAR(256),
     name VARCHAR(256) NOT NULL,
     email VARCHAR(256),
@@ -1222,6 +1233,7 @@ BEGIN
         RETURN OLD;
     ELSIF (TG_OP = 'INSERT' OR TG_OP = 'UPDATE') THEN
         -- Upsert to KV_STORE (O(1) lookup by entity_key)
+        -- tenant_id can be NULL (meaning public/shared data)
         INSERT INTO kv_store (
             entity_key,
             entity_type,
@@ -1241,7 +1253,7 @@ BEGIN
             COALESCE(NEW.graph_edges, '[]'::jsonb),
             CURRENT_TIMESTAMP
         )
-        ON CONFLICT (tenant_id, entity_key)
+        ON CONFLICT (COALESCE(tenant_id, ''), entity_key)
         DO UPDATE SET
             entity_id = EXCLUDED.entity_id,
             user_id = EXCLUDED.user_id,

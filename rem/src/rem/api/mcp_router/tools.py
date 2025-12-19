@@ -20,6 +20,7 @@ Available Tools:
 - get_schema: Get detailed schema for a table (columns, types, indexes)
 """
 
+import json
 from functools import wraps
 from typing import Any, Callable, Literal, cast
 
@@ -400,20 +401,45 @@ async def ask_rem_agent(
             query="Show me Sarah's reporting chain and their recent projects"
         )
     """
-    # Get user_id from context if not provided
-    # TODO: Extract from authenticated session context when auth is enabled
-    user_id = AgentContext.get_user_id_or_default(user_id, source="ask_rem_agent")
-
     from ...agentic import create_agent
+    from ...agentic.context import get_current_context
     from ...utils.schema_loader import load_agent_schema
 
-    # Create agent context
-    # Note: tenant_id defaults to "default" if user_id is None
-    context = AgentContext(
-        user_id=user_id,
-        tenant_id=user_id or "default",  # Use default tenant for anonymous users
-        default_model=settings.llm.default_model,
-    )
+    # Get parent context for multi-agent support
+    # This enables context propagation from parent agent to child agent
+    parent_context = get_current_context()
+
+    # Build child context: inherit from parent if available, otherwise use defaults
+    if parent_context is not None:
+        # Inherit user_id, tenant_id, session_id, is_eval from parent
+        # Allow explicit user_id override if provided
+        effective_user_id = user_id or parent_context.user_id
+        context = parent_context.child_context(agent_schema_uri=agent_schema)
+        if user_id is not None:
+            # Override user_id if explicitly provided
+            context = AgentContext(
+                user_id=user_id,
+                tenant_id=parent_context.tenant_id,
+                session_id=parent_context.session_id,
+                default_model=parent_context.default_model,
+                agent_schema_uri=agent_schema,
+                is_eval=parent_context.is_eval,
+            )
+        logger.debug(
+            f"ask_rem_agent inheriting context from parent: "
+            f"user_id={context.user_id}, session_id={context.session_id}"
+        )
+    else:
+        # No parent context - create fresh context (backwards compatible)
+        effective_user_id = AgentContext.get_user_id_or_default(
+            user_id, source="ask_rem_agent"
+        )
+        context = AgentContext(
+            user_id=effective_user_id,
+            tenant_id=effective_user_id or "default",
+            default_model=settings.llm.default_model,
+            agent_schema_uri=agent_schema,
+        )
 
     # Load agent schema
     try:
@@ -645,6 +671,8 @@ async def register_metadata(
     recommended_action: str | None = None,
     # Generic extension - any additional key-value pairs
     extra: dict[str, Any] | None = None,
+    # Agent schema (auto-populated from context if not provided)
+    agent_schema: str | None = None,
 ) -> dict[str, Any]:
     """
     Register response metadata to be emitted as an SSE MetadataEvent.
@@ -685,6 +713,8 @@ async def register_metadata(
         extra: Dict of arbitrary additional metadata. Use this for any
             domain-specific fields not covered by the standard parameters.
             Example: {"topics_detected": ["anxiety", "sleep"], "session_count": 5}
+        agent_schema: Optional agent schema name. If not provided, automatically
+            populated from the current agent context (for multi-agent tracing).
 
     Returns:
         Dict with:
@@ -728,10 +758,17 @@ async def register_metadata(
             }
         )
     """
+    # Auto-populate agent_schema from context if not provided
+    if agent_schema is None:
+        from ...agentic.context import get_current_context
+        current_context = get_current_context()
+        if current_context and current_context.agent_schema_uri:
+            agent_schema = current_context.agent_schema_uri
+
     logger.debug(
         f"Registering metadata: confidence={confidence}, "
         f"risk_level={risk_level}, refs={len(references or [])}, "
-        f"sources={len(sources or [])}"
+        f"sources={len(sources or [])}, agent_schema={agent_schema}"
     )
 
     result = {
@@ -741,6 +778,7 @@ async def register_metadata(
         "references": references,
         "sources": sources,
         "flags": flags,
+        "agent_schema": agent_schema,  # Include agent schema for tracing
     }
 
     # Add session name if provided
@@ -1160,6 +1198,180 @@ async def save_agent(
         result["message"] = f"Agent '{name}' saved. Use `/custom-agent {name}` to chat with it."
 
     return result
+
+
+# =============================================================================
+# Multi-Agent Tools
+# =============================================================================
+
+
+@mcp_tool_error_handler
+async def ask_agent(
+    agent_name: str,
+    input_text: str,
+    input_data: dict[str, Any] | None = None,
+    user_id: str | None = None,
+    timeout_seconds: int = 300,
+) -> dict[str, Any]:
+    """
+    Invoke another agent by name and return its response.
+
+    This tool enables multi-agent orchestration by allowing one agent to call
+    another. The child agent inherits the parent's context (user_id, session_id,
+    tenant_id, is_eval) for proper scoping and continuity.
+
+    Use Cases:
+    - Orchestrator agents that delegate to specialized sub-agents
+    - Workflow agents that chain multiple processing steps
+    - Ensemble agents that aggregate responses from multiple specialists
+
+    Args:
+        agent_name: Name of the agent to invoke. Can be:
+            - A user-created agent (saved via save_agent)
+            - A system agent (e.g., "ask_rem", "knowledge-query")
+        input_text: The user message/query to send to the agent
+        input_data: Optional structured input data for the agent
+        user_id: Optional user override (defaults to parent's user_id)
+        timeout_seconds: Maximum execution time (default: 300s)
+
+    Returns:
+        Dict with:
+        - status: "success" or "error"
+        - output: Agent's structured output (if using output schema)
+        - text_response: Agent's text response
+        - agent_schema: Name of the invoked agent
+        - metadata: Any metadata registered by the agent (confidence, etc.)
+
+    Examples:
+        # Simple delegation
+        ask_agent(
+            agent_name="sentiment-analyzer",
+            input_text="I love this product! Best purchase ever."
+        )
+        # Returns: {"status": "success", "output": {"sentiment": "positive"}, ...}
+
+        # Orchestrator pattern
+        ask_agent(
+            agent_name="knowledge-query",
+            input_text="What are the latest Q3 results?"
+        )
+
+        # Chain with structured input
+        ask_agent(
+            agent_name="summarizer",
+            input_text="Summarize this document",
+            input_data={"document_id": "doc-123", "max_length": 500}
+        )
+    """
+    import asyncio
+    from ...agentic import create_agent
+    from ...agentic.context import get_current_context, agent_context_scope
+    from ...agentic.agents.agent_manager import get_agent
+    from ...utils.schema_loader import load_agent_schema
+
+    # Get parent context for inheritance
+    parent_context = get_current_context()
+
+    # Determine effective user_id
+    if parent_context is not None:
+        effective_user_id = user_id or parent_context.user_id
+    else:
+        effective_user_id = AgentContext.get_user_id_or_default(
+            user_id, source="ask_agent"
+        )
+
+    # Build child context
+    if parent_context is not None:
+        child_context = parent_context.child_context(agent_schema_uri=agent_name)
+        if user_id is not None:
+            # Explicit user_id override
+            child_context = AgentContext(
+                user_id=user_id,
+                tenant_id=parent_context.tenant_id,
+                session_id=parent_context.session_id,
+                default_model=parent_context.default_model,
+                agent_schema_uri=agent_name,
+                is_eval=parent_context.is_eval,
+            )
+        logger.debug(
+            f"ask_agent '{agent_name}' inheriting context: "
+            f"user_id={child_context.user_id}, session_id={child_context.session_id}"
+        )
+    else:
+        child_context = AgentContext(
+            user_id=effective_user_id,
+            tenant_id=effective_user_id or "default",
+            default_model=settings.llm.default_model,
+            agent_schema_uri=agent_name,
+        )
+
+    # Try to load agent schema from:
+    # 1. Database (user-created or system agents)
+    # 2. File system (packaged agents)
+    schema = None
+
+    # Try database first
+    if effective_user_id:
+        schema = await get_agent(agent_name, user_id=effective_user_id)
+        if schema:
+            logger.debug(f"Loaded agent '{agent_name}' from database")
+
+    # Fall back to file system
+    if schema is None:
+        try:
+            schema = load_agent_schema(agent_name)
+            logger.debug(f"Loaded agent '{agent_name}' from file system")
+        except FileNotFoundError:
+            pass
+
+    if schema is None:
+        return {
+            "status": "error",
+            "error": f"Agent not found: {agent_name}",
+            "hint": "Use list_agents to see available agents, or save_agent to create one",
+        }
+
+    # Create agent runtime
+    agent_runtime = await create_agent(
+        context=child_context,
+        agent_schema_override=schema,
+    )
+
+    # Build prompt with optional input_data
+    prompt = input_text
+    if input_data:
+        prompt = f"{input_text}\n\nInput data: {json.dumps(input_data)}"
+
+    # Run agent with timeout and context propagation
+    logger.info(f"Invoking agent '{agent_name}' with prompt: {prompt[:100]}...")
+
+    try:
+        # Set child context for nested tool calls
+        with agent_context_scope(child_context):
+            result = await asyncio.wait_for(
+                agent_runtime.run(prompt),
+                timeout=timeout_seconds
+            )
+    except asyncio.TimeoutError:
+        return {
+            "status": "error",
+            "error": f"Agent '{agent_name}' timed out after {timeout_seconds}s",
+            "agent_schema": agent_name,
+        }
+
+    # Serialize output
+    from rem.agentic.serialization import serialize_agent_result
+    output = serialize_agent_result(result.output)
+
+    logger.info(f"Agent '{agent_name}' completed successfully")
+
+    return {
+        "status": "success",
+        "output": output,
+        "text_response": str(result.output),
+        "agent_schema": agent_name,
+        "input_text": input_text,
+    }
 
 
 # =============================================================================
