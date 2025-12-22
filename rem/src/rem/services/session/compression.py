@@ -65,7 +65,7 @@ def truncate_key(key: str, max_length: int = MAX_ENTITY_KEY_LENGTH) -> str:
     logger.warning(f"Truncated key from {len(key)} to {len(truncated)} chars: {key[:50]}...")
     return truncated
 
-from rem.models.entities import Message
+from rem.models.entities import Message, Session
 from rem.services.postgres import PostgresService, Repository
 from rem.settings import settings
 
@@ -177,6 +177,41 @@ class SessionMessageStore:
         self.user_id = user_id
         self.compressor = compressor or MessageCompressor()
         self.repo = Repository(Message)
+        self._session_repo = Repository(Session, table_name="sessions")
+
+    async def _ensure_session_exists(
+        self,
+        session_id: str,
+        user_id: str | None = None,
+    ) -> None:
+        """
+        Ensure session exists, creating it if necessary.
+
+        Args:
+            session_id: Session identifier (maps to Session.name)
+            user_id: Optional user identifier
+        """
+        try:
+            # Check if session already exists by name
+            existing = await self._session_repo.find(
+                filters={"name": session_id},
+                limit=1,
+            )
+            if existing:
+                return  # Session already exists
+
+            # Create new session
+            session = Session(
+                name=session_id,
+                user_id=user_id or self.user_id,
+                tenant_id=self.user_id,  # tenant_id set to user_id for scoping
+            )
+            await self._session_repo.upsert(session)
+            logger.info(f"Created session {session_id} for user {user_id or self.user_id}")
+
+        except Exception as e:
+            # Log but don't fail - session creation is best-effort
+            logger.warning(f"Failed to ensure session exists: {e}")
 
     async def store_message(
         self,
@@ -283,8 +318,10 @@ class SessionMessageStore:
         """
         Store all session messages and return compressed versions.
 
+        Ensures session exists before storing messages.
+
         Args:
-            session_id: Session identifier
+            session_id: Session identifier (maps to Session.name)
             messages: List of messages to store
             user_id: Optional user identifier
             compress: Whether to compress messages (default: True)
@@ -295,6 +332,9 @@ class SessionMessageStore:
         if not settings.postgres.enabled:
             logger.debug("Postgres disabled, returning messages uncompressed")
             return messages
+
+        # Ensure session exists before storing messages
+        await self._ensure_session_exists(session_id, user_id)
 
         compressed_messages = []
 

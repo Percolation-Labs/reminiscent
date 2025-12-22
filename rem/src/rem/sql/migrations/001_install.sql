@@ -817,6 +817,97 @@ COMMENT ON FUNCTION fn_get_shared_messages IS
 'Get messages from sessions shared by a specific user with the recipient.';
 
 -- ============================================================================
+-- SESSIONS WITH USER INFO
+-- ============================================================================
+-- Function to list sessions with user details (name, email) for admin views
+
+-- List sessions with user info, CTE pagination
+-- Note: messages.session_id stores the session name (not UUID), so we join on sessions.name
+CREATE OR REPLACE FUNCTION fn_list_sessions_with_user(
+    p_user_id VARCHAR(256) DEFAULT NULL,  -- Filter by user_id (NULL = all users, admin only)
+    p_user_name VARCHAR(256) DEFAULT NULL,  -- Filter by user name (partial match, admin only)
+    p_user_email VARCHAR(256) DEFAULT NULL,  -- Filter by user email (partial match, admin only)
+    p_mode VARCHAR(50) DEFAULT NULL,  -- Filter by session mode
+    p_page INTEGER DEFAULT 1,
+    p_page_size INTEGER DEFAULT 50
+)
+RETURNS TABLE(
+    id UUID,
+    name VARCHAR(256),
+    mode TEXT,
+    description TEXT,
+    user_id VARCHAR(256),
+    user_name VARCHAR(256),
+    user_email VARCHAR(256),
+    message_count INTEGER,
+    total_tokens INTEGER,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP,
+    metadata JSONB,
+    total_count BIGINT
+) AS $$
+BEGIN
+    RETURN QUERY
+    WITH session_msg_counts AS (
+        -- Count messages per session (joining on session name since messages.session_id = sessions.name)
+        SELECT
+            m.session_id as session_name,
+            COUNT(*)::INTEGER as actual_message_count
+        FROM messages m
+        GROUP BY m.session_id
+    ),
+    filtered_sessions AS (
+        SELECT
+            s.id,
+            s.name,
+            s.mode,
+            s.description,
+            s.user_id,
+            COALESCE(u.name, s.user_id)::VARCHAR(256) AS user_name,
+            u.email::VARCHAR(256) AS user_email,
+            COALESCE(mc.actual_message_count, 0) AS message_count,
+            s.total_tokens,
+            s.created_at,
+            s.updated_at,
+            s.metadata
+        FROM sessions s
+        LEFT JOIN users u ON u.id::text = s.user_id
+        LEFT JOIN session_msg_counts mc ON mc.session_name = s.name
+        WHERE s.deleted_at IS NULL
+          AND (p_user_id IS NULL OR s.user_id = p_user_id)
+          AND (p_user_name IS NULL OR u.name ILIKE '%' || p_user_name || '%')
+          AND (p_user_email IS NULL OR u.email ILIKE '%' || p_user_email || '%')
+          AND (p_mode IS NULL OR s.mode = p_mode)
+    ),
+    counted AS (
+        SELECT *, COUNT(*) OVER () AS total_count
+        FROM filtered_sessions
+    )
+    SELECT
+        c.id,
+        c.name,
+        c.mode,
+        c.description,
+        c.user_id,
+        c.user_name,
+        c.user_email,
+        c.message_count,
+        c.total_tokens,
+        c.created_at,
+        c.updated_at,
+        c.metadata,
+        c.total_count
+    FROM counted c
+    ORDER BY c.created_at DESC
+    LIMIT p_page_size
+    OFFSET (p_page - 1) * p_page_size;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+COMMENT ON FUNCTION fn_list_sessions_with_user IS
+'List sessions with user details and computed message counts. Joins messages on session name.';
+
+-- ============================================================================
 -- RECORD INSTALLATION
 -- ============================================================================
 

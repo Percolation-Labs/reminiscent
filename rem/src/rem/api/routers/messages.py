@@ -93,6 +93,23 @@ class SessionListResponse(BaseModel):
     has_more: bool
 
 
+class SessionWithUser(BaseModel):
+    """Session with user info for admin views."""
+
+    id: str
+    name: str
+    mode: str | None = None
+    description: str | None = None
+    user_id: str | None = None
+    user_name: str | None = None
+    user_email: str | None = None
+    message_count: int = 0
+    total_tokens: int | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    metadata: dict | None = None
+
+
 class PaginationMetadata(BaseModel):
     """Pagination metadata for paginated responses."""
 
@@ -108,7 +125,7 @@ class SessionsQueryResponse(BaseModel):
     """Response for paginated sessions query."""
 
     object: Literal["list"] = "list"
-    data: list[Session] = Field(description="List of sessions for the current page")
+    data: list[SessionWithUser] = Field(description="List of sessions for the current page")
     metadata: PaginationMetadata = Field(description="Pagination metadata")
 
 
@@ -274,6 +291,8 @@ async def get_message(
 async def list_sessions(
     request: Request,
     user_id: str | None = Query(default=None, description="Filter by user ID (admin only for cross-user)"),
+    user_name: str | None = Query(default=None, description="Filter by user name (partial match, admin only)"),
+    user_email: str | None = Query(default=None, description="Filter by user email (partial match, admin only)"),
     mode: SessionMode | None = Query(default=None, description="Filter by session mode"),
     page: int = Query(default=1, ge=1, description="Page number (1-indexed)"),
     page_size: int = Query(default=50, ge=1, le=100, description="Number of results per page"),
@@ -283,46 +302,100 @@ async def list_sessions(
 
     Access Control:
     - Regular users: Only see their own sessions
-    - Admin users: Can filter by any user_id or see all sessions
+    - Admin users: Can filter by any user_id, user_name, user_email, or see all sessions
 
     Filters:
     - user_id: Filter by session owner (admin only for cross-user)
+    - user_name: Filter by user name partial match (admin only)
+    - user_email: Filter by user email partial match (admin only)
     - mode: Filter by session mode (normal or evaluation)
 
     Pagination:
     - page: Page number (1-indexed, default: 1)
     - page_size: Number of sessions per page (default: 50, max: 100)
 
-    Returns paginated results ordered by created_at descending with pagination metadata.
+    Returns paginated results with user info ordered by created_at descending.
     """
     if not settings.postgres.enabled:
         raise HTTPException(status_code=503, detail="Database not enabled")
 
-    repo = Repository(Session, table_name="sessions")
+    current_user = get_current_user(request)
+    admin = is_admin(current_user)
 
-    # Build user-scoped filters (admin can see all, regular users see only their own)
-    filters = await get_user_filter(request, x_user_id=user_id)
-    if mode:
-        filters["mode"] = mode.value
+    # Get postgres service for raw SQL query
+    db = get_postgres_service()
+    if not db:
+        raise HTTPException(status_code=503, detail="Database connection failed")
+    if not db.pool:
+        await db.connect()
 
-    # Use CTE-based pagination with ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at DESC)
-    result = await repo.find_paginated(
-        filters,
-        page=page,
-        page_size=page_size,
-        order_by="created_at DESC",
-        partition_by="user_id",
-    )
+    # Build effective filters based on user role
+    effective_user_id = user_id
+    effective_user_name = user_name if admin else None  # Only admin can search by name
+    effective_user_email = user_email if admin else None  # Only admin can search by email
+
+    if not admin:
+        # Non-admin users can only see their own sessions
+        effective_user_id = current_user.get("id") if current_user else None
+        if not effective_user_id:
+            # Anonymous user - return empty
+            return SessionsQueryResponse(
+                data=[],
+                metadata=PaginationMetadata(
+                    total=0, page=page, page_size=page_size,
+                    total_pages=0, has_next=False, has_previous=False,
+                ),
+            )
+
+    # Call the SQL function for sessions with user info
+    async with db.pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT * FROM fn_list_sessions_with_user(
+                $1, $2, $3, $4, $5, $6
+            )
+            """,
+            effective_user_id,
+            effective_user_name,
+            effective_user_email,
+            mode.value if mode else None,
+            page,
+            page_size,
+        )
+
+    # Extract total from first row
+    total = rows[0]["total_count"] if rows else 0
+
+    # Convert rows to SessionWithUser
+    data = [
+        SessionWithUser(
+            id=str(row["id"]),
+            name=row["name"],
+            mode=row["mode"],
+            description=row["description"],
+            user_id=row["user_id"],
+            user_name=row["user_name"],
+            user_email=row["user_email"],
+            message_count=row["message_count"] or 0,
+            total_tokens=row["total_tokens"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            metadata=row["metadata"],
+        )
+        for row in rows
+    ]
+
+    total_pages = (total + page_size - 1) // page_size if total > 0 else 0
 
     return SessionsQueryResponse(
-        data=result["data"],
+        data=data,
         metadata=PaginationMetadata(
-            total=result["total"],
-            page=result["page"],
-            page_size=result["page_size"],
-            total_pages=result["total_pages"],
-            has_next=result["has_next"],
-            has_previous=result["has_previous"],
+            total=total,
+            page=page,
+            page_size=page_size,
+            total_pages=total_pages,
+            has_next=page < total_pages,
+            has_previous=page > 1,
         ),
     )
 
