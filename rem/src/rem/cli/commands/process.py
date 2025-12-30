@@ -206,9 +206,9 @@ def process_ingest(
                 if category:
                     entity_data["category"] = category
 
-                # Scoping: user_id for private data, None for public/shared
-                # tenant_id=None and user_id=None means PUBLIC data (visible to all)
-                entity_data["tenant_id"] = user_id  # None = public/shared
+                # Scoping: user_id for private data, "public" for shared
+                # tenant_id="public" is the default for shared knowledge bases
+                entity_data["tenant_id"] = user_id or "public"
                 entity_data["user_id"] = user_id  # None = public/shared
 
                 # For ontologies, add URI
