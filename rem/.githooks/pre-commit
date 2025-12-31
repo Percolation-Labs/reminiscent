@@ -1,0 +1,25 @@
+#!/bin/bash
+#
+# Pre-commit hook for remstack/rem
+#
+# Runs unit tests before commit
+#
+
+set -e
+
+echo "=== Pre-commit: Running unit tests ==="
+
+# Check if REM package has changes
+if git diff --cached --name-only | grep -q "^src/rem/"; then
+    echo ""
+    echo ">>> REM package changes detected - running pytest..."
+    uv run pytest tests/unit/ -v -m "not llm"
+
+    echo ""
+    echo "✓ Unit tests passed"
+else
+    echo "No REM package changes, skipping unit tests"
+fi
+
+echo ""
+echo "=== Pre-commit: OK ==="

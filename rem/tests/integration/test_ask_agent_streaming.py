@@ -8,12 +8,9 @@ Tests that when an orchestrator agent delegates to a child via ask_agent:
 
 NO MOCKING - uses real agents and real database.
 
-NOTE: Due to async resource isolation issues, run tests individually:
+Run with:
     POSTGRES__CONNECTION_STRING="postgresql://rem:rem@localhost:5050/rem" \
-    uv run pytest tests/integration/test_ask_agent_streaming.py::TestAskAgentStreaming::test_ask_agent_streams_and_saves -v -s
-
-    POSTGRES__CONNECTION_STRING="postgresql://rem:rem@localhost:5050/rem" \
-    uv run pytest tests/integration/test_ask_agent_streaming.py::TestAskAgentStreaming::test_multi_turn_saves_all_assistant_messages -v -s
+    uv run pytest tests/integration/test_ask_agent_streaming.py -v -s
 """
 
 import asyncio
@@ -21,6 +18,13 @@ import json
 import uuid
 import pytest
 from pathlib import Path
+
+# Mark these tests as requiring LLM calls - they can be skipped in pre-push hooks
+# Also mark them as needing isolation due to nested async resource management
+pytestmark = [
+    pytest.mark.llm,  # Requires real LLM API calls
+    pytest.mark.asyncio,  # Uses async/await
+]
 
 from rem.agentic.context import AgentContext
 from rem.agentic.providers.pydantic_ai import create_agent
