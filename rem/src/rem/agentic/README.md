@@ -716,11 +716,271 @@ curl -X POST http://localhost:8000/api/v1/chat/completions \
 
 See `rem/api/README.md` for full SSE event protocol documentation.
 
+## Multi-Agent Orchestration
+
+REM supports hierarchical agent orchestration where agents can delegate work to other agents via the `ask_agent` tool. This enables complex workflows with specialized agents.
+
+### Architecture
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant API as Chat API
+    participant Orchestrator as Orchestrator Agent
+    participant EventSink as Event Sink (Queue)
+    participant Child as Child Agent
+    participant DB as PostgreSQL
+
+    User->>API: POST /chat/completions (stream=true)
+    API->>API: Create event sink (asyncio.Queue)
+    API->>Orchestrator: agent.iter(prompt)
+
+    loop Streaming Loop
+        Orchestrator->>API: PartDeltaEvent (text)
+        API->>User: SSE: data: {"delta": {"content": "..."}}
+    end
+
+    Orchestrator->>Orchestrator: Decides to call ask_agent
+    Orchestrator->>API: ToolCallPart (ask_agent)
+    API->>User: SSE: event: tool_call
+
+    API->>Child: ask_agent("child_name", input)
+    Child->>EventSink: push_event(child_content)
+    EventSink->>API: Consume child events
+    API->>User: SSE: data: {"delta": {"content": "..."}}
+
+    Child->>Child: Completes
+    Child-->>Orchestrator: Return result
+
+    Orchestrator->>API: Final response
+    API->>DB: Save tool calls
+    API->>DB: Save assistant message
+    API->>User: SSE: data: [DONE]
+```
+
+### Event Sink Pattern
+
+When an agent delegates to a child via `ask_agent`, the child's streaming events need to bubble up to the parent's stream. This is achieved through an **event sink** pattern using Python's `ContextVar`:
+
+```python
+# context.py
+from contextvars import ContextVar
+
+_parent_event_sink: ContextVar["asyncio.Queue | None"] = ContextVar(
+    "parent_event_sink", default=None
+)
+
+async def push_event(event: Any) -> bool:
+    """Push event to parent's event sink if available."""
+    sink = _parent_event_sink.get()
+    if sink is not None:
+        await sink.put(event)
+        return True
+    return False
+```
+
+The streaming controller sets up the event sink before agent execution:
+
+```python
+# streaming.py
+child_event_sink: asyncio.Queue = asyncio.Queue()
+set_event_sink(child_event_sink)
+
+async for node in agent.iter(prompt):
+    # Process agent events...
+
+    # Consume any child events that arrived
+    while not child_event_sink.empty():
+        child_event = child_event_sink.get_nowait()
+        if child_event["type"] == "child_content":
+            yield format_sse_content_delta(child_event["content"])
+```
+
+### ask_agent Tool Implementation
+
+The `ask_agent` tool in `mcp_router/tools.py` uses Pydantic AI's streaming iteration:
+
+```python
+async def ask_agent(agent_name: str, input_text: str, ...):
+    """Delegate work to another agent."""
+
+    # Load and create child agent
+    schema = await load_agent_schema_async(agent_name, user_id)
+    child_agent = await create_agent(context=context, agent_schema_override=schema)
+
+    # Stream child agent with event proxying
+    async with child_agent.iter(prompt) as agent_run:
+        async for node in agent_run:
+            if Agent.is_model_request_node(node):
+                async with node.stream(agent_run.ctx) as request_stream:
+                    async for event in request_stream:
+                        if isinstance(event, PartDeltaEvent):
+                            # Push content to parent's event sink
+                            await push_event({
+                                "type": "child_content",
+                                "agent_name": agent_name,
+                                "content": event.delta.content_delta,
+                            })
+
+    return agent_run.result
+```
+
+### Pydantic AI Features Used
+
+#### 1. Streaming Iteration (`agent.iter()`)
+
+Unlike `agent.run()` which blocks until completion, `agent.iter()` provides fine-grained control over the execution flow:
+
+```python
+async with agent.iter(prompt) as agent_run:
+    async for node in agent_run:
+        if Agent.is_model_request_node(node):
+            # Model is generating - stream the response
+            async with node.stream(agent_run.ctx) as stream:
+                async for event in stream:
+                    if isinstance(event, PartStartEvent):
+                        # Tool call starting
+                    elif isinstance(event, PartDeltaEvent):
+                        # Content chunk
+        elif Agent.is_call_tools_node(node):
+            # Tools are being executed
+            async with node.stream(agent_run.ctx) as stream:
+                async for event in stream:
+                    if isinstance(event, FunctionToolResultEvent):
+                        # Tool completed
+```
+
+#### 2. Node Types
+
+- **`ModelRequestNode`**: The model is generating a response (text or tool calls)
+- **`CallToolsNode`**: Tools are being executed
+- **`End`**: Agent execution complete
+
+#### 3. Event Types
+
+- **`PartStartEvent`**: A new part (text or tool call) is starting
+- **`PartDeltaEvent`**: Content chunk for streaming text
+- **`FunctionToolResultEvent`**: Tool execution completed with result
+- **`ToolCallPart`**: Metadata about a tool call (name, arguments)
+- **`TextPart`**: Text content
+
+### Message Persistence
+
+All messages are persisted to PostgreSQL for session continuity:
+
+```python
+# streaming.py - after agent completes
+async def save_session_messages(...):
+    store = SessionMessageStore(user_id=user_id)
+
+    # Save each tool call as a tool message
+    for tool_call in tool_calls:
+        await store.save_message(
+            session_id=session_id,
+            role="tool",
+            content=tool_call.result,
+            tool_name=tool_call.name,
+            tool_call_id=tool_call.id,
+        )
+
+    # Save the final assistant response
+    await store.save_message(
+        session_id=session_id,
+        role="assistant",
+        content=accumulated_content,
+    )
+```
+
+Messages are stored with:
+- **Embeddings**: For semantic search across conversation history
+- **Compression**: Long conversations are summarized to manage context window
+- **Session isolation**: Each session maintains its own message history
+
+### Testing Multi-Agent Systems
+
+#### Integration Tests
+
+Real end-to-end tests without mocking are in `tests/integration/test_ask_agent_streaming.py`:
+
+```python
+class TestAskAgentStreaming:
+    async def test_ask_agent_streams_and_saves(self, session_id, user_id):
+        """Test delegation via ask_agent."""
+        # Uses test_orchestrator which always delegates to test_responder
+        agent = await create_agent(context=context, agent_schema_override=schema)
+
+        chunks = []
+        async for chunk in stream_openai_response_with_save(
+            agent=agent,
+            prompt="Hello, please delegate this",
+            ...
+        ):
+            chunks.append(chunk)
+
+        # Verify streaming worked
+        assert len(content_chunks) > 0
+
+        # Verify persistence
+        messages = await store.load_session_messages(session_id)
+        assert len([m for m in messages if m["role"] == "assistant"]) == 1
+        assert len([m for m in messages if m["tool_name"] == "ask_agent"]) >= 1
+
+    async def test_multi_turn_saves_all_assistant_messages(self, session_id, user_id):
+        """Test that each turn saves its own assistant message.
+
+        This catches scoping bugs like accumulated_content not being
+        properly scoped per-turn.
+        """
+        turn_prompts = [
+            "Hello, how are you?",
+            "Tell me something interesting",
+            "Thanks for chatting!",
+        ]
+
+        for prompt in turn_prompts:
+            async for chunk in stream_openai_response_with_save(...):
+                pass
+
+        # Each turn should save an assistant message
+        messages = await store.load_session_messages(session_id)
+        assistant_msgs = [m for m in messages if m["role"] == "assistant"]
+        assert len(assistant_msgs) == 3
+```
+
+#### Test Agent Schemas
+
+Test agents are defined in `tests/data/schemas/agents/`:
+
+- **`test_orchestrator.yaml`**: Always delegates via `ask_agent`
+- **`test_responder.yaml`**: Simple agent that responds directly
+
+```yaml
+# test_orchestrator.yaml
+type: object
+description: |
+  You are a TEST ORCHESTRATOR that ALWAYS delegates to another agent.
+  Call ask_agent with agent_name="test_responder" on EVERY turn.
+json_schema_extra:
+  kind: agent
+  name: test_orchestrator
+  tools:
+    - name: ask_agent
+      mcp_server: rem
+```
+
+#### Running Integration Tests
+
+```bash
+# Run individually (recommended due to async isolation)
+POSTGRES__CONNECTION_STRING="postgresql://rem:rem@localhost:5050/rem" \
+  uv run pytest tests/integration/test_ask_agent_streaming.py::TestAskAgentStreaming::test_multi_turn_saves_all_assistant_messages -v -s
+```
+
 ## Future Work
 
 - [ ] Phoenix evaluator integration
 - [ ] Agent schema registry (load schemas by URI)
 - [ ] Schema validation and versioning
-- [ ] Multi-turn conversation management
-- [ ] Agent composition (agents calling agents)
+- [x] Multi-turn conversation management
+- [x] Agent composition (agents calling agents)
 - [ ] Alternative provider implementations (if needed)
