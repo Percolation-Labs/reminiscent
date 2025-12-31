@@ -167,6 +167,8 @@ async def stream_openai_response(
     metadata_registered = False
     # Track pending tool calls with full data for persistence
     # Maps tool_id -> {"tool_name": str, "tool_id": str, "arguments": dict}
+    # Track accumulated content for child event streaming
+    accumulated_content: list[str] = []
     pending_tool_data: dict[str, dict] = {}
 
     # Import context functions for multi-agent support
