@@ -1651,6 +1651,33 @@ class EmailSettings(BaseSettings):
         return kwargs
 
 
+class DebugSettings(BaseSettings):
+    """
+    Debug settings for development and troubleshooting.
+
+    Environment variables:
+        DEBUG__AUDIT_SESSION - Dump session history to /tmp/{session_id}.yaml
+        DEBUG__AUDIT_DIR - Directory for session audit files (default: /tmp)
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="DEBUG__",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    audit_session: bool = Field(
+        default=False,
+        description="When true, dump full session history to audit files for debugging",
+    )
+
+    audit_dir: str = Field(
+        default="/tmp",
+        description="Directory for session audit files",
+    )
+
+
 class TestSettings(BaseSettings):
     """
     Test environment settings.
@@ -1767,6 +1794,7 @@ class Settings(BaseSettings):
     schema_search: SchemaSettings = Field(default_factory=SchemaSettings)
     email: EmailSettings = Field(default_factory=EmailSettings)
     test: TestSettings = Field(default_factory=TestSettings)
+    debug: DebugSettings = Field(default_factory=DebugSettings)
 
 
 # Auto-load .env file from current directory if it exists

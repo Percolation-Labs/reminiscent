@@ -215,7 +215,7 @@ async def ensure_session_with_metadata(
     Merges request metadata with existing session metadata.
 
     Args:
-        session_id: Session identifier (maps to Session.name)
+        session_id: Session UUID from X-Session-Id header
         user_id: User identifier
         tenant_id: Tenant identifier
         is_eval: Whether this is an evaluation session
@@ -228,12 +228,8 @@ async def ensure_session_with_metadata(
     try:
         repo = Repository(Session, table_name="sessions")
 
-        # Try to load existing session by name (session_id is the name field)
-        existing_list = await repo.find(
-            filters={"name": session_id, "tenant_id": tenant_id},
-            limit=1,
-        )
-        existing = existing_list[0] if existing_list else None
+        # Look up session by UUID (id field)
+        existing = await repo.get_by_id(session_id)
 
         if existing:
             # Merge metadata if provided
@@ -254,9 +250,10 @@ async def ensure_session_with_metadata(
                 await repo.upsert(existing)
                 logger.debug(f"Updated session {session_id} (eval={is_eval}, metadata keys={list(merged_metadata.keys())})")
         else:
-            # Create new session
+            # Create new session with the provided UUID as the id
             session = Session(
-                name=session_id,
+                id=session_id,  # Use the provided UUID as session id
+                name=session_id,  # Default name to UUID, can be updated later with LLM-generated name
                 mode=SessionMode.EVALUATION if is_eval else SessionMode.NORMAL,
                 user_id=user_id,
                 tenant_id=tenant_id,
@@ -513,7 +510,8 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
 
     # Load raw session history for proper pydantic-ai message_history format
     # This enables proper tool call/return pairing for LLM API compatibility
-    from ....services.session import SessionMessageStore, session_to_pydantic_messages
+    from ....services.session import SessionMessageStore, session_to_pydantic_messages, audit_session_history
+    from ....agentic.schema import get_system_prompt
 
     pydantic_message_history = None
     if context.session_id and settings.postgres.enabled:
@@ -525,8 +523,24 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
                 compress_on_load=False,  # Don't compress - we need full data for reconstruction
             )
             if raw_session_history:
-                pydantic_message_history = session_to_pydantic_messages(raw_session_history)
-                logger.debug(f"Converted {len(raw_session_history)} session messages to {len(pydantic_message_history)} pydantic-ai messages")
+                # CRITICAL: Extract and pass the agent's system prompt
+                # pydantic-ai only auto-adds system prompts when message_history is empty
+                # When we pass message_history, we must include the system prompt ourselves
+                agent_system_prompt = get_system_prompt(agent_schema) if agent_schema else None
+                pydantic_message_history = session_to_pydantic_messages(
+                    raw_session_history,
+                    system_prompt=agent_system_prompt,
+                )
+                logger.debug(f"Converted {len(raw_session_history)} session messages to {len(pydantic_message_history)} pydantic-ai messages (with system prompt)")
+
+                # Audit session history if enabled (for debugging)
+                audit_session_history(
+                    session_id=context.session_id,
+                    agent_name=schema_name or "default",
+                    prompt=body.messages[-1].content if body.messages else "",
+                    raw_session_history=raw_session_history,
+                    pydantic_messages_count=len(pydantic_message_history),
+                )
         except Exception as e:
             logger.warning(f"Failed to load session history for message_history: {e}")
             # Fall back to old behavior (concatenated prompt)

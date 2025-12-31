@@ -822,7 +822,7 @@ COMMENT ON FUNCTION fn_get_shared_messages IS
 -- Function to list sessions with user details (name, email) for admin views
 
 -- List sessions with user info, CTE pagination
--- Note: messages.session_id stores the session name (not UUID), so we join on sessions.name
+-- Note: messages.session_id stores the session UUID (sessions.id)
 CREATE OR REPLACE FUNCTION fn_list_sessions_with_user(
     p_user_id VARCHAR(256) DEFAULT NULL,  -- Filter by user_id (NULL = all users, admin only)
     p_user_name VARCHAR(256) DEFAULT NULL,  -- Filter by user name (partial match, admin only)
@@ -849,9 +849,9 @@ RETURNS TABLE(
 BEGIN
     RETURN QUERY
     WITH session_msg_counts AS (
-        -- Count messages per session (joining on session name since messages.session_id = sessions.name)
+        -- Count messages per session (joining on session UUID)
         SELECT
-            m.session_id as session_name,
+            m.session_id,
             COUNT(*)::INTEGER as actual_message_count
         FROM messages m
         GROUP BY m.session_id
@@ -872,7 +872,7 @@ BEGIN
             s.metadata
         FROM sessions s
         LEFT JOIN users u ON u.id::text = s.user_id
-        LEFT JOIN session_msg_counts mc ON mc.session_name = s.name
+        LEFT JOIN session_msg_counts mc ON mc.session_id = s.id::text
         WHERE s.deleted_at IS NULL
           AND (p_user_id IS NULL OR s.user_id = p_user_id)
           AND (p_user_name IS NULL OR u.name ILIKE '%' || p_user_name || '%')

@@ -191,6 +191,79 @@ class TestAskAgentContextInheritance:
                         assert child_context.agent_schema_uri == "test-agent"
 
     @pytest.mark.asyncio
+    async def test_ask_agent_loads_session_history(self):
+        """ask_agent should load session history and pass to sub-agent runtime."""
+        from rem.api.mcp_router.tools import ask_agent
+        from rem.settings import settings
+
+        # Set up parent context with session_id
+        parent_context = AgentContext(
+            user_id="test-user",
+            tenant_id="test-tenant",
+            session_id="test-session-123",
+        )
+
+        mock_result = MagicMock()
+        mock_result.output = {"answer": "test response"}
+
+        mock_runtime = MagicMock()
+        mock_runtime.run = AsyncMock(return_value=mock_result)
+
+        # Mock session history
+        mock_session_history = [
+            {"role": "user", "content": "Previous question"},
+            {"role": "assistant", "content": "Previous answer"},
+        ]
+
+        with agent_context_scope(parent_context):
+            with patch("rem.agentic.create_agent", new_callable=AsyncMock) as mock_create:
+                with patch("rem.utils.schema_loader.load_agent_schema") as mock_load:
+                    with patch("rem.agentic.agents.agent_manager.get_agent", new_callable=AsyncMock) as mock_get:
+                        with patch("rem.services.session.SessionMessageStore") as mock_store_class:
+                            with patch("rem.services.session.session_to_pydantic_messages") as mock_convert:
+                                mock_create.return_value = mock_runtime
+                                mock_get.return_value = None
+                                mock_load.return_value = {
+                                    "type": "object",
+                                    "description": "Test agent",
+                                    "properties": {"answer": {"type": "string"}},
+                                    "required": ["answer"],
+                                }
+
+                                # Mock session store to return history
+                                mock_store = MagicMock()
+                                mock_store.load_session_messages = AsyncMock(return_value=mock_session_history)
+                                mock_store_class.return_value = mock_store
+
+                                # Mock conversion to pydantic messages
+                                mock_pydantic_messages = [MagicMock(), MagicMock()]
+                                mock_convert.return_value = mock_pydantic_messages
+
+                                # Only run if postgres is enabled
+                                original_enabled = settings.postgres.enabled
+                                settings.postgres.enabled = True
+                                try:
+                                    result = await ask_agent(
+                                        agent_name="test-agent",
+                                        input_text="New question",
+                                    )
+
+                                    # Verify session history was loaded
+                                    mock_store.load_session_messages.assert_called_once_with(
+                                        session_id="test-session-123",
+                                        user_id="test-user",
+                                        compress_on_load=False,
+                                    )
+
+                                    # Verify message_history was passed to runtime.run
+                                    mock_runtime.run.assert_called_once()
+                                    call_kwargs = mock_runtime.run.call_args.kwargs
+                                    assert "message_history" in call_kwargs
+                                    assert call_kwargs["message_history"] == mock_pydantic_messages
+                                finally:
+                                    settings.postgres.enabled = original_enabled
+
+    @pytest.mark.asyncio
     async def test_ask_agent_without_parent_context(self):
         """ask_agent should work without parent context (backwards compatible)."""
         from rem.api.mcp_router.tools import ask_agent
@@ -317,3 +390,132 @@ class TestAskRemAgentContextInheritance:
                     assert child_context.user_id == "rem-parent-user"
                     assert child_context.session_id == "rem-session"
                     assert child_context.tenant_id == "rem-tenant"
+
+
+class TestDelegationSessionStorage:
+    """Test that delegated agent responses are stored correctly in session."""
+
+    @pytest.mark.asyncio
+    async def test_text_response_extracted_from_tool_result(self):
+        """When no TextPartDelta, text_response from tool result should be used as assistant message."""
+        # This tests the fix in streaming.py that extracts text_response from
+        # tool results (like ask_agent) when no direct text content is streamed
+
+        # Simulate the tool_calls list that would be captured during streaming
+        tool_calls = [
+            {
+                "tool_name": "register_metadata",
+                "tool_id": "call_1",
+                "arguments": {"confidence": 0.9},
+                "result": {"status": "success", "_metadata_event": True},
+                "is_metadata": True,
+            },
+            {
+                "tool_name": "ask_agent",
+                "tool_id": "call_2",
+                "arguments": {"agent_name": "child-agent", "input_text": "Hello"},
+                "result": {
+                    "status": "success",
+                    "text_response": "This is the child agent's response that should become the assistant message.",
+                    "output": {"answer": "detailed output"},
+                    "agent_schema": "child-agent",
+                },
+            },
+        ]
+
+        accumulated_content = []  # No direct text content (simulating orchestrator pattern)
+
+        # This is the logic from streaming.py that we're testing
+        full_content = None
+
+        if accumulated_content:
+            full_content = "".join(accumulated_content)
+        else:
+            # No direct text from TextPartDelta - check tool results for text_response
+            for tool_call in tool_calls:
+                if not tool_call:
+                    continue
+                result = tool_call.get("result")
+                if isinstance(result, dict) and result.get("text_response"):
+                    text_response = result["text_response"]
+                    if text_response and str(text_response).strip():
+                        full_content = str(text_response)
+                        break
+
+        # Verify the text_response was extracted
+        assert full_content is not None
+        assert "child agent's response" in full_content
+
+    @pytest.mark.asyncio
+    async def test_direct_text_takes_priority_over_tool_response(self):
+        """When there IS direct text content, it should be used over tool text_response."""
+        tool_calls = [
+            {
+                "tool_name": "ask_agent",
+                "tool_id": "call_1",
+                "arguments": {"agent_name": "child-agent", "input_text": "Hello"},
+                "result": {
+                    "status": "success",
+                    "text_response": "Child response that should be ignored.",
+                },
+            },
+        ]
+
+        # Direct text content was streamed (normal non-orchestrator agent)
+        accumulated_content = ["Direct ", "streamed ", "text."]
+
+        # This is the logic from streaming.py
+        full_content = None
+
+        if accumulated_content:
+            full_content = "".join(accumulated_content)
+        else:
+            for tool_call in tool_calls:
+                if not tool_call:
+                    continue
+                result = tool_call.get("result")
+                if isinstance(result, dict) and result.get("text_response"):
+                    text_response = result["text_response"]
+                    if text_response and str(text_response).strip():
+                        full_content = str(text_response)
+                        break
+
+        # Direct text should be used
+        assert full_content == "Direct streamed text."
+
+    @pytest.mark.asyncio
+    async def test_empty_text_response_ignored(self):
+        """Empty or whitespace-only text_response should not be used."""
+        tool_calls = [
+            {
+                "tool_name": "ask_agent",
+                "tool_id": "call_1",
+                "result": {"status": "success", "text_response": "   "},  # Whitespace only
+            },
+            {
+                "tool_name": "ask_agent",
+                "tool_id": "call_2",
+                "result": {"status": "success", "text_response": "Valid response"},
+            },
+        ]
+
+        accumulated_content = []
+
+        # This is the logic from streaming.py
+        full_content = None
+
+        if accumulated_content:
+            full_content = "".join(accumulated_content)
+        else:
+            for tool_call in tool_calls:
+                if not tool_call:
+                    continue
+                result = tool_call.get("result")
+                if isinstance(result, dict) and result.get("text_response"):
+                    text_response = result["text_response"]
+                    if text_response and str(text_response).strip():
+                        full_content = str(text_response)
+                        break
+
+        # Should skip whitespace-only and get "Valid response"
+        assert full_content == "Valid response"

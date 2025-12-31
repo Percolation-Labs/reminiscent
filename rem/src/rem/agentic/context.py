@@ -30,9 +30,10 @@ Multi-Agent Context Propagation:
 - Child agents inherit user_id, tenant_id, session_id, is_eval from parent
 """
 
+import asyncio
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Generator
+from typing import Any, Generator
 
 from loguru import logger
 from pydantic import BaseModel, Field
@@ -44,6 +45,13 @@ from ..settings import settings
 # This enables context propagation through nested agent calls (multi-agent)
 _current_agent_context: ContextVar["AgentContext | None"] = ContextVar(
     "current_agent_context", default=None
+)
+
+# Event sink for streaming child agent events to parent
+# When set, child agents (via ask_agent) should push their events here
+# for the parent's streaming loop to proxy to the client
+_parent_event_sink: ContextVar["asyncio.Queue | None"] = ContextVar(
+    "parent_event_sink", default=None
 )
 
 
@@ -95,6 +103,70 @@ def agent_context_scope(ctx: "AgentContext") -> Generator["AgentContext", None, 
         yield ctx
     finally:
         _current_agent_context.set(previous)
+
+
+# =============================================================================
+# Event Sink for Streaming Multi-Agent Delegation
+# =============================================================================
+
+
+def get_event_sink() -> "asyncio.Queue | None":
+    """
+    Get the parent's event sink for streaming child events.
+
+    Used by ask_agent to push child agent events to the parent's stream.
+    Returns None if not in a streaming context.
+    """
+    return _parent_event_sink.get()
+
+
+def set_event_sink(sink: "asyncio.Queue | None") -> None:
+    """Set the event sink for child agents to push events to."""
+    _parent_event_sink.set(sink)
+
+
+@contextmanager
+def event_sink_scope(sink: "asyncio.Queue") -> Generator["asyncio.Queue", None, None]:
+    """
+    Context manager for scoped event sink setting.
+
+    Used by streaming layer to set up event proxying before tool execution.
+    Child agents (via ask_agent) will push their events to this sink.
+
+    Example:
+        event_queue = asyncio.Queue()
+        with event_sink_scope(event_queue):
+            # ask_agent will push child events to event_queue
+            async for event in tools_stream:
+                ...
+            # Also consume from event_queue
+    """
+    previous = _parent_event_sink.get()
+    _parent_event_sink.set(sink)
+    try:
+        yield sink
+    finally:
+        _parent_event_sink.set(previous)
+
+
+async def push_event(event: Any) -> bool:
+    """
+    Push an event to the parent's event sink (if available).
+
+    Used by ask_agent to proxy child agent events to the parent's stream.
+    Returns True if event was pushed, False if no sink available.
+
+    Args:
+        event: Any streaming event (ToolCallEvent, content chunk, etc.)
+
+    Returns:
+        True if event was pushed to sink, False otherwise
+    """
+    sink = _parent_event_sink.get()
+    if sink is not None:
+        await sink.put(event)
+        return True
+    return False
 
 
 class AgentContext(BaseModel):

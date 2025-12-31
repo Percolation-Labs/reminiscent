@@ -38,6 +38,7 @@ from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
     ModelResponse,
+    SystemPromptPart,
     TextPart,
     ToolCallPart,
     ToolReturnPart,
@@ -47,25 +48,40 @@ from pydantic_ai.messages import (
 
 def session_to_pydantic_messages(
     session_history: list[dict[str, Any]],
+    system_prompt: str | None = None,
 ) -> list[ModelMessage]:
     """Convert stored session messages to pydantic-ai ModelMessage format.
 
     Handles the conversion of our simplified storage format to pydantic-ai's
     native message types, including synthesizing ToolCallPart for tool results.
 
+    IMPORTANT: pydantic-ai only auto-adds system prompts when message_history is empty.
+    When passing message_history to agent.run(), you MUST include the system prompt
+    via the system_prompt parameter here.
+
     Args:
         session_history: List of message dicts from SessionMessageStore.load_session_messages()
             Each dict has: role, content, and optionally tool_name, tool_call_id, tool_arguments
+        system_prompt: The agent's system prompt (from schema description). This is REQUIRED
+            for proper agent behavior on subsequent turns, as pydantic-ai won't add it
+            automatically when message_history is provided.
 
     Returns:
         List of ModelMessage (ModelRequest | ModelResponse) ready for agent.run(message_history=...)
 
     Note:
-        - System prompts are NOT included - pydantic-ai handles those via the Agent
+        - System prompts ARE included as SystemPromptPart when system_prompt is provided
         - Tool results require synthesized ToolCallPart to satisfy LLM API requirements
         - The first message in session_history should be "user" role (from context builder)
     """
     messages: list[ModelMessage] = []
+
+    # CRITICAL: Prepend agent's system prompt if provided
+    # This ensures the agent's instructions are present on every turn
+    # pydantic-ai only auto-adds system prompts when message_history is empty
+    if system_prompt:
+        messages.append(ModelRequest(parts=[SystemPromptPart(content=system_prompt)]))
+        logger.debug(f"Prepended agent system prompt ({len(system_prompt)} chars) to message history")
 
     # Track pending tool results to batch them with assistant responses
     # When we see a tool message, we need to:
@@ -192,3 +208,69 @@ def session_to_pydantic_messages(
 
     logger.debug(f"Converted {len(session_history)} stored messages to {len(messages)} pydantic-ai messages")
     return messages
+
+
+def audit_session_history(
+    session_id: str,
+    agent_name: str,
+    prompt: str,
+    raw_session_history: list[dict[str, Any]],
+    pydantic_messages_count: int,
+) -> None:
+    """
+    Dump session history to a YAML file for debugging.
+
+    Only runs when DEBUG__AUDIT_SESSION=true. Writes to DEBUG__AUDIT_DIR (default /tmp).
+    Appends to the same file for a session, so all agent invocations are in one place.
+
+    Args:
+        session_id: The session identifier
+        agent_name: Name of the agent being invoked
+        prompt: The prompt being sent to the agent
+        raw_session_history: The raw session messages from the database
+        pydantic_messages_count: Count of converted pydantic-ai messages
+    """
+    from ...settings import settings
+
+    if not settings.debug.audit_session:
+        return
+
+    try:
+        import yaml
+        from pathlib import Path
+        from ...utils.date_utils import utc_now, to_iso
+
+        audit_dir = Path(settings.debug.audit_dir)
+        audit_dir.mkdir(parents=True, exist_ok=True)
+        audit_file = audit_dir / f"{session_id}.yaml"
+
+        # Create entry for this agent invocation
+        entry = {
+            "timestamp": to_iso(utc_now()),
+            "agent_name": agent_name,
+            "prompt": prompt,
+            "raw_history_count": len(raw_session_history),
+            "pydantic_messages_count": pydantic_messages_count,
+            "raw_session_history": raw_session_history,
+        }
+
+        # Load existing data or create new
+        existing_data: dict[str, Any] = {"session_id": session_id, "invocations": []}
+        if audit_file.exists():
+            with open(audit_file) as f:
+                loaded = yaml.safe_load(f)
+                if loaded:
+                    # Ensure session_id is always present (backfill if missing)
+                    existing_data = {
+                        "session_id": loaded.get("session_id", session_id),
+                        "invocations": loaded.get("invocations", []),
+                    }
+
+        # Append this invocation
+        existing_data["invocations"].append(entry)
+
+        with open(audit_file, "w") as f:
+            yaml.dump(existing_data, f, default_flow_style=False, allow_unicode=True)
+        logger.info(f"DEBUG: Session audit updated: {audit_file}")
+    except Exception as e:
+        logger.warning(f"DEBUG: Failed to dump session audit: {e}")

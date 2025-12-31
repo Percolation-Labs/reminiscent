@@ -260,12 +260,16 @@ class JWTService:
             "tenant_id": payload.get("tenant_id", "default"),
         }
 
-    def refresh_access_token(self, refresh_token: str) -> dict | None:
+    def refresh_access_token(
+        self, refresh_token: str, user_override: dict | None = None
+    ) -> dict | None:
         """
         Create new access token using refresh token.
 
         Args:
             refresh_token: Valid refresh token
+            user_override: Optional dict with user fields to override defaults
+                           (e.g., role, roles, tier, name from database lookup)
 
         Returns:
             New token dict or None if refresh token is invalid
@@ -285,8 +289,7 @@ class JWTService:
             logger.debug("Refresh token expired")
             return None
 
-        # Create new access token with minimal info from refresh token
-        # In production, you'd look up the full user from database
+        # Build user dict with defaults
         user = {
             "id": payload.get("sub"),
             "email": payload.get("email"),
@@ -294,8 +297,20 @@ class JWTService:
             "provider": "email",
             "tenant_id": "default",
             "tier": "free",
+            "role": "user",
             "roles": ["user"],
         }
+
+        # Apply overrides from database lookup if provided
+        if user_override:
+            if user_override.get("role"):
+                user["role"] = user_override["role"]
+            if user_override.get("roles"):
+                user["roles"] = user_override["roles"]
+            if user_override.get("tier"):
+                user["tier"] = user_override["tier"]
+            if user_override.get("name"):
+                user["name"] = user_override["name"]
 
         # Only return new access token, keep same refresh token
         now = int(time.time())
@@ -303,7 +318,7 @@ class JWTService:
             "sub": user["id"],
             "email": user["email"],
             "name": user["name"],
-            "role": user.get("role"),
+            "role": user["role"],
             "tier": user["tier"],
             "roles": user["roles"],
             "provider": user["provider"],

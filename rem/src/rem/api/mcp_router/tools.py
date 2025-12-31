@@ -1265,7 +1265,7 @@ async def ask_agent(
     """
     import asyncio
     from ...agentic import create_agent
-    from ...agentic.context import get_current_context, agent_context_scope
+    from ...agentic.context import get_current_context, agent_context_scope, get_event_sink, push_event
     from ...agentic.agents.agent_manager import get_agent
     from ...utils.schema_loader import load_agent_schema
 
@@ -1342,16 +1342,135 @@ async def ask_agent(
     if input_data:
         prompt = f"{input_text}\n\nInput data: {json.dumps(input_data)}"
 
+    # Load session history for the sub-agent (CRITICAL for multi-turn conversations)
+    # Sub-agents need to see the full conversation context, not just the summary
+    pydantic_message_history = None
+    if child_context.session_id and settings.postgres.enabled:
+        try:
+            from ...services.session import SessionMessageStore, session_to_pydantic_messages
+            from ...agentic.schema import get_system_prompt
+
+            store = SessionMessageStore(user_id=child_context.user_id or "default")
+            raw_session_history = await store.load_session_messages(
+                session_id=child_context.session_id,
+                user_id=child_context.user_id,
+                compress_on_load=False,  # Need full data for reconstruction
+            )
+            if raw_session_history:
+                # Extract agent's system prompt from schema
+                agent_system_prompt = get_system_prompt(schema) if schema else None
+                pydantic_message_history = session_to_pydantic_messages(
+                    raw_session_history,
+                    system_prompt=agent_system_prompt,
+                )
+                logger.debug(
+                    f"ask_agent '{agent_name}': loaded {len(raw_session_history)} session messages "
+                    f"-> {len(pydantic_message_history)} pydantic-ai messages"
+                )
+
+                # Audit session history if enabled
+                from ...services.session import audit_session_history
+                audit_session_history(
+                    session_id=child_context.session_id,
+                    agent_name=agent_name,
+                    prompt=prompt,
+                    raw_session_history=raw_session_history,
+                    pydantic_messages_count=len(pydantic_message_history),
+                )
+        except Exception as e:
+            logger.warning(f"ask_agent '{agent_name}': failed to load session history: {e}")
+            # Fall back to running without history
+
     # Run agent with timeout and context propagation
     logger.info(f"Invoking agent '{agent_name}' with prompt: {prompt[:100]}...")
+
+    # Check if we have an event sink for streaming
+    event_sink = get_event_sink()
+    use_streaming = event_sink is not None
 
     try:
         # Set child context for nested tool calls
         with agent_context_scope(child_context):
-            result = await asyncio.wait_for(
-                agent_runtime.run(prompt),
-                timeout=timeout_seconds
-            )
+            if use_streaming:
+                # STREAMING MODE: Use iter() and proxy events to parent
+                logger.debug(f"ask_agent '{agent_name}': using streaming mode with event proxying")
+
+                async def run_with_streaming():
+                    from pydantic_ai.messages import (
+                        PartStartEvent, PartDeltaEvent, PartEndEvent,
+                        FunctionToolResultEvent, FunctionToolCallEvent,
+                    )
+                    from pydantic_ai.agent import Agent
+
+                    accumulated_content = []
+                    child_tool_calls = []
+
+                    # iter() returns an async context manager, not an awaitable
+                    iter_kwargs = {"message_history": pydantic_message_history} if pydantic_message_history else {}
+                    async with agent_runtime.iter(prompt, **iter_kwargs) as agent_run:
+                        async for node in agent_run:
+                            if Agent.is_model_request_node(node):
+                                async with node.stream(agent_run.ctx) as request_stream:
+                                    async for event in request_stream:
+                                        # Proxy tool call starts
+                                        if isinstance(event, PartStartEvent):
+                                            from pydantic_ai.messages import ToolCallPart, TextPart
+                                            if isinstance(event.part, ToolCallPart):
+                                                # Push tool start event to parent
+                                                await push_event({
+                                                    "type": "child_tool_start",
+                                                    "agent_name": agent_name,
+                                                    "tool_name": event.part.tool_name,
+                                                    "arguments": event.part.args if hasattr(event.part, 'args') else None,
+                                                })
+                                                child_tool_calls.append({
+                                                    "tool_name": event.part.tool_name,
+                                                    "index": event.index,
+                                                })
+                                        # Proxy text content
+                                        elif isinstance(event, PartDeltaEvent):
+                                            if hasattr(event, 'delta') and hasattr(event.delta, 'content_delta'):
+                                                content = event.delta.content_delta
+                                                if content:
+                                                    accumulated_content.append(content)
+                                                    # Push content chunk to parent
+                                                    await push_event({
+                                                        "type": "child_content",
+                                                        "agent_name": agent_name,
+                                                        "content": content,
+                                                    })
+
+                            elif Agent.is_call_tools_node(node):
+                                async with node.stream(agent_run.ctx) as tools_stream:
+                                    async for tool_event in tools_stream:
+                                        if isinstance(tool_event, FunctionToolResultEvent):
+                                            result_content = tool_event.result.content if hasattr(tool_event.result, 'content') else tool_event.result
+                                            # Push tool result to parent
+                                            await push_event({
+                                                "type": "child_tool_result",
+                                                "agent_name": agent_name,
+                                                "result": result_content,
+                                            })
+
+                        # Get final result (inside context manager)
+                        return agent_run.result, "".join(accumulated_content), child_tool_calls
+
+                result, streamed_content, tool_calls = await asyncio.wait_for(
+                    run_with_streaming(),
+                    timeout=timeout_seconds
+                )
+            else:
+                # NON-STREAMING MODE: Use run() for backwards compatibility
+                if pydantic_message_history:
+                    result = await asyncio.wait_for(
+                        agent_runtime.run(prompt, message_history=pydantic_message_history),
+                        timeout=timeout_seconds
+                    )
+                else:
+                    result = await asyncio.wait_for(
+                        agent_runtime.run(prompt),
+                        timeout=timeout_seconds
+                    )
     except asyncio.TimeoutError:
         return {
             "status": "error",

@@ -16,6 +16,7 @@ Endpoints:
 """
 
 from datetime import datetime
+from enum import Enum
 from typing import Literal
 from uuid import UUID
 
@@ -36,6 +37,18 @@ from ...settings import settings
 from ...utils.date_utils import parse_iso, utc_now
 
 router = APIRouter(prefix="/api/v1")
+
+
+# =============================================================================
+# Enums
+# =============================================================================
+
+
+class SortOrder(str, Enum):
+    """Sort order for list queries."""
+
+    ASC = "asc"
+    DESC = "desc"
 
 
 # =============================================================================
@@ -151,6 +164,7 @@ async def list_messages(
     ),
     limit: int = Query(default=50, ge=1, le=100, description="Max results to return"),
     offset: int = Query(default=0, ge=0, description="Offset for pagination"),
+    sort: SortOrder = Query(default=SortOrder.DESC, description="Sort order by created_at (asc or desc)"),
 ) -> MessageListResponse:
     """
     List messages with optional filters.
@@ -166,8 +180,9 @@ async def list_messages(
     - session_id: Filter by conversation session
     - start_date/end_date: Filter by creation time range (ISO 8601 format)
     - message_type: Filter by role (user, assistant, system, tool)
+    - sort: Sort order by created_at (asc or desc, default: desc)
 
-    Returns paginated results ordered by created_at descending.
+    Returns paginated results ordered by created_at.
     """
     if not settings.postgres.enabled:
         raise HTTPException(status_code=503, detail="Database not enabled")
@@ -189,6 +204,7 @@ async def list_messages(
 
     # Apply optional filters
     if session_id:
+        # session_id is the session UUID - use directly
         filters["session_id"] = session_id
     if message_type:
         filters["message_type"] = message_type
@@ -200,12 +216,15 @@ async def list_messages(
         f"filters={filters}"
     )
 
+    # Build order_by clause based on sort parameter
+    order_by = f"created_at {sort.value.upper()}"
+
     # For date filtering, we need custom SQL (not supported by basic Repository)
     # For now, fetch all matching base filters and filter in Python
     # TODO: Extend Repository to support date range filters
     messages = await repo.find(
         filters,
-        order_by="created_at DESC",
+        order_by=order_by,
         limit=limit + 1,  # Fetch one extra to determine has_more
         offset=offset,
     )
@@ -465,7 +484,7 @@ async def get_session(
     - Admin users: Can access any session
 
     Args:
-        session_id: UUID or name of the session
+        session_id: UUID of the session
 
     Returns:
         Session object if found
@@ -481,12 +500,7 @@ async def get_session(
     session = await repo.get_by_id(session_id)
 
     if not session:
-        # Try finding by name
-        sessions = await repo.find({"name": session_id}, limit=1)
-        if sessions:
-            session = sessions[0]
-        else:
-            raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
 
     # Check access: admin or owner
     current_user = get_current_user(request)

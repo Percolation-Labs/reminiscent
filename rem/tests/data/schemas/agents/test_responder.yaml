@@ -1,0 +1,21 @@
+type: object
+description: |
+  You are a TEST RESPONDER agent. You simply respond to the input with a friendly message.
+
+  Your job is simple: receive input and respond with a friendly, helpful message.
+  Always include the phrase "RESPONDER_SAYS:" in your response so we can identify it.
+
+  Example:
+  Input: "User says: Hello"
+  Response: "RESPONDER_SAYS: Hello! How can I help you today?"
+
+properties:
+  answer:
+    type: string
+    description: Your friendly response
+required:
+  - answer
+json_schema_extra:
+  kind: agent
+  name: test_responder
+  tools: []

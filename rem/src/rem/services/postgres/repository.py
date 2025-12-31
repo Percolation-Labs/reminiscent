@@ -31,17 +31,27 @@ if TYPE_CHECKING:
     from .service import PostgresService
 
 
+# Singleton instance for connection pool reuse
+_postgres_instance: "PostgresService | None" = None
+
+
 def get_postgres_service() -> "PostgresService | None":
     """
-    Get PostgresService instance with connection string from settings.
+    Get PostgresService singleton instance.
 
     Returns None if Postgres is disabled.
+    Uses singleton pattern to prevent connection pool exhaustion.
     """
+    global _postgres_instance
+
     if not settings.postgres.enabled:
         return None
-    
-    from .service import PostgresService
-    return PostgresService()
+
+    if _postgres_instance is None:
+        from .service import PostgresService
+        _postgres_instance = PostgresService()
+
+    return _postgres_instance
 
 T = TypeVar("T", bound=BaseModel)
 

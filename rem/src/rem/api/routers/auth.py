@@ -541,6 +541,9 @@ async def refresh_token(body: TokenRefreshRequest):
     """
     Refresh access token using refresh token.
 
+    Fetches the user's current role/tier from the database to ensure
+    the new access token reflects their actual permissions.
+
     Args:
         body: TokenRefreshRequest with refresh_token
 
@@ -548,7 +551,46 @@ async def refresh_token(body: TokenRefreshRequest):
         New access token or 401 if refresh token is invalid
     """
     jwt_service = get_jwt_service()
-    result = jwt_service.refresh_access_token(body.refresh_token)
+
+    # First decode the refresh token to get user_id (without full verification yet)
+    payload = jwt_service.decode_without_verification(body.refresh_token)
+    if not payload:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid refresh token format"
+        )
+
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid refresh token: missing user ID"
+        )
+
+    # Fetch user from database to get current role/tier
+    user_override = None
+    if settings.postgres.enabled:
+        db = PostgresService()
+        try:
+            await db.connect()
+            user_service = UserService(db)
+            user_entity = await user_service.get_user_by_id(user_id)
+            if user_entity:
+                user_override = {
+                    "role": user_entity.role or "user",
+                    "roles": [user_entity.role] if user_entity.role else ["user"],
+                    "tier": user_entity.tier.value if user_entity.tier else "free",
+                    "name": user_entity.name,
+                }
+                logger.debug(f"Refresh token: fetched user {user_id} with role={user_override['role']}, tier={user_override['tier']}")
+        except Exception as e:
+            logger.warning(f"Could not fetch user for token refresh: {e}")
+            # Continue without override - will use defaults
+        finally:
+            await db.disconnect()
+
+    # Now do the actual refresh with proper verification
+    result = jwt_service.refresh_access_token(body.refresh_token, user_override=user_override)
 
     if not result:
         raise HTTPException(

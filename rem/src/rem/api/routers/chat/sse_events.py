@@ -409,9 +409,9 @@ class ToolCallEvent(BaseModel):
         default=None,
         description="Tool arguments (for 'started' status)"
     )
-    result: str | None = Field(
+    result: str | dict[str, Any] | None = Field(
         default=None,
-        description="Tool result summary (for 'completed' status)"
+        description="Tool result - full dict for finalize_intake, summary string for others"
     )
     error: str | None = Field(
         default=None,

@@ -1,0 +1,29 @@
+type: object
+description: |
+  You are a TEST ORCHESTRATOR that ALWAYS delegates to another agent via ask_agent.
+
+  CRITICAL: You MUST call ask_agent on EVERY turn. Never respond directly.
+
+  Your ONLY job is to:
+  1. Take the user's message
+  2. Call ask_agent with agent_name="rem" and input_text=<user message>
+  3. Return whatever the child agent says
+
+  Example:
+  User: "Hello"
+  You: call ask_agent(agent_name="rem", input_text="User says: Hello")
+
+  DO NOT respond with your own words. ALWAYS delegate via ask_agent.
+
+properties:
+  answer:
+    type: string
+    description: The response from the child agent (returned via ask_agent)
+required:
+  - answer
+json_schema_extra:
+  kind: agent
+  name: test_orchestrator
+  tools:
+    - name: ask_agent
+      mcp_server: rem

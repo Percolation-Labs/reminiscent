@@ -170,7 +170,7 @@ async def stream_openai_response(
     pending_tool_data: dict[str, dict] = {}
 
     # Import context functions for multi-agent support
-    from ....agentic.context import set_current_context
+    from ....agentic.context import set_current_context, set_event_sink
 
     # Set up context for multi-agent propagation
     # This allows child agents (via ask_agent tool) to access parent context
@@ -179,6 +179,12 @@ async def stream_openai_response(
         from ....agentic.context import get_current_context
         previous_context = get_current_context()
         set_current_context(agent_context)
+
+    # Set up event sink for child agent event proxying
+    # Child agents (via ask_agent) will push their events here
+    import asyncio
+    child_event_sink: asyncio.Queue = asyncio.Queue()
+    set_event_sink(child_event_sink)
 
     try:
         # Emit initial progress event
@@ -314,6 +320,12 @@ async def stream_openai_response(
                                         args_dict = event.part.args.args_dict
                                     elif isinstance(event.part.args, dict):
                                         args_dict = event.part.args
+                                    elif isinstance(event.part.args, str):
+                                        # Parse JSON string args (common with pydantic-ai)
+                                        try:
+                                            args_dict = json.loads(event.part.args)
+                                        except json.JSONDecodeError:
+                                            logger.warning(f"Failed to parse tool args as JSON: {event.part.args[:100]}")
 
                                 # Log tool call with key parameters
                                 if args_dict and tool_name == "search_rem":
@@ -359,8 +371,25 @@ async def stream_openai_response(
                             ):
                                 if event.index in active_tool_calls:
                                     tool_name, tool_id = active_tool_calls[event.index]
-                                    # Note: result comes from FunctionToolResultEvent below
-                                    # For now, mark as completed without result
+
+                                    # Extract full args from completed ToolCallPart
+                                    # (PartStartEvent only has empty/partial args during streaming)
+                                    args_dict = None
+                                    if event.part.args is not None:
+                                        if hasattr(event.part.args, 'args_dict'):
+                                            args_dict = event.part.args.args_dict
+                                        elif isinstance(event.part.args, dict):
+                                            args_dict = event.part.args
+                                        elif isinstance(event.part.args, str) and event.part.args:
+                                            try:
+                                                args_dict = json.loads(event.part.args)
+                                            except json.JSONDecodeError:
+                                                logger.warning(f"Failed to parse tool args: {event.part.args[:100]}")
+
+                                    # Update pending_tool_data with complete args
+                                    if tool_id in pending_tool_data:
+                                        pending_tool_data[tool_id]["arguments"] = args_dict
+
                                     del active_tool_calls[event.index]
 
                             # ============================================
@@ -396,6 +425,57 @@ async def stream_openai_response(
                 elif Agent.is_call_tools_node(node):
                     async with node.stream(agent_run.ctx) as tools_stream:
                         async for tool_event in tools_stream:
+                            # First, drain any child agent events that were pushed while tool was executing
+                            # This handles ask_agent streaming - child events are proxied here
+                            while not child_event_sink.empty():
+                                try:
+                                    child_event = child_event_sink.get_nowait()
+                                    event_type = child_event.get("type", "")
+                                    child_agent = child_event.get("agent_name", "child")
+
+                                    if event_type == "child_tool_start":
+                                        # Emit child tool start as a nested tool call
+                                        child_tool_id = f"call_{uuid.uuid4().hex[:8]}"
+                                        yield format_sse_event(ToolCallEvent(
+                                            tool_name=f"{child_agent}:{child_event.get('tool_name', 'tool')}",
+                                            tool_id=child_tool_id,
+                                            status="started",
+                                            arguments=child_event.get("arguments"),
+                                        ))
+                                    elif event_type == "child_content":
+                                        # Emit child content as assistant content
+                                        content = child_event.get("content", "")
+                                        if content:
+                                            content_chunk = ChatCompletionStreamResponse(
+                                                id=request_id,
+                                                created=created_at,
+                                                model=model,
+                                                choices=[
+                                                    ChatCompletionStreamChoice(
+                                                        index=0,
+                                                        delta=ChatCompletionMessageDelta(
+                                                            role="assistant" if is_first_chunk else None,
+                                                            content=content,
+                                                        ),
+                                                        finish_reason=None,
+                                                    )
+                                                ],
+                                            )
+                                            is_first_chunk = False
+                                            accumulated_content.append(content)
+                                            yield f"data: {content_chunk.model_dump_json()}\n\n"
+                                    elif event_type == "child_tool_result":
+                                        # Emit child tool completion
+                                        result = child_event.get("result", {})
+                                        yield format_sse_event(ToolCallEvent(
+                                            tool_name=f"{child_agent}:tool",
+                                            tool_id=f"call_{uuid.uuid4().hex[:8]}",
+                                            status="completed",
+                                            result=str(result)[:200] if result else None,
+                                        ))
+                                except Exception as e:
+                                    logger.warning(f"Error processing child event: {e}")
+
                             # Tool result event - emit completion
                             if isinstance(tool_event, FunctionToolResultEvent):
                                 # Get the tool name/id from the pending queue (FIFO)
@@ -463,6 +543,12 @@ async def stream_openai_response(
                                         hidden=False,
                                     ))
 
+                                # Get complete args from pending_tool_data BEFORE deleting
+                                # (captured at PartEndEvent with full args)
+                                completed_args = None
+                                if tool_id in pending_tool_data:
+                                    completed_args = pending_tool_data[tool_id].get("arguments")
+
                                 # Capture tool call with result for persistence
                                 # Special handling for register_metadata - always capture full data
                                 if tool_calls_out is not None and tool_id in pending_tool_data:
@@ -473,9 +559,44 @@ async def stream_openai_response(
                                     del pending_tool_data[tool_id]
 
                                 if not is_metadata_event:
+                                    # Check for text_response in tool result (multi-agent delegation)
+                                    # When an orchestrator delegates via ask_agent, the child agent's
+                                    # text_response should be streamed as the parent's assistant content
+                                    if isinstance(result_content, dict) and result_content.get("text_response"):
+                                        text_response = result_content["text_response"]
+                                        if text_response and str(text_response).strip():
+                                            text_content = str(text_response)
+                                            token_count += len(text_content.split())
+
+                                            # Emit as streamed content (OpenAI-compatible format)
+                                            content_chunk = ChatCompletionStreamResponse(
+                                                id=request_id,
+                                                created=created_at,
+                                                model=model,
+                                                choices=[
+                                                    ChatCompletionStreamChoice(
+                                                        index=0,
+                                                        delta=ChatCompletionMessageDelta(
+                                                            role="assistant" if is_first_chunk else None,
+                                                            content=text_content,
+                                                        ),
+                                                        finish_reason=None,
+                                                    )
+                                                ],
+                                            )
+                                            is_first_chunk = False
+                                            yield f"data: {content_chunk.model_dump_json()}\n\n"
+                                            logger.debug(
+                                                f"Streamed text_response from {tool_name} ({len(text_content)} chars)"
+                                            )
+
                                     # Normal tool completion - emit ToolCallEvent
-                                    result_str = str(result_content)
-                                    result_summary = result_str[:200] + "..." if len(result_str) > 200 else result_str
+                                    # For finalize_intake, send full result dict for frontend
+                                    if tool_name == "finalize_intake" and isinstance(result_content, dict):
+                                        result_for_sse = result_content
+                                    else:
+                                        result_str = str(result_content)
+                                        result_for_sse = result_str[:200] + "..." if len(result_str) > 200 else result_str
 
                                     # Log result count for search_rem
                                     if tool_name == "search_rem" and isinstance(result_content, dict):
@@ -506,7 +627,8 @@ async def stream_openai_response(
                                         tool_name=tool_name,
                                         tool_id=tool_id,
                                         status="completed",
-                                        result=result_summary
+                                        arguments=completed_args,
+                                        result=result_for_sse
                                     ))
 
                                 # Update progress after tool completion
@@ -682,6 +804,8 @@ async def stream_openai_response(
         yield "data: [DONE]\n\n"
 
     finally:
+        # Clean up event sink for multi-agent streaming
+        set_event_sink(None)
         # Restore previous context for multi-agent support
         # This ensures nested agent calls don't pollute the parent's context
         if agent_context is not None:
@@ -897,8 +1021,31 @@ async def stream_openai_response_with_save(
             messages_to_store.append(tool_message)
 
         # Then store assistant text response (if any)
+        # Priority: direct TextPartDelta content > tool call text_response
+        # When an agent delegates via ask_agent, the child's text_response becomes
+        # the parent's assistant response (the parent is just orchestrating)
+        full_content = None
+
         if accumulated_content:
             full_content = "".join(accumulated_content)
+        else:
+            # No direct text from TextPartDelta - check tool results for text_response
+            # This handles multi-agent delegation where child agent output is the response
+            for tool_call in tool_calls:
+                if not tool_call:
+                    continue
+                result = tool_call.get("result")
+                if isinstance(result, dict) and result.get("text_response"):
+                    text_response = result["text_response"]
+                    if text_response and str(text_response).strip():
+                        full_content = str(text_response)
+                        logger.debug(
+                            f"Using text_response from {tool_call.get('tool_name', 'tool')} "
+                            f"({len(full_content)} chars) as assistant message"
+                        )
+                        break
+
+        if full_content:
             assistant_message = {
                 "id": message_id,  # Use pre-generated ID for consistency with metadata event
                 "role": "assistant",
@@ -920,7 +1067,7 @@ async def stream_openai_response_with_save(
                 )
                 logger.debug(
                     f"Saved {len(tool_calls)} tool calls and "
-                    f"{'assistant response' if accumulated_content else 'no text'} "
+                    f"{'assistant response' if full_content else 'no text'} "
                     f"to session {session_id}"
                 )
             except Exception as e:

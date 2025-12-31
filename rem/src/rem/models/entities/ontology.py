@@ -103,32 +103,30 @@ class Ontology(CoreModel):
             tags=["cv", "engineering"]
         )
 
-        # Direct-loaded: Medical knowledge base from git
-        disorder_ontology = Ontology(
-            name="panic-disorder",
-            uri="git://bwolfson-siggie/Siggy-MVP/ontology/disorders/anxiety/panic-disorder.md",
-            content="# Panic Disorder\\n\\nPanic disorder is characterized by...",
+        # Direct-loaded: Knowledge base from git
+        api_docs = Ontology(
+            name="rest-api-guide",
+            uri="git://example-org/docs/api/rest-api-guide.md",
+            content="# REST API Guide\\n\\nThis guide covers RESTful API design...",
             extracted_data={
-                "type": "disorder",
-                "category": "anxiety",
-                "icd10": "F41.0",
-                "dsm5_criteria": ["A", "B", "C", "D"],
+                "type": "documentation",
+                "category": "api",
+                "version": "2.0",
             },
-            tags=["disorder", "anxiety", "dsm5"]
+            tags=["api", "rest", "documentation"]
         )
 
-        # Direct-loaded: Clinical procedure from git
-        scid_node = Ontology(
-            name="scid-5-f1",
-            uri="git://bwolfson-siggie/Siggy-MVP/ontology/procedures/scid-5/module-f/scid-5-f1.md",
-            content="# scid-5-f1: Panic Attack Screening\\n\\n...",
+        # Direct-loaded: Technical spec from git
+        config_spec = Ontology(
+            name="config-schema",
+            uri="git://example-org/docs/specs/config-schema.md",
+            content="# Configuration Schema\\n\\nThis document defines...",
             extracted_data={
-                "type": "procedure",
-                "module": "F",
-                "section": "Panic Disorder",
-                "dsm5_criterion": "Panic Attack Specifier",
+                "type": "specification",
+                "format": "yaml",
+                "version": "1.0",
             },
-            tags=["scid-5", "procedure", "anxiety"]
+            tags=["config", "schema", "specification"]
         )
     """
 

@@ -188,21 +188,19 @@ class SessionMessageStore:
         Ensure session exists, creating it if necessary.
 
         Args:
-            session_id: Session identifier (maps to Session.name)
+            session_id: Session UUID from X-Session-Id header
             user_id: Optional user identifier
         """
         try:
-            # Check if session already exists by name
-            existing = await self._session_repo.find(
-                filters={"name": session_id},
-                limit=1,
-            )
+            # Check if session already exists by UUID
+            existing = await self._session_repo.get_by_id(session_id)
             if existing:
                 return  # Session already exists
 
-            # Create new session
+            # Create new session with the provided UUID as id
             session = Session(
-                name=session_id,
+                id=session_id,  # Use the provided UUID as session id
+                name=session_id,  # Default name to UUID, can be updated later
                 user_id=user_id or self.user_id,
                 tenant_id=self.user_id,  # tenant_id set to user_id for scoping
             )
@@ -321,7 +319,7 @@ class SessionMessageStore:
         Ensures session exists before storing messages.
 
         Args:
-            session_id: Session identifier (maps to Session.name)
+            session_id: Session UUID
             messages: List of messages to store
             user_id: Optional user identifier
             compress: Whether to compress messages (default: True)
