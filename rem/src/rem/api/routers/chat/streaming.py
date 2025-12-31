@@ -983,6 +983,9 @@ async def stream_openai_response_with_save(
                         delta = data["choices"][0].get("delta", {})
                         content = delta.get("content")
                         if content:
+                            # DEBUG: Check for [Calling markers in content
+                            if "[Calling" in content:
+                                logger.warning(f"DEBUG: Found [Calling in content chunk: {repr(content[:100])}")
                             accumulated_content.append(content)
             except (json.JSONDecodeError, KeyError, IndexError):
                 pass  # Skip non-JSON or malformed chunks
@@ -1022,7 +1025,10 @@ async def stream_openai_response_with_save(
 
         if accumulated_content:
             full_content = "".join(accumulated_content)
+            logger.warning(f"DEBUG: Using accumulated_content ({len(accumulated_content)} chunks, {len(full_content)} chars)")
+            logger.warning(f"DEBUG: First 200 chars: {repr(full_content[:200])}")
         else:
+            logger.warning("DEBUG: accumulated_content is empty, checking text_response fallback")
             # No direct text from TextPartDelta - check tool results for text_response
             # This handles multi-agent delegation where child agent output is the response
             for tool_call in tool_calls:

@@ -147,15 +147,25 @@ def _load_schema_from_database(schema_name: str, user_id: str) -> dict[str, Any]
             try:
                 await db.connect()
 
-                query = """
-                    SELECT spec FROM schemas
-                    WHERE LOWER(name) = LOWER($1)
-                    AND (user_id = $2 OR user_id = 'system' OR user_id IS NULL)
-                    LIMIT 1
-                """
-                logger.debug(f"Executing schema lookup: name={schema_name}, user_id={user_id}")
-
-                row = await db.fetchrow(query, schema_name, user_id)
+                # Query for public schemas (user_id IS NULL) and optionally user-specific
+                if user_id:
+                    query = """
+                        SELECT spec FROM schemas
+                        WHERE LOWER(name) = LOWER($1)
+                        AND (user_id = $2 OR user_id = 'system' OR user_id IS NULL)
+                        LIMIT 1
+                    """
+                    row = await db.fetchrow(query, schema_name, user_id)
+                else:
+                    # No user_id - only search public schemas
+                    query = """
+                        SELECT spec FROM schemas
+                        WHERE LOWER(name) = LOWER($1)
+                        AND (user_id = 'system' OR user_id IS NULL)
+                        LIMIT 1
+                    """
+                    row = await db.fetchrow(query, schema_name)
+                logger.debug(f"Executing schema lookup: name={schema_name}, user_id={user_id or 'public'}")
 
                 if row:
                     spec = row.get("spec")
@@ -193,17 +203,25 @@ def _load_schema_from_database(schema_name: str, user_id: str) -> dict[str, Any]
         try:
             await db.connect()
 
-            # Query schemas table directly by name
-            # Note: Schema name lookup is case-insensitive for user convenience
-            query = """
-                SELECT spec FROM schemas
-                WHERE LOWER(name) = LOWER($1)
-                AND (user_id = $2 OR user_id = 'system')
-                LIMIT 1
-            """
-            logger.debug(f"Executing schema lookup: name={schema_name}, user_id={user_id}")
-
-            row = await db.fetchrow(query, schema_name, user_id)
+            # Query for public schemas (user_id IS NULL) and optionally user-specific
+            if user_id:
+                query = """
+                    SELECT spec FROM schemas
+                    WHERE LOWER(name) = LOWER($1)
+                    AND (user_id = $2 OR user_id = 'system' OR user_id IS NULL)
+                    LIMIT 1
+                """
+                row = await db.fetchrow(query, schema_name, user_id)
+            else:
+                # No user_id - only search public schemas
+                query = """
+                    SELECT spec FROM schemas
+                    WHERE LOWER(name) = LOWER($1)
+                    AND (user_id = 'system' OR user_id IS NULL)
+                    LIMIT 1
+                """
+                row = await db.fetchrow(query, schema_name)
+            logger.debug(f"Executing schema lookup: name={schema_name}, user_id={user_id or 'public'}")
 
             if row:
                 spec = row.get("spec")
@@ -365,13 +383,14 @@ def load_agent_schema(
             logger.debug(f"Could not load from {search_path}: {e}")
             continue
 
-    # 5. Try database LOOKUP fallback (if enabled and user_id provided)
-    if enable_db_fallback and user_id:
+    # 5. Try database LOOKUP fallback (if enabled)
+    # Always search for public schemas (user_id IS NULL), plus user-specific if user_id provided
+    if enable_db_fallback:
         try:
-            logger.debug(f"Attempting database LOOKUP for schema: {base_name} (user_id={user_id})")
+            logger.debug(f"Attempting database LOOKUP for schema: {base_name} (user_id={user_id or 'public'})")
             db_schema = _load_schema_from_database(base_name, user_id)
             if db_schema:
-                logger.info(f"✅ Loaded schema from database: {base_name} (user_id={user_id})")
+                logger.info(f"✅ Loaded schema from database: {base_name}")
                 return db_schema
         except Exception as e:
             logger.debug(f"Database schema lookup failed: {e}")
@@ -387,9 +406,9 @@ def load_agent_schema(
     db_search_note = ""
     if enable_db_fallback:
         if user_id:
-            db_search_note = f"\n  - Database: LOOKUP '{base_name}' FROM schemas WHERE user_id='{user_id}' (no match)"
+            db_search_note = f"\n  - Database: LOOKUP '{base_name}' FROM schemas WHERE user_id IN ('{user_id}', 'system', NULL) (no match)"
         else:
-            db_search_note = "\n  - Database: (skipped - no user_id provided)"
+            db_search_note = f"\n  - Database: LOOKUP '{base_name}' FROM schemas WHERE user_id IN ('system', NULL) (no match)"
 
     raise FileNotFoundError(
         f"Schema not found: {schema_name_or_path}\n"
@@ -484,19 +503,19 @@ async def load_agent_schema_async(
         except Exception:
             continue
 
-    # Try database lookup
-    if user_id:
-        from rem.services.postgres import get_postgres_service
+    # Try database lookup - always search public schemas, plus user-specific if user_id provided
+    from rem.services.postgres import get_postgres_service
 
-        should_disconnect = False
-        if db is None:
-            db = get_postgres_service()
-            if db:
-                await db.connect()
-                should_disconnect = True
-
+    should_disconnect = False
+    if db is None:
+        db = get_postgres_service()
         if db:
-            try:
+            await db.connect()
+            should_disconnect = True
+
+    if db:
+        try:
+            if user_id:
                 query = """
                     SELECT spec FROM schemas
                     WHERE LOWER(name) = LOWER($1)
@@ -504,14 +523,23 @@ async def load_agent_schema_async(
                     LIMIT 1
                 """
                 row = await db.fetchrow(query, base_name, user_id)
-                if row:
-                    spec = row.get("spec")
-                    if spec and isinstance(spec, dict):
-                        logger.info(f"✅ Loaded schema from database: {base_name}")
-                        return spec
-            finally:
-                if should_disconnect:
-                    await db.disconnect()
+            else:
+                # No user_id - only search public schemas
+                query = """
+                    SELECT spec FROM schemas
+                    WHERE LOWER(name) = LOWER($1)
+                    AND (user_id = 'system' OR user_id IS NULL)
+                    LIMIT 1
+                """
+                row = await db.fetchrow(query, base_name)
+            if row:
+                spec = row.get("spec")
+                if spec and isinstance(spec, dict):
+                    logger.info(f"✅ Loaded schema from database: {base_name}")
+                    return spec
+        finally:
+            if should_disconnect:
+                await db.disconnect()
 
     # Not found
     raise FileNotFoundError(f"Schema not found: {schema_name_or_path}")

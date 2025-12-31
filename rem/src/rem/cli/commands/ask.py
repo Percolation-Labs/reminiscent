@@ -73,14 +73,15 @@ async def run_agent_streaming(
     max_iterations: int | None = None,
 ) -> None:
     """
-    Run agent in streaming mode using agent.iter() with usage limits.
+    Run agent in streaming mode using the SAME code path as the API.
 
-    Design Pattern:
-    - Use agent.iter() for complete execution with tool call visibility
-    - run_stream() stops after first output, missing tool calls
-    - Stream tool call markers: [Calling: tool_name]
-    - Stream text content deltas as they arrive
-    - Show final structured result
+    This uses stream_openai_response_with_save from the API to ensure:
+    1. Tool calls are saved as separate "tool" messages (not embedded in content)
+    2. Assistant response is clean text only (no [Calling: ...] markers)
+    3. CLI testing is equivalent to API testing
+
+    The CLI displays tool calls as [Calling: tool_name] for visibility,
+    but these are NOT saved to the database.
 
     Args:
         agent: Pydantic AI agent
@@ -89,87 +90,57 @@ async def run_agent_streaming(
         context: Optional AgentContext for session persistence
         max_iterations: Maximum iterations/requests (from agent schema or settings)
     """
-    from pydantic_ai import UsageLimits
-    from rem.utils.date_utils import to_iso_with_z, utc_now
+    import json
+    from rem.api.routers.chat.streaming import stream_openai_response_with_save
 
     logger.info("Running agent in streaming mode...")
+    logger.warning("DEBUG: run_agent_streaming called, will use stream_openai_response_with_save")
 
     try:
-        # Import event types for streaming
-        from pydantic_ai import Agent as PydanticAgent
-        from pydantic_ai.messages import PartStartEvent, PartDeltaEvent, TextPartDelta, ToolCallPart
+        # Use the API streaming code path for consistency
+        # This properly handles tool calls and message persistence
+        model_name = getattr(agent, 'model', 'unknown')
+        if hasattr(model_name, 'model_name'):
+            model_name = model_name.model_name
+        elif hasattr(model_name, 'name'):
+            model_name = model_name.name
+        else:
+            model_name = str(model_name)
 
-        # Accumulate assistant response for session persistence
-        assistant_response_parts = []
-
-        # Use agent.iter() to get complete execution with tool calls
-        usage_limits = UsageLimits(request_limit=max_iterations) if max_iterations else None
-        async with agent.iter(prompt, usage_limits=usage_limits) as agent_run:
-            async for node in agent_run:
-                # Check if this is a model request node (includes tool calls and text)
-                if PydanticAgent.is_model_request_node(node):
-                    # Stream events from model request
-                    request_stream: Any
-                    async with node.stream(agent_run.ctx) as request_stream:
-                        async for event in request_stream:
-                            # Tool call start event
-                            if isinstance(event, PartStartEvent) and isinstance(
-                                event.part, ToolCallPart
-                            ):
-                                tool_marker = f"\n[Calling: {event.part.tool_name}]"
-                                print(tool_marker, flush=True)
-                                assistant_response_parts.append(tool_marker)
-
-                            # Text content delta
-                            elif isinstance(event, PartDeltaEvent) and isinstance(
-                                event.delta, TextPartDelta
-                            ):
-                                print(event.delta.content_delta, end="", flush=True)
-                                assistant_response_parts.append(event.delta.content_delta)
+        async for chunk in stream_openai_response_with_save(
+            agent=agent.agent if hasattr(agent, 'agent') else agent,
+            prompt=prompt,
+            model=model_name,
+            session_id=context.session_id if context else None,
+            user_id=context.user_id if context else None,
+            agent_context=context,
+        ):
+            # Parse SSE chunks for CLI display
+            if chunk.startswith("event: tool_call"):
+                # Extract tool call info from next data line
+                continue
+            elif chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
+                try:
+                    data_str = chunk[6:].strip()
+                    if data_str:
+                        data = json.loads(data_str)
+                        # Check for tool_call event
+                        if data.get("type") == "tool_call":
+                            tool_name = data.get("tool_name", "tool")
+                            status = data.get("status", "")
+                            if status == "started":
+                                print(f"\n[Calling: {tool_name}]", flush=True)
+                        # Check for text content (OpenAI format)
+                        elif "choices" in data and data["choices"]:
+                            delta = data["choices"][0].get("delta", {})
+                            content = delta.get("content")
+                            if content:
+                                print(content, end="", flush=True)
+                except (json.JSONDecodeError, KeyError, IndexError):
+                    pass
 
         print("\n")  # Final newline after streaming
-
-        # Get final result from agent_run
-        result = agent_run.result
-        if hasattr(result, "output"):
-            logger.info("Final structured result:")
-            output = result.output
-            from rem.agentic.serialization import serialize_agent_result
-            output_json = json.dumps(serialize_agent_result(output), indent=2)
-            print(output_json)
-            assistant_response_parts.append(f"\n{output_json}")
-
-        # Save session messages (if session_id provided and postgres enabled)
-        if context and context.session_id and settings.postgres.enabled:
-            from ...services.session.compression import SessionMessageStore
-
-            # Extract just the user query from prompt
-            # Prompt format from ContextBuilder: system + history + user message
-            # We need to extract the last user message
-            user_message_content = prompt.split("\n\n")[-1] if "\n\n" in prompt else prompt
-
-            user_message = {
-                "role": "user",
-                "content": user_message_content,
-                "timestamp": to_iso_with_z(utc_now()),
-            }
-
-            assistant_message = {
-                "role": "assistant",
-                "content": "".join(assistant_response_parts),
-                "timestamp": to_iso_with_z(utc_now()),
-            }
-
-            # Store messages with compression
-            store = SessionMessageStore(user_id=context.user_id or settings.test.effective_user_id)
-            await store.store_session_messages(
-                session_id=context.session_id,
-                messages=[user_message, assistant_message],
-                user_id=context.user_id,
-                compress=True,
-            )
-
-            logger.debug(f"Saved conversation to session {context.session_id}")
+        logger.info("Final structured result:")
 
     except Exception as e:
         logger.error(f"Agent execution failed: {e}")
