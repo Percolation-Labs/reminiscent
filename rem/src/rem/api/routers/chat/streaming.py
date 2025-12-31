@@ -514,6 +514,8 @@ async def stream_openai_response(
                                     registered_recommended_action = result_content.get("recommended_action")
                                     # Extra fields
                                     registered_extra = result_content.get("extra")
+                                    # Capture responding agent from child agent metadata
+                                    responding_agent = result_content.get("agent_schema") or responding_agent
 
                                     logger.info(
                                         f"📊 Metadata registered: confidence={registered_confidence}, "
