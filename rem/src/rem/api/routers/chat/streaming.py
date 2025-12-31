@@ -438,11 +438,15 @@ async def stream_openai_response(
                                     if event_type == "child_tool_start":
                                         # Emit child tool start as a nested tool call
                                         child_tool_id = f"call_{uuid.uuid4().hex[:8]}"
+                                        # Ensure arguments is a dict or None (not empty string)
+                                        child_args = child_event.get("arguments")
+                                        if not isinstance(child_args, dict):
+                                            child_args = None
                                         yield format_sse_event(ToolCallEvent(
                                             tool_name=f"{child_agent}:{child_event.get('tool_name', 'tool')}",
                                             tool_id=child_tool_id,
                                             status="started",
-                                            arguments=child_event.get("arguments"),
+                                            arguments=child_args,
                                         ))
                                     elif event_type == "child_content":
                                         # Emit child content as assistant content
