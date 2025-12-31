@@ -185,7 +185,10 @@ async def test_child_agent_response_is_streamed(session_id):
             if delta.get("content"):
                 print(f"  [{i}] Content: {delta.get('content')[:50]}...")
         elif "type" in event:
-            print(f"  [{i}] Event type: {event.get('type')}")
+            event_type = event.get('type')
+            print(f"  [{i}] Event type: {event_type}")
+            if event_type == "error":
+                print(f"      ERROR: {event.get('message', event)}")
 
     # Verify we got content from the child agent
     assert content, "No content was streamed"

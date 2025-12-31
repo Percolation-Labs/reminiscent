@@ -594,15 +594,18 @@ async def read_resource(uri: str) -> dict[str, Any]:
     **Available Resources:**
 
     Agent Schemas:
-    • rem://schemas - List all agent schemas
-    • rem://schema/{name} - Get specific schema definition
-    • rem://schema/{name}/{version} - Get specific version
+    • rem://agents - List all available agent schemas
+    • rem://agents/{agent_name} - Get specific agent schema
+
+    Documentation:
+    • rem://schema/entities - Entity schemas (Resource, Message, User, File, Moment)
+    • rem://schema/query-types - REM query type documentation
 
     System Status:
     • rem://status - System health and statistics
 
     Args:
-        uri: Resource URI (e.g., "rem://schemas", "rem://schema/ask_rem")
+        uri: Resource URI (e.g., "rem://agents", "rem://agents/ask_rem")
 
     Returns:
         Dict with:
@@ -611,14 +614,11 @@ async def read_resource(uri: str) -> dict[str, Any]:
         - data: Resource data (format depends on resource type)
 
     Examples:
-        # List all schemas
-        read_resource(uri="rem://schemas")
+        # List all agents
+        read_resource(uri="rem://agents")
 
-        # Get specific schema
-        read_resource(uri="rem://schema/ask_rem")
-
-        # Get schema version
-        read_resource(uri="rem://schema/ask_rem/v1.0.0")
+        # Get specific agent
+        read_resource(uri="rem://agents/ask_rem")
 
         # Check system status
         read_resource(uri="rem://status")
@@ -1385,8 +1385,10 @@ async def ask_agent(
     logger.info(f"Invoking agent '{agent_name}' with prompt: {prompt[:100]}...")
 
     # Check if we have an event sink for streaming
-    event_sink = get_event_sink()
-    use_streaming = event_sink is not None
+    push_event = get_event_sink()
+    use_streaming = push_event is not None
+
+    streamed_content = ""  # Track if content was streamed
 
     try:
         # Set child context for nested tool calls
@@ -1412,12 +1414,12 @@ async def ask_agent(
                             if Agent.is_model_request_node(node):
                                 async with node.stream(agent_run.ctx) as request_stream:
                                     async for event in request_stream:
-                                        # Proxy tool call starts
+                                        # Proxy part starts
                                         if isinstance(event, PartStartEvent):
                                             from pydantic_ai.messages import ToolCallPart, TextPart
                                             if isinstance(event.part, ToolCallPart):
                                                 # Push tool start event to parent
-                                                await push_event({
+                                                await push_event.put({
                                                     "type": "child_tool_start",
                                                     "agent_name": agent_name,
                                                     "tool_name": event.part.tool_name,
@@ -1427,14 +1429,23 @@ async def ask_agent(
                                                     "tool_name": event.part.tool_name,
                                                     "index": event.index,
                                                 })
-                                        # Proxy text content to parent for real-time streaming
+                                            elif isinstance(event.part, TextPart):
+                                                # TextPart may have initial content
+                                                if event.part.content:
+                                                    accumulated_content.append(event.part.content)
+                                                    await push_event.put({
+                                                        "type": "child_content",
+                                                        "agent_name": agent_name,
+                                                        "content": event.part.content,
+                                                    })
+                                        # Proxy text content deltas to parent for real-time streaming
                                         elif isinstance(event, PartDeltaEvent):
                                             if hasattr(event, 'delta') and hasattr(event.delta, 'content_delta'):
                                                 content = event.delta.content_delta
                                                 if content:
                                                     accumulated_content.append(content)
                                                     # Push content chunk to parent for streaming
-                                                    await push_event({
+                                                    await push_event.put({
                                                         "type": "child_content",
                                                         "agent_name": agent_name,
                                                         "content": content,
@@ -1446,7 +1457,7 @@ async def ask_agent(
                                         if isinstance(tool_event, FunctionToolResultEvent):
                                             result_content = tool_event.result.content if hasattr(tool_event.result, 'content') else tool_event.result
                                             # Push tool result to parent
-                                            await push_event({
+                                            await push_event.put({
                                                 "type": "child_tool_result",
                                                 "agent_name": agent_name,
                                                 "result": result_content,
@@ -1484,13 +1495,19 @@ async def ask_agent(
 
     logger.info(f"Agent '{agent_name}' completed successfully")
 
-    return {
+    response = {
         "status": "success",
         "output": output,
-        "text_response": str(result.output),
         "agent_schema": agent_name,
         "input_text": input_text,
     }
+
+    # Only include text_response if content was NOT streamed
+    # When streaming, child_content events already delivered the content
+    if not use_streaming or not streamed_content:
+        response["text_response"] = str(result.output)
+
+    return response
 
 
 # =============================================================================

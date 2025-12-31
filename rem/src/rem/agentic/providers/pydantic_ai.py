@@ -732,7 +732,7 @@ async def create_agent(
     # the artificial MCP distinction between tools and resources
     #
     # Supports both concrete and template URIs:
-    # - Concrete: "rem://schemas" -> no-param tool
+    # - Concrete: "rem://agents" -> no-param tool
     # - Template: "patient-profile://field/{field_key}" -> tool with field_key param
     from ..mcp.tool_wrapper import create_resource_tool
 

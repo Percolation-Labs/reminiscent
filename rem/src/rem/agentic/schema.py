@@ -79,7 +79,7 @@ class MCPResourceReference(BaseModel):
 
     Example (exact URI):
         {
-            "uri": "rem://schemas",
+            "uri": "rem://agents",
             "name": "Agent Schemas",
             "description": "List all available agent schemas"
         }
@@ -96,7 +96,7 @@ class MCPResourceReference(BaseModel):
         default=None,
         description=(
             "Exact resource URI or URI with query parameters. "
-            "Examples: 'rem://schemas', 'rem://resources?category=drug.*'"
+            "Examples: 'rem://agents', 'rem://resources?category=drug.*'"
         )
     )
 

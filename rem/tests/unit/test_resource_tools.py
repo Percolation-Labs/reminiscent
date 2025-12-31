@@ -14,10 +14,10 @@ class TestCreateResourceTool:
 
     def test_concrete_uri_creates_no_param_tool(self):
         """Concrete URIs become tools with no parameters."""
-        tool = create_resource_tool("rem://schemas", "List all schemas")
+        tool = create_resource_tool("rem://agents", "List all agents")
 
-        assert tool.name == "get_rem_schemas"
-        assert "List all schemas" in (tool.description or "")
+        assert tool.name == "get_rem_agents"
+        assert "List all agents" in (tool.description or "")
 
     def test_template_uri_creates_parameterized_tool(self):
         """Template URIs become tools with extracted parameters."""
@@ -95,12 +95,12 @@ class TestResourceToolExecution:
             return_value={"schemas": ["agent1", "agent2"]}
         )
 
-        tool = create_resource_tool("rem://schemas", "List schemas")
+        tool = create_resource_tool("rem://agents", "List agents")
 
         # Get the wrapper function and call it
         result = await tool.function()
 
-        mock_load.assert_called_once_with("rem://schemas")
+        mock_load.assert_called_once_with("rem://agents")
         assert "agent1" in result
 
     async def test_template_tool_substitutes_params(self, mocker):

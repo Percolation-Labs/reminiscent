@@ -116,7 +116,7 @@ def create_resource_tool(uri: str, usage: str = "", mcp_server: Any = None) -> T
     the artificial MCP distinction between tools and resources.
 
     Supports both:
-    - Concrete URIs: "rem://schemas" -> tool with no parameters
+    - Concrete URIs: "rem://agents" -> tool with no parameters
     - Template URIs: "patient-profile://field/{field_key}" -> tool with field_key parameter
 
     Args:
@@ -131,7 +131,7 @@ def create_resource_tool(uri: str, usage: str = "", mcp_server: Any = None) -> T
 
     Example:
         # Concrete URI -> no-param tool
-        tool = create_resource_tool("rem://schemas", "List all agent schemas")
+        tool = create_resource_tool("rem://agents", "List all agent schemas")
 
         # Template URI -> parameterized tool
         tool = create_resource_tool("patient-profile://field/{field_key}", "Get field definition", mcp_server=mcp)

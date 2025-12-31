@@ -124,7 +124,7 @@ json_schema_extra:
 
   # Explicit resource declarations for reference data
   resources:
-    - uri: rem://schemas
+    - uri: rem://agents
       name: Agent Schemas List
       description: List all available agent schemas in the system
     - uri: rem://status

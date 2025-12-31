@@ -169,8 +169,6 @@ async def stream_openai_response(
     responding_agent: str | None = None
     # Track pending tool calls with full data for persistence
     # Maps tool_id -> {"tool_name": str, "tool_id": str, "arguments": dict}
-    # Track accumulated content for child event streaming
-    accumulated_content: list[str] = []
     pending_tool_data: dict[str, dict] = {}
 
     # Import context functions for multi-agent support
@@ -468,7 +466,6 @@ async def stream_openai_response(
                                                 ],
                                             )
                                             is_first_chunk = False
-                                            accumulated_content.append(content)
                                             yield f"data: {content_chunk.model_dump_json()}\n\n"
                                     elif event_type == "child_tool_result":
                                         # Emit child tool completion
