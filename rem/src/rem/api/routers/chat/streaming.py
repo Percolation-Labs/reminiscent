@@ -473,6 +473,17 @@ async def stream_openai_response(
                                     elif event_type == "child_tool_result":
                                         # Emit child tool completion
                                         result = child_event.get("result", {})
+                                        # Emit metadata event for child agent if it registered metadata
+                                        if isinstance(result, dict) and result.get("_metadata_event"):
+                                            responding_agent = result.get("agent_schema") or responding_agent
+                                            yield format_sse_event(MetadataEvent(
+                                                message_id=message_id,
+                                                session_id=session_id,
+                                                agent_schema=agent_schema,
+                                                responding_agent=responding_agent,
+                                                confidence=result.get("confidence"),
+                                                extra={"risk_level": result.get("risk_level")} if result.get("risk_level") else None,
+                                            ))
                                         yield format_sse_event(ToolCallEvent(
                                             tool_name=f"{child_agent}:tool",
                                             tool_id=f"call_{uuid.uuid4().hex[:8]}",
@@ -571,33 +582,45 @@ async def stream_openai_response(
                                     # Check for text_response in tool result (multi-agent delegation)
                                     # When an orchestrator delegates via ask_agent, the child agent's
                                     # text_response should be streamed as the parent's assistant content
+                                    #
+                                    # IMPORTANT: Only emit if we haven't already streamed via event sink!
+                                    # Child agents push child_content events during execution, which are
+                                    # already emitted above. Don't duplicate by emitting text_response again.
                                     if isinstance(result_content, dict) and result_content.get("text_response"):
                                         text_response = result_content["text_response"]
                                         if text_response and str(text_response).strip():
-                                            text_content = str(text_response)
-                                            token_count += len(text_content.split())
+                                            # Skip if already streamed via child_content events
+                                            if accumulated_content:
+                                                logger.debug(
+                                                    f"Skipping text_response from {tool_name} - already streamed "
+                                                    f"{len(accumulated_content)} chunks via event sink"
+                                                )
+                                            else:
+                                                # No event sink streaming happened - emit the full text_response
+                                                text_content = str(text_response)
+                                                token_count += len(text_content.split())
 
-                                            # Emit as streamed content (OpenAI-compatible format)
-                                            content_chunk = ChatCompletionStreamResponse(
-                                                id=request_id,
-                                                created=created_at,
-                                                model=model,
-                                                choices=[
-                                                    ChatCompletionStreamChoice(
-                                                        index=0,
-                                                        delta=ChatCompletionMessageDelta(
-                                                            role="assistant" if is_first_chunk else None,
-                                                            content=text_content,
-                                                        ),
-                                                        finish_reason=None,
-                                                    )
-                                                ],
-                                            )
-                                            is_first_chunk = False
-                                            yield f"data: {content_chunk.model_dump_json()}\n\n"
-                                            logger.debug(
-                                                f"Streamed text_response from {tool_name} ({len(text_content)} chars)"
-                                            )
+                                                # Emit as streamed content (OpenAI-compatible format)
+                                                content_chunk = ChatCompletionStreamResponse(
+                                                    id=request_id,
+                                                    created=created_at,
+                                                    model=model,
+                                                    choices=[
+                                                        ChatCompletionStreamChoice(
+                                                            index=0,
+                                                            delta=ChatCompletionMessageDelta(
+                                                                role="assistant" if is_first_chunk else None,
+                                                                content=text_content,
+                                                            ),
+                                                            finish_reason=None,
+                                                        )
+                                                    ],
+                                                )
+                                                is_first_chunk = False
+                                                yield f"data: {content_chunk.model_dump_json()}\n\n"
+                                                logger.debug(
+                                                    f"Streamed text_response from {tool_name} ({len(text_content)} chars)"
+                                                )
 
                                     # Normal tool completion - emit ToolCallEvent
                                     # For finalize_intake, send full result dict for frontend
