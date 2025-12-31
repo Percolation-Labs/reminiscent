@@ -71,6 +71,7 @@ async def run_agent_streaming(
     max_turns: int = 10,
     context: AgentContext | None = None,
     max_iterations: int | None = None,
+    user_message: str | None = None,
 ) -> None:
     """
     Run agent in streaming mode using the SAME code path as the API.
@@ -89,14 +90,22 @@ async def run_agent_streaming(
         max_turns: Maximum turns for agent execution (not used in current API)
         context: Optional AgentContext for session persistence
         max_iterations: Maximum iterations/requests (from agent schema or settings)
+        user_message: The user's original message (for database storage)
     """
     import json
-    from rem.api.routers.chat.streaming import stream_openai_response_with_save
+    from rem.api.routers.chat.streaming import stream_openai_response_with_save, save_user_message
 
     logger.info("Running agent in streaming mode...")
-    logger.warning("DEBUG: run_agent_streaming called, will use stream_openai_response_with_save")
 
     try:
+        # Save user message BEFORE streaming (same as API, using shared utility)
+        if context and context.session_id and user_message:
+            await save_user_message(
+                session_id=context.session_id,
+                user_id=context.user_id,
+                content=user_message,
+            )
+
         # Use the API streaming code path for consistency
         # This properly handles tool calls and message persistence
         model_name = getattr(agent, 'model', 'unknown')
@@ -520,7 +529,7 @@ async def _ask_async(
 
     # Run agent with session persistence
     if stream:
-        await run_agent_streaming(agent, prompt, max_turns=max_turns, context=context)
+        await run_agent_streaming(agent, prompt, max_turns=max_turns, context=context, user_message=query)
     else:
         await run_agent_non_streaming(
             agent,

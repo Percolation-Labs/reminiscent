@@ -164,7 +164,7 @@ from .models import (
     ChatCompletionUsage,
     ChatMessage,
 )
-from .streaming import stream_openai_response, stream_openai_response_with_save, stream_simulator_response
+from .streaming import stream_openai_response, stream_openai_response_with_save, stream_simulator_response, save_user_message
 
 router = APIRouter(prefix="/api/v1", tags=["chat"])
 
@@ -582,24 +582,13 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
 
     # Streaming mode
     if body.stream:
-        # Save user message before streaming starts
-        if settings.postgres.enabled and context.session_id:
-            user_message = {
-                "role": "user",
-                "content": body.messages[-1].content if body.messages else "",
-                "timestamp": datetime.utcnow().isoformat(),
-            }
-            try:
-                store = SessionMessageStore(user_id=context.user_id or settings.test.effective_user_id)
-                await store.store_session_messages(
-                    session_id=context.session_id,
-                    messages=[user_message],
-                    user_id=context.user_id,
-                    compress=False,  # User messages are typically short
-                )
-                logger.debug(f"Saved user message to session {context.session_id}")
-            except Exception as e:
-                logger.error(f"Failed to save user message: {e}", exc_info=True)
+        # Save user message before streaming starts (using shared utility)
+        if context.session_id:
+            await save_user_message(
+                session_id=context.session_id,
+                user_id=context.user_id,
+                content=body.messages[-1].content if body.messages else "",
+            )
 
         return StreamingResponse(
             stream_openai_response_with_save(

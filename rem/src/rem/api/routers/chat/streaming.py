@@ -907,6 +907,47 @@ async def stream_minimal_simulator(
         yield sse_string
 
 
+async def save_user_message(
+    session_id: str,
+    user_id: str | None,
+    content: str,
+) -> None:
+    """
+    Save user message to database before streaming.
+
+    This is a shared utility used by both API and CLI to ensure consistent
+    user message storage.
+
+    Args:
+        session_id: Session ID for message storage
+        user_id: User ID for message storage
+        content: The user's message content
+    """
+    from ....utils.date_utils import utc_now, to_iso
+    from ....services.session import SessionMessageStore
+    from ....settings import settings
+
+    if not settings.postgres.enabled or not session_id:
+        return
+
+    user_msg = {
+        "role": "user",
+        "content": content,
+        "timestamp": to_iso(utc_now()),
+    }
+    try:
+        store = SessionMessageStore(user_id=user_id or settings.test.effective_user_id)
+        await store.store_session_messages(
+            session_id=session_id,
+            messages=[user_msg],
+            user_id=user_id,
+            compress=False,
+        )
+        logger.debug(f"Saved user message to session {session_id}")
+    except Exception as e:
+        logger.error(f"Failed to save user message: {e}", exc_info=True)
+
+
 async def stream_openai_response_with_save(
     agent: Agent,
     prompt: str,
@@ -925,6 +966,9 @@ async def stream_openai_response_with_save(
 
     This accumulates all text content during streaming and saves it to the database
     after the stream completes.
+
+    NOTE: Call save_user_message() BEFORE this function to save the user's message.
+    This function only saves tool calls and assistant responses.
 
     Args:
         agent: Pydantic AI agent instance
