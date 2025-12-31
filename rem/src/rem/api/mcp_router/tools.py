@@ -1427,18 +1427,16 @@ async def ask_agent(
                                                     "tool_name": event.part.tool_name,
                                                     "index": event.index,
                                                 })
-                                        # Proxy text content
+                                        # Accumulate text content (don't push events - let parent relay text_response)
                                         elif isinstance(event, PartDeltaEvent):
                                             if hasattr(event, 'delta') and hasattr(event.delta, 'content_delta'):
                                                 content = event.delta.content_delta
                                                 if content:
                                                     accumulated_content.append(content)
-                                                    # Push content chunk to parent
-                                                    await push_event({
-                                                        "type": "child_content",
-                                                        "agent_name": agent_name,
-                                                        "content": content,
-                                                    })
+                                                    # NOTE: We no longer push child_content events here.
+                                                    # Instead, the complete response is returned as text_response
+                                                    # and the parent agent relays it. This avoids duplicate
+                                                    # emissions and keeps the parent in control of streaming.
 
                             elif Agent.is_call_tools_node(node):
                                 async with node.stream(agent_run.ctx) as tools_stream:
