@@ -165,6 +165,8 @@ async def stream_openai_response(
     pending_tool_completions: list[tuple[str, str]] = []
     # Track if metadata was registered via register_metadata tool
     metadata_registered = False
+    # Track which agent is actually responding (may be child agent if delegated)
+    responding_agent: str | None = None
     # Track pending tool calls with full data for persistence
     # Maps tool_id -> {"tool_name": str, "tool_id": str, "arguments": dict}
     # Track accumulated content for child event streaming
@@ -446,6 +448,8 @@ async def stream_openai_response(
                                         ))
                                     elif event_type == "child_content":
                                         # Emit child content as assistant content
+                                        # Track which child agent is responding
+                                        responding_agent = child_agent
                                         content = child_event.get("content", "")
                                         if content:
                                             content_chunk = ChatCompletionStreamResponse(
@@ -536,6 +540,7 @@ async def stream_openai_response(
                                         in_reply_to=in_reply_to,
                                         session_id=session_id,
                                         agent_schema=agent_schema,
+                                        responding_agent=responding_agent,
                                         session_name=registered_session_name,
                                         confidence=registered_confidence,
                                         sources=registered_sources,
@@ -714,6 +719,7 @@ async def stream_openai_response(
                 in_reply_to=in_reply_to,
                 session_id=session_id,
                 agent_schema=agent_schema,
+                responding_agent=responding_agent,
                 confidence=1.0,  # Default to 100% confidence
                 model_version=model,
                 latency_ms=latency_ms,

@@ -321,7 +321,11 @@ class MetadataEvent(BaseModel):
     # Agent info
     agent_schema: str | None = Field(
         default=None,
-        description="Name of the agent schema used for this response (e.g., 'rem', 'query-assistant')"
+        description="Name of the top-level agent schema (e.g., 'siggy', 'rem')"
+    )
+    responding_agent: str | None = Field(
+        default=None,
+        description="Name of the agent that produced this response (may differ from agent_schema if delegated via ask_agent)"
     )
 
     # Session info
