@@ -7,6 +7,10 @@ Tests the full session lifecycle:
 4. Session reloaded on next request
 5. Long messages compressed with REM LOOKUP keys
 6. Full messages retrieved via LOOKUP queries
+
+NOTE: These tests are marked with 'db_only' marker. They conflict with TestClient tests
+due to event loop lifecycle. Run these separately:
+    pytest tests/integration/test_session_management.py -v
 """
 
 import uuid
@@ -17,6 +21,16 @@ from rem.models.entities import Message
 from rem.services.postgres import get_postgres_service, Repository
 from rem.services.session import MessageCompressor, SessionMessageStore, reload_session
 from rem.settings import settings
+
+
+# Mark all tests in this module as requiring isolation from TestClient tests
+pytestmark = [
+    pytest.mark.db_only,
+    pytest.mark.skipif(
+        not settings.postgres.enabled,
+        reason="Database not enabled (POSTGRES__ENABLED=false)"
+    ),
+]
 
 
 # Sample conversation data

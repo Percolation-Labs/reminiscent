@@ -141,6 +141,10 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
+# Use session scope for both fixtures and tests to share one event loop
+# This prevents "Event loop is closed" errors with asyncpg connections
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
 addopts = [
     "-v",
     "--strict-markers",
@@ -152,6 +156,7 @@ markers = [
     "integration: marks tests as integration tests",
     "slow: marks tests as slow running",
     "llm: marks tests that make LLM API calls (expensive, skip by default with -m 'not llm')",
+    "db_only: marks tests that require database-only execution (no TestClient) due to event loop conflicts",
 ]
 
 [tool.ruff]
