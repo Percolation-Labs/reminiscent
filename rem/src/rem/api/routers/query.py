@@ -86,6 +86,8 @@ from fastapi import APIRouter, Header, HTTPException
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from .common import ErrorResponse
+
 from ...services.postgres import get_postgres_service
 from ...services.rem.service import RemService
 from ...services.rem.parser import RemQueryParser
@@ -213,7 +215,16 @@ class QueryResponse(BaseModel):
     )
 
 
-@router.post("/query", response_model=QueryResponse)
+@router.post(
+    "/query",
+    response_model=QueryResponse,
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid query or missing required fields"},
+        500: {"model": ErrorResponse, "description": "Query execution failed"},
+        501: {"model": ErrorResponse, "description": "Feature not yet implemented"},
+        503: {"model": ErrorResponse, "description": "Database not configured or unavailable"},
+    },
+)
 async def execute_query(
     request: QueryRequest,
     x_user_id: str | None = Header(default=None, description="User ID for query isolation (optional, uses default if not provided)"),

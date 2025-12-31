@@ -101,6 +101,8 @@ from authlib.integrations.starlette_client import OAuth
 from pydantic import BaseModel, EmailStr
 from loguru import logger
 
+from .common import ErrorResponse
+
 from ...settings import settings
 from ...services.postgres.service import PostgresService
 from ...services.user_service import UserService
@@ -159,7 +161,14 @@ class EmailVerifyRequest(BaseModel):
     code: str
 
 
-@router.post("/email/send-code")
+@router.post(
+    "/email/send-code",
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid request or email rejected"},
+        500: {"model": ErrorResponse, "description": "Failed to send login code"},
+        501: {"model": ErrorResponse, "description": "Email auth or database not configured"},
+    },
+)
 async def send_email_code(request: Request, body: EmailSendCodeRequest):
     """
     Send a login code to an email address.
@@ -221,7 +230,14 @@ async def send_email_code(request: Request, body: EmailSendCodeRequest):
         await db.disconnect()
 
 
-@router.post("/email/verify")
+@router.post(
+    "/email/verify",
+    responses={
+        400: {"model": ErrorResponse, "description": "Invalid or expired code"},
+        500: {"model": ErrorResponse, "description": "Failed to verify login code"},
+        501: {"model": ErrorResponse, "description": "Email auth or database not configured"},
+    },
+)
 async def verify_email_code(request: Request, body: EmailVerifyRequest):
     """
     Verify login code and create session with JWT tokens.
@@ -319,7 +335,13 @@ async def verify_email_code(request: Request, body: EmailVerifyRequest):
 # =============================================================================
 
 
-@router.get("/{provider}/login")
+@router.get(
+    "/{provider}/login",
+    responses={
+        400: {"model": ErrorResponse, "description": "Unknown OAuth provider"},
+        501: {"model": ErrorResponse, "description": "Authentication is disabled"},
+    },
+)
 async def login(provider: str, request: Request):
     """
     Initiate OAuth flow with provider.
@@ -361,7 +383,13 @@ async def login(provider: str, request: Request):
     return await client.authorize_redirect(request, redirect_uri)
 
 
-@router.get("/{provider}/callback")
+@router.get(
+    "/{provider}/callback",
+    responses={
+        400: {"model": ErrorResponse, "description": "Authentication failed or unknown provider"},
+        501: {"model": ErrorResponse, "description": "Authentication is disabled"},
+    },
+)
 async def callback(provider: str, request: Request):
     """
     OAuth callback endpoint.
@@ -498,7 +526,12 @@ async def logout(request: Request):
     return {"message": "Logged out successfully"}
 
 
-@router.get("/me")
+@router.get(
+    "/me",
+    responses={
+        401: {"model": ErrorResponse, "description": "Not authenticated"},
+    },
+)
 async def me(request: Request):
     """
     Get current user information from session or JWT.
@@ -536,7 +569,12 @@ class TokenRefreshRequest(BaseModel):
     refresh_token: str
 
 
-@router.post("/token/refresh")
+@router.post(
+    "/token/refresh",
+    responses={
+        401: {"model": ErrorResponse, "description": "Invalid or expired refresh token"},
+    },
+)
 async def refresh_token(body: TokenRefreshRequest):
     """
     Refresh access token using refresh token.
@@ -601,7 +639,12 @@ async def refresh_token(body: TokenRefreshRequest):
     return result
 
 
-@router.post("/token/verify")
+@router.post(
+    "/token/verify",
+    responses={
+        401: {"model": ErrorResponse, "description": "Missing, invalid, or expired token"},
+    },
+)
 async def verify_token(request: Request):
     """
     Verify an access token is valid.
@@ -665,7 +708,12 @@ def verify_dev_token(token: str) -> bool:
     return token == expected
 
 
-@router.get("/dev/token")
+@router.get(
+    "/dev/token",
+    responses={
+        401: {"model": ErrorResponse, "description": "Dev tokens not available in production"},
+    },
+)
 async def get_dev_token(request: Request):
     """
     Get a development token for testing (non-production only).
@@ -701,7 +749,13 @@ async def get_dev_token(request: Request):
     }
 
 
-@router.get("/dev/mock-code/{email}")
+@router.get(
+    "/dev/mock-code/{email}",
+    responses={
+        401: {"model": ErrorResponse, "description": "Mock codes not available in production"},
+        404: {"model": ErrorResponse, "description": "No code found for email"},
+    },
+)
 async def get_mock_code(email: str, request: Request):
     """
     Get the mock login code for testing (non-production only).

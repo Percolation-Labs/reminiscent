@@ -11,6 +11,7 @@ Endpoints:
 from fastapi import APIRouter, HTTPException, Request
 from loguru import logger
 
+from .common import ErrorResponse
 from ...settings import settings
 
 router = APIRouter(prefix="/api/dev", tags=["dev"])
@@ -45,7 +46,12 @@ def verify_dev_token(token: str) -> bool:
     return token == expected
 
 
-@router.get("/token")
+@router.get(
+    "/token",
+    responses={
+        401: {"model": ErrorResponse, "description": "Dev tokens not available in production"},
+    },
+)
 async def get_dev_token(request: Request):
     """
     Get a development token for testing (non-production only).

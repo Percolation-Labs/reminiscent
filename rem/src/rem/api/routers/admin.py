@@ -31,6 +31,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Background
 from loguru import logger
 from pydantic import BaseModel
 
+from .common import ErrorResponse
+
 from ..deps import require_admin
 from ...models.entities import Message, Session, SessionMode
 from ...services.postgres import Repository
@@ -103,7 +105,13 @@ class SystemStats(BaseModel):
 # =============================================================================
 
 
-@router.get("/users", response_model=UserListResponse)
+@router.get(
+    "/users",
+    response_model=UserListResponse,
+    responses={
+        503: {"model": ErrorResponse, "description": "Database not enabled"},
+    },
+)
 async def list_all_users(
     user: dict = Depends(require_admin),
     limit: int = Query(default=50, ge=1, le=100),
@@ -155,7 +163,13 @@ async def list_all_users(
     return UserListResponse(data=summaries, total=total, has_more=has_more)
 
 
-@router.get("/sessions", response_model=SessionListResponse)
+@router.get(
+    "/sessions",
+    response_model=SessionListResponse,
+    responses={
+        503: {"model": ErrorResponse, "description": "Database not enabled"},
+    },
+)
 async def list_all_sessions(
     user: dict = Depends(require_admin),
     user_id: str | None = Query(default=None, description="Filter by user ID"),
@@ -202,7 +216,13 @@ async def list_all_sessions(
     return SessionListResponse(data=sessions, total=total, has_more=has_more)
 
 
-@router.get("/messages", response_model=MessageListResponse)
+@router.get(
+    "/messages",
+    response_model=MessageListResponse,
+    responses={
+        503: {"model": ErrorResponse, "description": "Database not enabled"},
+    },
+)
 async def list_all_messages(
     user: dict = Depends(require_admin),
     user_id: str | None = Query(default=None, description="Filter by user ID"),
@@ -252,7 +272,13 @@ async def list_all_messages(
     return MessageListResponse(data=messages, total=total, has_more=has_more)
 
 
-@router.get("/stats", response_model=SystemStats)
+@router.get(
+    "/stats",
+    response_model=SystemStats,
+    responses={
+        503: {"model": ErrorResponse, "description": "Database not enabled"},
+    },
+)
 async def get_system_stats(
     user: dict = Depends(require_admin),
 ) -> SystemStats:

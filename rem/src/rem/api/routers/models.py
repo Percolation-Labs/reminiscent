@@ -15,6 +15,8 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from .common import ErrorResponse
+
 from rem.agentic.llm_provider_models import (
     ModelInfo,
     AVAILABLE_MODELS,
@@ -57,7 +59,13 @@ async def list_models() -> ModelsResponse:
     return ModelsResponse(data=AVAILABLE_MODELS)
 
 
-@router.get("/models/{model_id:path}", response_model=ModelInfo)
+@router.get(
+    "/models/{model_id:path}",
+    response_model=ModelInfo,
+    responses={
+        404: {"model": ErrorResponse, "description": "Model not found"},
+    },
+)
 async def get_model(model_id: str) -> ModelInfo:
     """
     Get information about a specific model.

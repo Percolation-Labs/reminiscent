@@ -24,6 +24,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from .common import ErrorResponse
+
 from ..deps import (
     get_current_user,
     get_user_filter,
@@ -147,7 +149,14 @@ class SessionsQueryResponse(BaseModel):
 # =============================================================================
 
 
-@router.get("/messages", response_model=MessageListResponse, tags=["messages"])
+@router.get(
+    "/messages",
+    response_model=MessageListResponse,
+    tags=["messages"],
+    responses={
+        503: {"model": ErrorResponse, "description": "Database not enabled"},
+    },
+)
 async def list_messages(
     request: Request,
     mine: bool = Query(default=False, description="Only show my messages (uses JWT identity)"),
@@ -260,7 +269,16 @@ async def list_messages(
     return MessageListResponse(data=messages, total=total, has_more=has_more)
 
 
-@router.get("/messages/{message_id}", response_model=Message, tags=["messages"])
+@router.get(
+    "/messages/{message_id}",
+    response_model=Message,
+    tags=["messages"],
+    responses={
+        403: {"model": ErrorResponse, "description": "Access denied: not owner"},
+        404: {"model": ErrorResponse, "description": "Message not found"},
+        503: {"model": ErrorResponse, "description": "Database not enabled"},
+    },
+)
 async def get_message(
     request: Request,
     message_id: str,
@@ -306,7 +324,14 @@ async def get_message(
 # =============================================================================
 
 
-@router.get("/sessions", response_model=SessionsQueryResponse, tags=["sessions"])
+@router.get(
+    "/sessions",
+    response_model=SessionsQueryResponse,
+    tags=["sessions"],
+    responses={
+        503: {"model": ErrorResponse, "description": "Database not enabled or connection failed"},
+    },
+)
 async def list_sessions(
     request: Request,
     user_id: str | None = Query(default=None, description="Filter by user ID (admin only for cross-user)"),
@@ -419,7 +444,15 @@ async def list_sessions(
     )
 
 
-@router.post("/sessions", response_model=Session, status_code=201, tags=["sessions"])
+@router.post(
+    "/sessions",
+    response_model=Session,
+    status_code=201,
+    tags=["sessions"],
+    responses={
+        503: {"model": ErrorResponse, "description": "Database not enabled"},
+    },
+)
 async def create_session(
     request_body: SessionCreateRequest,
     user: dict = Depends(require_admin),
@@ -471,7 +504,16 @@ async def create_session(
     return result  # type: ignore
 
 
-@router.get("/sessions/{session_id}", response_model=Session, tags=["sessions"])
+@router.get(
+    "/sessions/{session_id}",
+    response_model=Session,
+    tags=["sessions"],
+    responses={
+        403: {"model": ErrorResponse, "description": "Access denied: not owner"},
+        404: {"model": ErrorResponse, "description": "Session not found"},
+        503: {"model": ErrorResponse, "description": "Database not enabled"},
+    },
+)
 async def get_session(
     request: Request,
     session_id: str,
@@ -512,7 +554,16 @@ async def get_session(
     return session
 
 
-@router.put("/sessions/{session_id}", response_model=Session, tags=["sessions"])
+@router.put(
+    "/sessions/{session_id}",
+    response_model=Session,
+    tags=["sessions"],
+    responses={
+        403: {"model": ErrorResponse, "description": "Access denied: not owner"},
+        404: {"model": ErrorResponse, "description": "Session not found"},
+        503: {"model": ErrorResponse, "description": "Database not enabled"},
+    },
+)
 async def update_session(
     request: Request,
     session_id: str,

@@ -63,6 +63,8 @@ from fastapi import APIRouter, Header, HTTPException, Request, Response
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from .common import ErrorResponse
+
 from ..deps import get_user_id_from_request
 from ...models.entities import Feedback
 from ...services.postgres import Repository
@@ -121,7 +123,13 @@ class FeedbackResponse(BaseModel):
 # =============================================================================
 
 
-@router.post("/messages/feedback", response_model=FeedbackResponse)
+@router.post(
+    "/messages/feedback",
+    response_model=FeedbackResponse,
+    responses={
+        503: {"model": ErrorResponse, "description": "Database not enabled"},
+    },
+)
 async def submit_feedback(
     request: Request,
     response: Response,

@@ -18,6 +18,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from .common import ErrorResponse
+
 from ..deps import get_current_user, require_auth
 from ...models.entities import (
     Message,
@@ -83,6 +85,10 @@ class ShareSessionResponse(BaseModel):
     response_model=ShareSessionResponse,
     status_code=201,
     tags=["sessions"],
+    responses={
+        400: {"model": ErrorResponse, "description": "Session already shared with this user"},
+        503: {"model": ErrorResponse, "description": "Database not enabled"},
+    },
 )
 async def share_session(
     request: Request,
@@ -175,6 +181,10 @@ async def share_session(
     "/sessions/{session_id}/share/{shared_with_user_id}",
     status_code=200,
     tags=["sessions"],
+    responses={
+        404: {"model": ErrorResponse, "description": "Share not found"},
+        503: {"model": ErrorResponse, "description": "Database not enabled"},
+    },
 )
 async def remove_session_share(
     request: Request,
@@ -250,6 +260,9 @@ async def remove_session_share(
     "/sessions/shared-with-me",
     response_model=SharedWithMeResponse,
     tags=["sessions"],
+    responses={
+        503: {"model": ErrorResponse, "description": "Database not enabled"},
+    },
 )
 async def get_shared_with_me(
     request: Request,
@@ -328,6 +341,9 @@ async def get_shared_with_me(
     "/sessions/shared-with-me/{owner_user_id}/messages",
     response_model=SharedMessagesResponse,
     tags=["sessions"],
+    responses={
+        503: {"model": ErrorResponse, "description": "Database not enabled"},
+    },
 )
 async def get_shared_messages(
     request: Request,
