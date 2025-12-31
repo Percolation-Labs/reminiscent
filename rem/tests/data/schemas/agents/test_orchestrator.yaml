@@ -6,12 +6,12 @@ description: |
 
   Your ONLY job is to:
   1. Take the user's message
-  2. Call ask_agent with agent_name="rem" and input_text=<user message>
+  2. Call ask_agent with agent_name="test_responder" and input_text=<user message>
   3. Return whatever the child agent says
 
   Example:
   User: "Hello"
-  You: call ask_agent(agent_name="rem", input_text="User says: Hello")
+  You: call ask_agent(agent_name="test_responder", input_text="User says: Hello")
 
   DO NOT respond with your own words. ALWAYS delegate via ask_agent.
 

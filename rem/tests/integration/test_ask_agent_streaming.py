@@ -168,6 +168,92 @@ class TestAskAgentStreaming:
         print("\n✅ All assertions passed!")
 
 
+    @pytest.mark.asyncio
+    async def test_multi_turn_saves_all_assistant_messages(self, session_id, user_id):
+        """
+        Test that multiple turns in the same session each save their own assistant message.
+
+        This catches bugs like accumulated_content not being properly scoped per-turn.
+        The bug would manifest as: turn 1 works, turn 2+ fails with NameError.
+
+        Expected: N turns -> N assistant messages saved to database.
+        """
+        if not settings.postgres.enabled:
+            pytest.skip("Postgres not enabled - set POSTGRES__CONNECTION_STRING")
+
+        # Use a simple responder agent (no delegation) to isolate multi-turn streaming
+        schema_path = TEST_SCHEMAS_DIR / "test_responder.yaml"
+        schema = load_agent_schema(str(schema_path))
+        assert schema is not None, "test_responder schema not found"
+
+        test_model = "openai:gpt-4.1"
+
+        # Create context
+        context = AgentContext(
+            user_id=user_id,
+            session_id=session_id,
+            tenant_id=user_id,
+            default_model=test_model,
+        )
+
+        # Create agent
+        agent = await create_agent(context=context, agent_schema_override=schema, model_override=test_model)
+
+        # Run 3 turns - simple conversation
+        turn_prompts = [
+            "Hello, how are you?",
+            "Tell me something interesting",
+            "Thanks for chatting!",
+        ]
+
+        for turn_num, prompt in enumerate(turn_prompts, 1):
+            print(f"\n=== TURN {turn_num}: {prompt[:50]}... ===")
+
+            chunks = []
+            async for chunk in stream_openai_response_with_save(
+                agent=agent,
+                prompt=prompt,
+                model=test_model,
+                session_id=session_id,
+                user_id=user_id,
+                agent_context=context,
+            ):
+                chunks.append(chunk)
+
+            print(f"Turn {turn_num} completed: {len(chunks)} chunks")
+
+            # Verify no errors occurred (would manifest as fewer chunks or exception)
+            assert len(chunks) > 0, f"Turn {turn_num} produced no chunks"
+
+        # Load saved messages from database
+        store = SessionMessageStore(user_id=user_id)
+        messages = await store.load_session_messages(session_id=session_id, user_id=user_id)
+
+        # Categorize saved messages
+        assistant_msgs = [m for m in messages if m.get("role") == "assistant"]
+
+        print(f"\n=== MULTI-TURN RESULTS ===")
+        print(f"Total messages: {len(messages)}")
+        print(f"Assistant messages: {len(assistant_msgs)}")
+
+        for i, msg in enumerate(assistant_msgs):
+            content = str(msg.get("content", ""))[:60]
+            print(f"  Assistant {i+1}: {content}...")
+
+        # CRITICAL ASSERTION: Each turn should save an assistant message
+        assert len(assistant_msgs) == len(turn_prompts), (
+            f"Expected {len(turn_prompts)} assistant messages for {len(turn_prompts)} turns, "
+            f"got {len(assistant_msgs)}. This indicates a per-turn scoping bug."
+        )
+
+        # Verify each assistant message has content
+        for i, msg in enumerate(assistant_msgs):
+            content = msg.get("content", "")
+            assert len(content) > 0, f"Assistant message {i+1} has no content"
+
+        print("\n✅ Multi-turn test passed!")
+
+
 if __name__ == "__main__":
     # Run directly for quick testing
     async def main():
@@ -177,5 +263,10 @@ if __name__ == "__main__":
 
         print("Running test_ask_agent_streams_and_saves...")
         await test.test_ask_agent_streams_and_saves(session_id, user_id)
+
+        print("\n" + "="*60)
+        print("Running test_multi_turn_saves_all_assistant_messages...")
+        session_id = str(uuid.uuid4())  # Fresh session
+        await test.test_multi_turn_saves_all_assistant_messages(session_id, user_id)
 
     asyncio.run(main())
