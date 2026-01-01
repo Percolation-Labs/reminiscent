@@ -25,6 +25,7 @@ from .sql_builder import (
     build_select,
     build_upsert,
 )
+from ...settings import settings
 
 if TYPE_CHECKING:
     from .service import PostgresService
