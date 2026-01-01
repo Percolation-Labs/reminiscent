@@ -28,7 +28,7 @@ echo ""
 echo ">>> Running integration tests (skipping LLM tests and files with event loop conflicts)..."
 # Skip LLM-marked tests which require real API calls
 # Ignore files that have TestClient + asyncpg event loop conflicts
-POSTGRES__CONNECTION_STRING="postgresql://rem:rem@localhost:5433/rem" \
+POSTGRES__CONNECTION_STRING="postgresql://rem:rem@localhost:5051/rem" \
     uv run pytest tests/integration/ -v -m "not llm" \
     --ignore=tests/integration/test_session_management.py \
     --ignore=tests/integration/test_api_endpoints.py \

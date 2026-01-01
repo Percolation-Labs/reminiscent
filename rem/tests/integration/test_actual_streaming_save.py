@@ -44,8 +44,8 @@ class TestActualStreamingSave:
             saved_messages.extend(messages)
         
         with patch("rem.api.routers.chat.streaming.stream_openai_response", mock_stream_response):
-            # Patch where SessionMessageStore is imported from
-            with patch("rem.services.session.SessionMessageStore") as MockStore:
+            # Patch where SessionMessageStore is USED (not where it's defined)
+            with patch("rem.api.routers.chat.streaming.SessionMessageStore") as MockStore:
                 mock_store_instance = MagicMock()
                 mock_store_instance.store_session_messages = AsyncMock(side_effect=mock_store_messages)
                 MockStore.return_value = mock_store_instance
