@@ -25,33 +25,22 @@ from .sql_builder import (
     build_select,
     build_upsert,
 )
-from ...settings import settings
 
 if TYPE_CHECKING:
     from .service import PostgresService
 
 
-# Singleton instance for connection pool reuse
-_postgres_instance: "PostgresService | None" = None
-
-
 def get_postgres_service() -> "PostgresService | None":
     """
-    Get PostgresService singleton instance.
+    Get PostgresService singleton from parent module.
 
-    Returns None if Postgres is disabled.
-    Uses singleton pattern to prevent connection pool exhaustion.
+    Uses late import to avoid circular import issues.
+    Previously had a separate _postgres_instance here which caused
+    "pool not connected" errors due to duplicate connection pools.
     """
-    global _postgres_instance
-
-    if not settings.postgres.enabled:
-        return None
-
-    if _postgres_instance is None:
-        from .service import PostgresService
-        _postgres_instance = PostgresService()
-
-    return _postgres_instance
+    # Late import to avoid circular import (repository.py imported by __init__.py)
+    from rem.services.postgres import get_postgres_service as _get_singleton
+    return _get_singleton()
 
 T = TypeVar("T", bound=BaseModel)
 

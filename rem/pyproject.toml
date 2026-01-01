@@ -1,6 +1,6 @@
 [project]
 name = "remdb"
-version = "0.3.228"
+version = "0.3.230"
 description = "Resources Entities Moments - Bio-inspired memory system for agentic AI workloads"
 readme = "README.md"
 authors = [
@@ -24,7 +24,7 @@ dependencies = [
     "pydantic>=2.10.0",
     "pydantic-settings>=2.6.0",
     # Agentic AI
-    "pydantic-ai>=0.0.14",
+    "pydantic-ai>=1.0.0",
     # API Framework
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
@@ -140,15 +140,11 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-asyncio_mode = "auto"
-# Use session scope for both fixtures and tests to share one event loop
-# This prevents "Event loop is closed" errors with asyncpg connections
-asyncio_default_fixture_loop_scope = "session"
-asyncio_default_test_loop_scope = "session"
 addopts = [
     "-v",
     "--strict-markers",
     "--tb=short",
+    "--asyncio-mode=auto",
 ]
 markers = [
     "asyncio: marks tests as async",
