@@ -31,6 +31,7 @@ Example usage:
 """
 
 import json
+import re
 from typing import Any
 
 from loguru import logger
@@ -44,6 +45,15 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
+
+
+def _sanitize_tool_name(tool_name: str) -> str:
+    """Sanitize tool name for OpenAI API compatibility.
+
+    OpenAI requires tool names to match pattern: ^[a-zA-Z0-9_-]+$
+    This replaces invalid characters (like colons) with underscores.
+    """
+    return re.sub(r'[^a-zA-Z0-9_-]', '_', tool_name)
 
 
 def session_to_pydantic_messages(
@@ -122,16 +132,19 @@ def session_to_pydantic_messages(
                 else:
                     tool_result = tool_content
 
+                # Sanitize tool name for OpenAI API compatibility
+                safe_tool_name = _sanitize_tool_name(tool_name)
+
                 # Synthesize ToolCallPart (what the model "called")
                 tool_calls.append(ToolCallPart(
-                    tool_name=tool_name,
+                    tool_name=safe_tool_name,
                     args=tool_arguments if tool_arguments else {},
                     tool_call_id=tool_call_id,
                 ))
 
                 # Create ToolReturnPart (the actual result)
                 tool_returns.append(ToolReturnPart(
-                    tool_name=tool_name,
+                    tool_name=safe_tool_name,
                     content=tool_result,
                     tool_call_id=tool_call_id,
                 ))
@@ -178,10 +191,13 @@ def session_to_pydantic_messages(
             else:
                 tool_result = tool_content
 
+            # Sanitize tool name for OpenAI API compatibility
+            safe_tool_name = _sanitize_tool_name(tool_name)
+
             # Synthesize the tool call (ModelResponse with ToolCallPart)
             messages.append(ModelResponse(
                 parts=[ToolCallPart(
-                    tool_name=tool_name,
+                    tool_name=safe_tool_name,
                     args=tool_arguments if tool_arguments else {},
                     tool_call_id=tool_call_id,
                 )],
@@ -191,7 +207,7 @@ def session_to_pydantic_messages(
             # Add the tool return (ModelRequest with ToolReturnPart)
             messages.append(ModelRequest(
                 parts=[ToolReturnPart(
-                    tool_name=tool_name,
+                    tool_name=safe_tool_name,
                     content=tool_result,
                     tool_call_id=tool_call_id,
                 )]
