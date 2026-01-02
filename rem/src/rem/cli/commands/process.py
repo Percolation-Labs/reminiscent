@@ -193,7 +193,15 @@ def process_ingest(
             try:
                 # Read file content
                 content = file_path.read_text(encoding="utf-8")
-                entity_key = file_path.stem  # filename without extension
+
+                # Generate entity key from filename
+                # Special case: README files use parent directory as section name
+                if file_path.stem.lower() == "readme":
+                    # Use parent directory name, e.g., "drugs" for drugs/README.md
+                    # For nested paths like disorders/anxiety/README.md -> "anxiety"
+                    entity_key = file_path.parent.name
+                else:
+                    entity_key = file_path.stem  # filename without extension
 
                 # Build entity based on table
                 entity_data = {

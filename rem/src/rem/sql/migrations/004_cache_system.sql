@@ -64,9 +64,11 @@ CREATE OR REPLACE FUNCTION rem_kv_store_empty(p_user_id TEXT)
 RETURNS BOOLEAN AS $$
 BEGIN
     -- Quick existence check - very fast with index
+    -- Check for user-specific OR public (NULL user_id) entries
+    -- This ensures self-healing triggers correctly for public ontologies
     RETURN NOT EXISTS (
         SELECT 1 FROM kv_store
-        WHERE user_id = p_user_id
+        WHERE user_id = p_user_id OR user_id IS NULL
         LIMIT 1
     );
 END;
