@@ -21,6 +21,7 @@ class SessionMode(str, Enum):
 
     NORMAL = "normal"
     EVALUATION = "evaluation"
+    CLONE = "clone"
 
 
 class Session(CoreModel):

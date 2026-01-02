@@ -331,6 +331,123 @@ async def _show_async(
             raise
 
 
+@session.command("clone")
+@click.argument("session_id")
+@click.option("--to-turn", "-t", type=int, help="Clone up to turn N (counting user messages only)")
+@click.option("--name", "-n", help="Name/description for the cloned session")
+def clone(session_id: str, to_turn: int | None, name: str | None):
+    """
+    Clone a session for exploring alternate conversation paths.
+
+    SESSION_ID: The session ID to clone.
+
+    Examples:
+
+        # Clone entire session
+        rem session clone 810f1f2d-d5a1-4c02-83b6-67040b47f7c0
+
+        # Clone up to turn 3 (first 3 user messages and their responses)
+        rem session clone 810f1f2d-d5a1-4c02-83b6-67040b47f7c0 --to-turn 3
+
+        # Clone with a descriptive name
+        rem session clone 810f1f2d-d5a1-4c02-83b6-67040b47f7c0 -n "Alternate anxiety path"
+    """
+    asyncio.run(_clone_async(session_id, to_turn, name))
+
+
+async def _clone_async(
+    session_id: str,
+    to_turn: int | None,
+    name: str | None,
+):
+    """Async implementation of clone command."""
+    from uuid import uuid4
+    from ...models.entities.session import Session, SessionMode
+
+    pg = get_postgres_service()
+    if not pg:
+        logger.error("PostgreSQL not available")
+        return
+
+    await pg.connect()
+
+    try:
+        # Load original session messages
+        message_repo = Repository(Message, "messages", db=pg)
+        messages = await message_repo.find(
+            filters={"session_id": session_id},
+            order_by="created_at ASC",
+            limit=1000,
+        )
+
+        if not messages:
+            logger.error(f"No messages found for session {session_id}")
+            return
+
+        # If --to-turn specified, filter messages up to that turn (user messages)
+        if to_turn is not None:
+            user_count = 0
+            cutoff_idx = len(messages)
+            for idx, msg in enumerate(messages):
+                if msg.message_type == "user":
+                    user_count += 1
+                    if user_count > to_turn:
+                        cutoff_idx = idx
+                        break
+            messages = messages[:cutoff_idx]
+            logger.info(f"Cloning {len(messages)} messages (up to turn {to_turn})")
+        else:
+            logger.info(f"Cloning all {len(messages)} messages")
+
+        # Generate new session ID
+        new_session_id = str(uuid4())
+
+        # Get user_id and tenant_id from first message
+        first_msg = messages[0]
+        user_id = first_msg.user_id
+        tenant_id = first_msg.tenant_id or "default"
+
+        # Create Session record with CLONE mode and lineage
+        session_repo = Repository(Session, "sessions", db=pg)
+        new_session = Session(
+            id=uuid4(),
+            name=name or f"Clone of {session_id[:8]}",
+            mode=SessionMode.CLONE,
+            original_trace_id=session_id,
+            description=f"Cloned from session {session_id}" + (f" at turn {to_turn}" if to_turn else ""),
+            user_id=user_id,
+            tenant_id=tenant_id,
+            message_count=len(messages),
+        )
+        await session_repo.upsert(new_session)
+        logger.info(f"Created session record: {new_session.id}")
+
+        # Copy messages with new session_id
+        for msg in messages:
+            new_msg = Message(
+                id=uuid4(),
+                user_id=msg.user_id,
+                tenant_id=msg.tenant_id,
+                session_id=str(new_session.id),
+                content=msg.content,
+                message_type=msg.message_type,
+                metadata=msg.metadata,
+            )
+            await message_repo.upsert(new_msg)
+
+        click.echo(f"\n✅ Cloned session successfully!")
+        click.echo(f"   Original: {session_id}")
+        click.echo(f"   New:      {new_session.id}")
+        click.echo(f"   Messages: {len(messages)}")
+        if to_turn:
+            click.echo(f"   Turns:    {to_turn}")
+        click.echo(f"\nContinue this session with:")
+        click.echo(f"   rem ask <agent> \"your message\" --session-id {new_session.id}")
+
+    finally:
+        await pg.disconnect()
+
+
 def register_command(cli_group):
     """Register the session command group."""
     cli_group.add_command(session)
