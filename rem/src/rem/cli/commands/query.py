@@ -15,6 +15,7 @@ import asyncio
 import json
 from pathlib import Path
 from typing import List
+import re
 
 import click
 from loguru import logger
@@ -30,6 +31,7 @@ from loguru import logger
     default=None,
     help="Path to SQL file to execute",
 )
+
 @click.option(
     "--param",
     "-p",
@@ -37,8 +39,10 @@ from loguru import logger
     multiple=True,
     help="Query parameter (can be repeated for multiple params)",
 )
+
 @click.option("--no-json", is_flag=True, default=False, help="Print rows as Python dicts instead of JSON")
-def query_command(sql: str | None, sql_file: Path | None, params: List[str], no_json: bool):
+@click.option("--user-id", "-u", default=None, help="Scope query to a specific user (applies to resources table)")
+def query_command(sql: str | None, sql_file: Path | None, params: List[str], no_json: bool, user_id: str | None):
     """
     Execute a SQL query against the REM PostgreSQL database.
 
@@ -55,14 +59,15 @@ def query_command(sql: str | None, sql_file: Path | None, params: List[str], no_
         sql_text = sql  # type: ignore[assignment]
 
     try:
-        asyncio.run(_run_query_async(sql_text, list(params), not no_json))
+        # Pass mutable params list so _run_query_async can append the user_id parameter
+        asyncio.run(_run_query_async(sql_text, list(params), not no_json, user_id))
     except Exception as exc:  # pragma: no cover - CLI error path
         logger.exception("Query failed")
         click.secho(f"✗ Query failed: {exc}", fg="red")
         raise click.Abort()
 
 
-async def _run_query_async(sql_text: str, params: List[str], as_json: bool) -> None:
+async def _run_query_async(sql_text: str, params: List[str], as_json: bool, user_id: str | None) -> None:
     """
     Async implementation: connect to Postgres service, run the query, print results.
     """
@@ -80,6 +85,35 @@ async def _run_query_async(sql_text: str, params: List[str], as_json: bool) -> N
     await db.connect()
 
     try:
+        # If user_id provided and query touches the resources table, inject a parameterized filter
+        if user_id:
+            lower_sql = sql_text.lower()
+            if re.search(r'\bfrom\s+resources\b', lower_sql) or re.search(r'\bjoin\s+resources\b', lower_sql):
+                # Insert filter before ORDER BY / LIMIT / OFFSET / GROUP BY / HAVING if present
+                tail_pattern = re.compile(r'\b(order\s+by|limit|offset|group\s+by|having)\b', re.IGNORECASE)
+                m = tail_pattern.search(sql_text)
+                if m:
+                    main = sql_text[: m.start()]
+                    tail = sql_text[m.start() :]
+                else:
+                    main = sql_text
+                    tail = ""
+
+                placeholder = f"${len(params) + 1}"
+                if re.search(r'\bwhere\b', main, re.IGNORECASE):
+                    main = main + f" AND user_id = {placeholder}"
+                else:
+                    main = main + f" WHERE user_id = {placeholder}"
+
+                sql_text = main + tail
+                params.append(user_id)
+
+        # Print the final SQL and params that will be executed
+        click.secho("SQL to execute:", fg="yellow")
+        click.echo(sql_text)
+        if params:
+            click.echo(f"Params: {params}")
+
         # Decide whether this is a read (SELECT) or non-read statement.
         # For simplicity, use db.fetch which works for queries returning rows.
         rows = await db.fetch(sql_text, *params)
