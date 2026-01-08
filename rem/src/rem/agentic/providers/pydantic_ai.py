@@ -357,6 +357,9 @@ def _convert_properties_to_prompt(properties: dict[str, Any]) -> str:
     definition into natural language guidance that informs the agent
     about the expected response structure without forcing JSON output.
 
+    IMPORTANT: The 'answer' field is the OUTPUT to the user. All other
+    fields are INTERNAL tracking that should NOT appear in the output.
+
     Args:
         properties: JSON Schema properties dict
 
@@ -368,45 +371,59 @@ def _convert_properties_to_prompt(properties: dict[str, Any]) -> str:
             "answer": {"type": "string", "description": "The answer"},
             "confidence": {"type": "number", "description": "Confidence 0-1"}
         }
-        # Returns:
-        # "## Response Structure\n\nYour response should include:\n- **answer**: The answer\n..."
+        # Returns guidance that only answer should be output
     """
     if not properties:
         return ""
 
-    lines = ["## Response Guidelines", "", "Your response should address the following elements:"]
+    # Separate answer (output) from other fields (internal tracking)
+    answer_field = properties.get("answer")
+    internal_fields = {k: v for k, v in properties.items() if k != "answer"}
 
-    for field_name, field_def in properties.items():
-        field_type = field_def.get("type", "any")
-        description = field_def.get("description", "")
+    lines = ["## Internal Thinking Structure (DO NOT output these labels)"]
+    lines.append("")
+    lines.append("Use this structure to organize your thinking, but ONLY output the answer content:")
+    lines.append("")
 
-        # Format based on type
-        if field_type == "array":
-            type_hint = "list"
-        elif field_type == "number":
-            type_hint = "number"
-            # Include min/max if specified
-            if "minimum" in field_def or "maximum" in field_def:
-                min_val = field_def.get("minimum", "")
-                max_val = field_def.get("maximum", "")
-                if min_val != "" and max_val != "":
-                    type_hint = f"number ({min_val}-{max_val})"
-        elif field_type == "boolean":
-            type_hint = "yes/no"
-        else:
-            type_hint = field_type
+    # If there's an answer field, emphasize it's the ONLY output
+    if answer_field:
+        answer_desc = answer_field.get("description", "Your response")
+        lines.append(f"**OUTPUT (what the user sees):** {answer_desc}")
+        lines.append("")
 
-        # Build field description
-        field_line = f"- **{field_name}**"
-        if type_hint and type_hint != "string":
-            field_line += f" ({type_hint})"
-        if description:
-            field_line += f": {description}"
+    # Document internal fields for tracking/thinking
+    if internal_fields:
+        lines.append("**INTERNAL (for your tracking only - do NOT include in output):**")
+        for field_name, field_def in internal_fields.items():
+            field_type = field_def.get("type", "any")
+            description = field_def.get("description", "")
 
-        lines.append(field_line)
+            # Format based on type
+            if field_type == "array":
+                type_hint = "list"
+            elif field_type == "number":
+                type_hint = "number"
+                if "minimum" in field_def or "maximum" in field_def:
+                    min_val = field_def.get("minimum", "")
+                    max_val = field_def.get("maximum", "")
+                    if min_val != "" and max_val != "":
+                        type_hint = f"number ({min_val}-{max_val})"
+            elif field_type == "boolean":
+                type_hint = "yes/no"
+            else:
+                type_hint = field_type
+
+            field_line = f"- {field_name}"
+            if type_hint and type_hint != "string":
+                field_line += f" ({type_hint})"
+            if description:
+                field_line += f": {description}"
+
+            lines.append(field_line)
 
     lines.append("")
-    lines.append("Respond naturally in prose, addressing these elements where relevant.")
+    lines.append("⚠️ CRITICAL: Your response must be ONLY the conversational answer text.")
+    lines.append("Do NOT output field names like 'answer:' or 'diverge_output:' - just the response itself.")
 
     return "\n".join(lines)
 

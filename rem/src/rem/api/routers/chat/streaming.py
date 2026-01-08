@@ -48,7 +48,7 @@ from pydantic_ai.messages import (
     ToolCallPart,
 )
 
-from .child_streaming import drain_child_events
+from .child_streaming import drain_child_events, stream_with_child_events, process_child_event
 from .streaming_utils import (
     StreamingState,
     build_content_chunk,
@@ -314,18 +314,32 @@ async def stream_openai_response(
                 # ============================================
                 elif Agent.is_call_tools_node(node):
                     async with node.stream(agent_run.ctx) as tools_stream:
-                        async for tool_event in tools_stream:
-                            # Drain child agent events (from ask_agent tool)
-                            # This sets state.child_content_streamed if child content was received
-                            async for chunk in drain_child_events(
-                                event_sink=child_event_sink,
-                                state=state,
-                                session_id=session_id,
-                                user_id=effective_user_id,
-                                message_id=message_id,
-                                agent_schema=agent_schema,
-                            ):
-                                yield chunk
+                        # Use concurrent multiplexer to handle both tool events
+                        # and child agent events as they arrive (fixes streaming lag)
+                        async for event_type, event_data in stream_with_child_events(
+                            tools_stream=tools_stream,
+                            child_event_sink=child_event_sink,
+                            state=state,
+                            session_id=session_id,
+                            user_id=effective_user_id,
+                            message_id=message_id,
+                            agent_schema=agent_schema,
+                        ):
+                            # Handle child events (streamed from ask_agent)
+                            if event_type == "child":
+                                async for chunk in process_child_event(
+                                    child_event=event_data,
+                                    state=state,
+                                    session_id=session_id,
+                                    user_id=effective_user_id,
+                                    message_id=message_id,
+                                    agent_schema=agent_schema,
+                                ):
+                                    yield chunk
+                                continue
+
+                            # Handle tool events
+                            tool_event = event_data
 
                             # Tool result event - emit completion
                             if isinstance(tool_event, FunctionToolResultEvent):

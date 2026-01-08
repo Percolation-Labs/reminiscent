@@ -1414,17 +1414,12 @@ async def ask_agent(
                             if Agent.is_model_request_node(node):
                                 async with node.stream(agent_run.ctx) as request_stream:
                                     async for event in request_stream:
-                                        # Proxy part starts
+                                        # Proxy part starts (text content only - tool calls handled in is_call_tools_node)
                                         if isinstance(event, PartStartEvent):
                                             from pydantic_ai.messages import ToolCallPart, TextPart
                                             if isinstance(event.part, ToolCallPart):
-                                                # Push tool start event to parent
-                                                await push_event.put({
-                                                    "type": "child_tool_start",
-                                                    "agent_name": agent_name,
-                                                    "tool_name": event.part.tool_name,
-                                                    "arguments": event.part.args if hasattr(event.part, 'args') else None,
-                                                })
+                                                # Track tool call for later (args are incomplete at PartStartEvent)
+                                                # Full args come via FunctionToolCallEvent in is_call_tools_node
                                                 child_tool_calls.append({
                                                     "tool_name": event.part.tool_name,
                                                     "index": event.index,
@@ -1454,7 +1449,28 @@ async def ask_agent(
                             elif Agent.is_call_tools_node(node):
                                 async with node.stream(agent_run.ctx) as tools_stream:
                                     async for tool_event in tools_stream:
-                                        if isinstance(tool_event, FunctionToolResultEvent):
+                                        # FunctionToolCallEvent fires when tool call is parsed
+                                        # with complete arguments (before execution)
+                                        if isinstance(tool_event, FunctionToolCallEvent):
+                                            # Get full arguments from completed tool call
+                                            tool_args = None
+                                            if hasattr(tool_event, 'part') and hasattr(tool_event.part, 'args'):
+                                                raw_args = tool_event.part.args
+                                                if isinstance(raw_args, str):
+                                                    try:
+                                                        tool_args = json.loads(raw_args)
+                                                    except json.JSONDecodeError:
+                                                        tool_args = {"raw": raw_args}
+                                                elif isinstance(raw_args, dict):
+                                                    tool_args = raw_args
+                                            # Push tool start with full arguments
+                                            await push_event.put({
+                                                "type": "child_tool_start",
+                                                "agent_name": agent_name,
+                                                "tool_name": tool_event.part.tool_name if hasattr(tool_event, 'part') else "unknown",
+                                                "arguments": tool_args,
+                                            })
+                                        elif isinstance(tool_event, FunctionToolResultEvent):
                                             result_content = tool_event.result.content if hasattr(tool_event.result, 'content') else tool_event.result
                                             # Push tool result to parent
                                             await push_event.put({

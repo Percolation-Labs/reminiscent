@@ -249,73 +249,65 @@ def load_agent_schema(
     enable_db_fallback: bool = True,
 ) -> dict[str, Any]:
     """
-    Load agent schema from YAML file with unified search logic and caching.
+    Load agent schema with database-first priority for hot-reloading support.
 
     Schema names are case-invariant - "Rem", "rem", "REM" all resolve to the same schema.
 
-    Filesystem schemas are cached indefinitely (immutable, versioned with code).
-    Database schemas (future) will be cached with TTL for invalidation.
+    **IMPORTANT**: Database is checked FIRST (before filesystem) to enable hot-reloading
+    of schema updates without redeploying the application. This allows operators to
+    update schemas via `rem process ingest` and have changes take effect immediately.
 
     Handles path resolution automatically:
-    - "rem" → searches schemas/agents/rem.yaml (top-level)
-    - "moment-builder" → searches schemas/agents/core/moment-builder.yaml
-    - "contract-analyzer" → searches schemas/agents/examples/contract-analyzer.yaml
-    - "core/moment-builder" → searches schemas/agents/core/moment-builder.yaml
-    - "/absolute/path.yaml" → loads directly
-    - "relative/path.yaml" → loads relative to cwd
+    - "rem" → searches database, then schemas/agents/rem.yaml
+    - "moment-builder" → searches database, then schemas/agents/core/moment-builder.yaml
+    - "/absolute/path.yaml" → loads directly from filesystem (exact paths skip database)
+    - "relative/path.yaml" → loads relative to cwd (exact paths skip database)
 
     Search Order:
-    1. Check cache (if use_cache=True and schema found in FS cache)
-    2. Exact path if it exists (absolute or relative)
-    3. Custom paths from rem.register_schema_path() and SCHEMA__PATHS env var
-    4. Package resources: schemas/agents/{name}.yaml (top-level)
-    5. Package resources: schemas/agents/core/{name}.yaml
-    6. Package resources: schemas/agents/examples/{name}.yaml
-    7. Package resources: schemas/evaluators/{name}.yaml
-    8. Package resources: schemas/{name}.yaml
-    9. Database LOOKUP: schemas table (if enable_db_fallback=True and user_id provided)
+    1. Exact path if it exists (absolute or relative) - skips database
+    2. Database LOOKUP: schemas table (if enable_db_fallback=True) - PREFERRED for hot-reload
+    3. Check cache (if use_cache=True and schema found in FS cache)
+    4. Custom paths from rem.register_schema_path() and SCHEMA__PATHS env var
+    5. Package resources: schemas/agents/{name}.yaml (top-level)
+    6. Package resources: schemas/agents/core/{name}.yaml
+    7. Package resources: schemas/agents/examples/{name}.yaml
+    8. Package resources: schemas/evaluators/{name}.yaml
+    9. Package resources: schemas/{name}.yaml
 
     Args:
         schema_name_or_path: Schema name or file path (case-invariant for names)
             Examples: "rem-query-agent", "Contract-Analyzer", "./my-schema.yaml"
         use_cache: If True, uses in-memory cache for filesystem schemas
-        user_id: User ID for database schema lookup (required for DB fallback)
-        enable_db_fallback: If True, falls back to database LOOKUP when file not found
+        user_id: User ID for database schema lookup
+        enable_db_fallback: If True, checks database FIRST for schema (default: True)
 
     Returns:
         Agent schema as dictionary
 
     Raises:
-        FileNotFoundError: If schema not found in any search location (filesystem + database)
+        FileNotFoundError: If schema not found in any search location (database + filesystem)
         yaml.YAMLError: If schema file is invalid YAML
 
     Examples:
-        >>> # Load by short name (cached after first load) - case invariant
-        >>> schema = load_agent_schema("Contract-Analyzer")  # same as "contract-analyzer"
+        >>> # Load by short name - checks database first for hot-reload support
+        >>> schema = load_agent_schema("Contract-Analyzer")  # case invariant
         >>>
-        >>> # Load from custom path (not cached - custom paths may change)
+        >>> # Load from custom path (skips database - exact paths always use filesystem)
         >>> schema = load_agent_schema("./my-agent.yaml")
         >>>
-        >>> # Load evaluator schema (cached)
+        >>> # Load evaluator schema
         >>> schema = load_agent_schema("rem-lookup-correctness")
-        >>>
-        >>> # Load custom user schema from database (case invariant)
-        >>> schema = load_agent_schema("My-Agent", user_id="user-123")  # same as "my-agent"
     """
     # Normalize the name for cache key (lowercase for case-invariant lookups)
     cache_key = str(schema_name_or_path).replace('agents/', '').replace('schemas/', '').replace('evaluators/', '').replace('core/', '').replace('examples/', '').lower()
     if cache_key.endswith('.yaml') or cache_key.endswith('.yml'):
         cache_key = cache_key.rsplit('.', 1)[0]
 
-    # Check cache first (only for package resources, not custom paths)
     path = Path(schema_name_or_path)
     is_custom_path = (path.exists() and path.is_file()) or '/' in str(schema_name_or_path) or '\\' in str(schema_name_or_path)
 
-    if use_cache and not is_custom_path and cache_key in _fs_schema_cache:
-        logger.debug(f"Loading schema from cache: {cache_key}")
-        return _fs_schema_cache[cache_key]
-
     # 1. Try exact path first (absolute or relative to cwd) - must be a file, not directory
+    # Exact paths skip database lookup (explicit file reference)
     if path.exists() and path.is_file():
         logger.debug(f"Loading schema from exact path: {path}")
         with open(path, "r") as f:
@@ -324,10 +316,28 @@ def load_agent_schema(
         # Don't cache custom paths (they may change)
         return cast(dict[str, Any], schema)
 
-    # 2. Normalize name for package resource search (lowercase)
+    # 2. Normalize name for lookups (lowercase)
     base_name = cache_key
 
-    # 3. Try custom schema paths (from registry + SCHEMA__PATHS env var + auto-detected)
+    # 3. Try database FIRST (if enabled) - enables hot-reload without redeploy
+    # Database schemas are NOT cached to ensure hot-reload works immediately
+    if enable_db_fallback and not is_custom_path:
+        try:
+            logger.debug(f"Checking database for schema: {base_name} (user_id={user_id or 'public'})")
+            db_schema = _load_schema_from_database(base_name, user_id)
+            if db_schema:
+                logger.info(f"✅ Loaded schema from database: {base_name}")
+                return db_schema
+        except Exception as e:
+            logger.debug(f"Database schema lookup failed: {e}")
+            # Fall through to filesystem search
+
+    # 4. Check filesystem cache (only for package resources, not custom paths)
+    if use_cache and not is_custom_path and cache_key in _fs_schema_cache:
+        logger.debug(f"Loading schema from cache: {cache_key}")
+        return _fs_schema_cache[cache_key]
+
+    # 5. Try custom schema paths (from registry + SCHEMA__PATHS env var + auto-detected)
     from ..registry import get_schema_paths
 
     custom_paths = get_schema_paths()
@@ -358,7 +368,7 @@ def load_agent_schema(
                 # Don't cache custom paths (they may change during development)
                 return cast(dict[str, Any], schema)
 
-    # 4. Try package resources with standard search paths
+    # 6. Try package resources with standard search paths
     for search_pattern in SCHEMA_SEARCH_PATHS:
         search_path = search_pattern.format(name=base_name)
 
@@ -383,20 +393,7 @@ def load_agent_schema(
             logger.debug(f"Could not load from {search_path}: {e}")
             continue
 
-    # 5. Try database LOOKUP fallback (if enabled)
-    # Always search for public schemas (user_id IS NULL), plus user-specific if user_id provided
-    if enable_db_fallback:
-        try:
-            logger.debug(f"Attempting database LOOKUP for schema: {base_name} (user_id={user_id or 'public'})")
-            db_schema = _load_schema_from_database(base_name, user_id)
-            if db_schema:
-                logger.info(f"✅ Loaded schema from database: {base_name}")
-                return db_schema
-        except Exception as e:
-            logger.debug(f"Database schema lookup failed: {e}")
-            # Fall through to error below
-
-    # 6. Schema not found in any location
+    # 7. Schema not found in any location
     searched_paths = [pattern.format(name=base_name) for pattern in SCHEMA_SEARCH_PATHS]
 
     custom_paths_note = ""
@@ -424,18 +421,21 @@ async def load_agent_schema_async(
     schema_name_or_path: str,
     user_id: str | None = None,
     db=None,
+    enable_db_fallback: bool = True,
 ) -> dict[str, Any]:
     """
-    Async version of load_agent_schema for use in async contexts.
+    Async version of load_agent_schema with database-first priority.
 
     Schema names are case-invariant - "MyAgent", "myagent", "MYAGENT" all resolve to the same schema.
 
-    This version accepts an existing database connection to avoid creating new connections.
+    **IMPORTANT**: Database is checked FIRST (before filesystem) to enable hot-reloading
+    of schema updates without redeploying the application.
 
     Args:
         schema_name_or_path: Schema name or file path (case-invariant for names)
         user_id: User ID for database schema lookup
         db: Optional existing PostgresService connection (if None, will create one)
+        enable_db_fallback: If True, checks database FIRST for schema (default: True)
 
     Returns:
         Agent schema as dictionary
@@ -443,7 +443,6 @@ async def load_agent_schema_async(
     Raises:
         FileNotFoundError: If schema not found
     """
-    # First try filesystem search (sync operations are fine)
     path = Path(schema_name_or_path)
 
     # Normalize the name for cache key (lowercase for case-invariant lookups)
@@ -453,12 +452,7 @@ async def load_agent_schema_async(
 
     is_custom_path = (path.exists() and path.is_file()) or '/' in str(schema_name_or_path) or '\\' in str(schema_name_or_path)
 
-    # Check cache
-    if not is_custom_path and cache_key in _fs_schema_cache:
-        logger.debug(f"Loading schema from cache: {cache_key}")
-        return _fs_schema_cache[cache_key]
-
-    # Try exact path (must be a file, not directory)
+    # 1. Try exact path first (skips database - explicit file reference)
     if path.exists() and path.is_file():
         logger.debug(f"Loading schema from exact path: {path}")
         with open(path, "r") as f:
@@ -467,7 +461,51 @@ async def load_agent_schema_async(
 
     base_name = cache_key
 
-    # Try custom schema paths (from registry + SCHEMA__PATHS env var + auto-detected)
+    # 2. Try database FIRST (if enabled) - enables hot-reload without redeploy
+    if enable_db_fallback and not is_custom_path:
+        from rem.services.postgres import get_postgres_service
+
+        should_disconnect = False
+        if db is None:
+            db = get_postgres_service()
+            if db:
+                await db.connect()
+                should_disconnect = True
+
+        if db:
+            try:
+                if user_id:
+                    query = """
+                        SELECT spec FROM schemas
+                        WHERE LOWER(name) = LOWER($1)
+                        AND (user_id = $2 OR user_id = 'system' OR user_id IS NULL)
+                        LIMIT 1
+                    """
+                    row = await db.fetchrow(query, base_name, user_id)
+                else:
+                    # No user_id - only search public schemas
+                    query = """
+                        SELECT spec FROM schemas
+                        WHERE LOWER(name) = LOWER($1)
+                        AND (user_id = 'system' OR user_id IS NULL)
+                        LIMIT 1
+                    """
+                    row = await db.fetchrow(query, base_name)
+                if row:
+                    spec = row.get("spec")
+                    if spec and isinstance(spec, dict):
+                        logger.info(f"✅ Loaded schema from database: {base_name}")
+                        return spec
+            finally:
+                if should_disconnect:
+                    await db.disconnect()
+
+    # 3. Check filesystem cache
+    if not is_custom_path and cache_key in _fs_schema_cache:
+        logger.debug(f"Loading schema from cache: {cache_key}")
+        return _fs_schema_cache[cache_key]
+
+    # 4. Try custom schema paths (from registry + SCHEMA__PATHS env var + auto-detected)
     from ..registry import get_schema_paths
     custom_paths = get_schema_paths()
 
@@ -489,7 +527,7 @@ async def load_agent_schema_async(
                     schema = yaml.safe_load(f)
                 return cast(dict[str, Any], schema)
 
-    # Try package resources
+    # 5. Try package resources
     for search_pattern in SCHEMA_SEARCH_PATHS:
         search_path = search_pattern.format(name=base_name)
         try:
@@ -502,44 +540,6 @@ async def load_agent_schema_async(
                 return cast(dict[str, Any], schema)
         except Exception:
             continue
-
-    # Try database lookup - always search public schemas, plus user-specific if user_id provided
-    from rem.services.postgres import get_postgres_service
-
-    should_disconnect = False
-    if db is None:
-        db = get_postgres_service()
-        if db:
-            await db.connect()
-            should_disconnect = True
-
-    if db:
-        try:
-            if user_id:
-                query = """
-                    SELECT spec FROM schemas
-                    WHERE LOWER(name) = LOWER($1)
-                    AND (user_id = $2 OR user_id = 'system' OR user_id IS NULL)
-                    LIMIT 1
-                """
-                row = await db.fetchrow(query, base_name, user_id)
-            else:
-                # No user_id - only search public schemas
-                query = """
-                    SELECT spec FROM schemas
-                    WHERE LOWER(name) = LOWER($1)
-                    AND (user_id = 'system' OR user_id IS NULL)
-                    LIMIT 1
-                """
-                row = await db.fetchrow(query, base_name)
-            if row:
-                spec = row.get("spec")
-                if spec and isinstance(spec, dict):
-                    logger.info(f"✅ Loaded schema from database: {base_name}")
-                    return spec
-        finally:
-            if should_disconnect:
-                await db.disconnect()
 
     # Not found
     raise FileNotFoundError(f"Schema not found: {schema_name_or_path}")

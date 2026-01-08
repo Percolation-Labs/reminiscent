@@ -3,11 +3,12 @@ Authentication Router.
 
 Supports multiple authentication methods:
 1. Email (passwordless): POST /api/auth/email/send-code, POST /api/auth/email/verify
-2. OAuth (Google, Microsoft): GET /api/auth/{provider}/login, GET /api/auth/{provider}/callback
+2. Pre-approved codes: POST /api/auth/email/verify (with pre-approved code, no send-code needed)
+3. OAuth (Google, Microsoft): GET /api/auth/{provider}/login, GET /api/auth/{provider}/callback
 
 Endpoints:
 - POST /api/auth/email/send-code     - Send login code to email
-- POST /api/auth/email/verify        - Verify code and create session
+- POST /api/auth/email/verify        - Verify code and create session (supports pre-approved codes)
 - GET  /api/auth/{provider}/login    - Initiate OAuth flow
 - GET  /api/auth/{provider}/callback - OAuth callback
 - POST /api/auth/logout              - Clear session
@@ -15,8 +16,38 @@ Endpoints:
 
 Supported providers:
 - email: Passwordless email login
+- preapproved: Pre-approved codes (bypass email, set via AUTH__PREAPPROVED_CODES)
 - google: Google OAuth 2.0 / OIDC
 - microsoft: Microsoft Entra ID OIDC
+
+=============================================================================
+Pre-Approved Code Authentication
+=============================================================================
+
+Pre-approved codes allow login without email verification. Useful for:
+- Demo accounts
+- Testing
+- Beta access codes
+- Admin provisioning
+
+Configuration:
+    AUTH__PREAPPROVED_CODES=A12345,A67890,B11111,B22222
+
+Code prefixes:
+    A = Admin role (e.g., A12345, AADMIN1)
+    B = Normal user role (e.g., B11111, BUSER1)
+
+Flow:
+    1. User enters email + pre-approved code (no send-code step needed)
+    2. POST /api/auth/email/verify with email and code
+    3. System validates code against AUTH__PREAPPROVED_CODES
+    4. Creates user if not exists, sets role based on prefix
+    5. Returns JWT tokens (same as email auth)
+
+Example:
+    curl -X POST http://localhost:8000/api/auth/email/verify \
+      -H "Content-Type: application/json" \
+      -d '{"email": "admin@example.com", "code": "A12345"}'
 
 =============================================================================
 Email Authentication Access Control
@@ -242,6 +273,12 @@ async def verify_email_code(request: Request, body: EmailVerifyRequest):
     """
     Verify login code and create session with JWT tokens.
 
+    Supports two authentication methods:
+    1. Pre-approved codes: Codes from AUTH__PREAPPROVED_CODES bypass email verification.
+       - A prefix = admin role, B prefix = normal user role
+       - Creates user if not exists, logs in directly
+    2. Email verification: Standard 6-digit code sent via email
+
     Args:
         request: FastAPI request
         body: EmailVerifyRequest with email and code
@@ -249,12 +286,6 @@ async def verify_email_code(request: Request, body: EmailVerifyRequest):
     Returns:
         Success status with user info and JWT tokens
     """
-    if not settings.email.is_configured:
-        raise HTTPException(
-            status_code=501,
-            detail="Email authentication is not configured"
-        )
-
     if not settings.postgres.enabled:
         raise HTTPException(
             status_code=501,
@@ -264,6 +295,79 @@ async def verify_email_code(request: Request, body: EmailVerifyRequest):
     db = PostgresService()
     try:
         await db.connect()
+        user_service = UserService(db)
+
+        # Check for pre-approved code first
+        preapproved = settings.auth.check_preapproved_code(body.code)
+        if preapproved:
+            logger.info(f"Pre-approved code login attempt for {body.email} (role: {preapproved['role']})")
+
+            # Get or create user with pre-approved role
+            user_id = email_to_user_id(body.email)
+            user_entity = await user_service.get_user_by_id(user_id)
+
+            if not user_entity:
+                # Create new user with role from pre-approved code
+                user_entity = await user_service.get_or_create_user(
+                    email=body.email,
+                    name=body.email.split("@")[0],
+                    tenant_id="default",
+                )
+                # Update role based on pre-approved code prefix
+                user_entity.role = preapproved["role"]
+                from ...services.postgres.repository import Repository
+                from ...models.entities.user import User
+                user_repo = Repository(User, "users", db=db)
+                await user_repo.upsert(user_entity)
+                logger.info(f"Created user {body.email} with role={preapproved['role']} via pre-approved code")
+            else:
+                # Update existing user's role if admin code used
+                if preapproved["role"] == "admin" and user_entity.role != "admin":
+                    user_entity.role = "admin"
+                    from ...services.postgres.repository import Repository
+                    from ...models.entities.user import User
+                    user_repo = Repository(User, "users", db=db)
+                    await user_repo.upsert(user_entity)
+                    logger.info(f"Upgraded user {body.email} to admin via pre-approved code")
+
+            # Build user dict for session/JWT
+            user_dict = {
+                "id": str(user_entity.id),
+                "email": body.email,
+                "email_verified": True,
+                "name": user_entity.name or body.email.split("@")[0],
+                "provider": "preapproved",
+                "tenant_id": user_entity.tenant_id or "default",
+                "tier": user_entity.tier.value if user_entity.tier else "free",
+                "role": user_entity.role or preapproved["role"],
+                "roles": [user_entity.role or preapproved["role"]],
+            }
+
+            # Generate JWT tokens
+            jwt_service = get_jwt_service()
+            tokens = jwt_service.create_tokens(user_dict)
+
+            # Store user in session
+            request.session["user"] = user_dict
+
+            logger.info(f"User authenticated via pre-approved code: {body.email} (role: {user_dict['role']})")
+
+            return {
+                "success": True,
+                "message": "Successfully authenticated with pre-approved code!",
+                "user": user_dict,
+                "access_token": tokens["access_token"],
+                "refresh_token": tokens["refresh_token"],
+                "token_type": tokens["token_type"],
+                "expires_in": tokens["expires_in"],
+            }
+
+        # Standard email verification flow
+        if not settings.email.is_configured:
+            raise HTTPException(
+                status_code=501,
+                detail="Email authentication is not configured"
+            )
 
         # Initialize email auth provider
         email_auth = EmailAuthProvider()
@@ -288,7 +392,6 @@ async def verify_email_code(request: Request, body: EmailVerifyRequest):
         )
 
         # Fetch actual user data from database to get role/tier
-        user_service = UserService(db)
         try:
             user_entity = await user_service.get_user_by_id(result.user_id)
             if user_entity:

@@ -1,5 +1,5 @@
 # =============================================================================
-# PostgreSQL 18 with pgvector + pg_net Extensions
+# PostgreSQL 18 with pgvector + pg_net + pg_cron Extensions
 # =============================================================================
 #
 # Traditional approach: Full PostgreSQL image with extension pre-installed.
@@ -68,6 +68,14 @@ RUN git clone --depth 1 https://github.com/supabase/pg_net.git \
     && cd / \
     && rm -rf /tmp/pg_net
 
+# Clone and build pg_cron for scheduled jobs
+RUN git clone --depth 1 https://github.com/citusdata/pg_cron.git \
+    && cd pg_cron \
+    && make \
+    && make install \
+    && cd / \
+    && rm -rf /tmp/pg_cron
+
 # Clean up build dependencies to reduce image size
 # IMPORTANT: Keep libcurl4 runtime - pg_net needs libcurl.so.4 at runtime
 # Mark it as manually installed to prevent autoremove from deleting it
@@ -84,4 +92,5 @@ USER 26
 
 # Verify extensions are installed
 RUN ls -la /usr/share/postgresql/18/extension/vector* \
-    && ls -la /usr/share/postgresql/18/extension/pg_net*
+    && ls -la /usr/share/postgresql/18/extension/pg_net* \
+    && ls -la /usr/share/postgresql/18/extension/pg_cron*

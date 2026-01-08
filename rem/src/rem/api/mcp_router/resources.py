@@ -542,6 +542,138 @@ def register_status_resources(mcp: FastMCP):
 """
 
 
+def register_session_resources(mcp: FastMCP):
+    """
+    Register session resources for loading conversation history.
+
+    Args:
+        mcp: FastMCP server instance
+    """
+
+    @mcp.resource("rem://sessions/{session_id}")
+    async def get_session_messages(session_id: str) -> str:
+        """
+        Load a conversation session by ID.
+
+        Returns the full message history including user messages, assistant responses,
+        and tool calls. Useful for evaluators and analysis agents.
+
+        Args:
+            session_id: Session UUID or identifier
+
+        Returns:
+            Formatted conversation history as markdown string with:
+            - Message type (user/assistant/tool)
+            - Content
+            - Timestamps
+            - Tool call details (if any)
+        """
+        from ...services.postgres import get_postgres_service
+
+        pg = get_postgres_service()
+        await pg.connect()
+
+        try:
+            # Query messages for session
+            query = """
+            SELECT id, message_type, content, metadata, created_at
+            FROM messages
+            WHERE session_id = $1
+            ORDER BY created_at ASC
+            """
+            messages = await pg.fetch(query, session_id)
+
+            if not messages:
+                return f"# Session Not Found\n\nNo messages found for session_id: {session_id}"
+
+            # Format output
+            output = [f"# Session: {session_id}\n"]
+            output.append(f"**Total messages:** {len(messages)}\n")
+
+            for i, msg in enumerate(messages, 1):
+                msg_type = msg['message_type']
+                content = msg['content'] or "(empty)"
+                created = msg['created_at']
+                metadata = msg.get('metadata') or {}
+
+                # Format based on message type
+                if msg_type == 'user':
+                    output.append(f"\n## [{i}] USER ({created})")
+                    output.append(f"```\n{content[:1000]}{'...' if len(content) > 1000 else ''}\n```")
+                elif msg_type == 'assistant':
+                    output.append(f"\n## [{i}] ASSISTANT ({created})")
+                    output.append(f"```\n{content[:1000]}{'...' if len(content) > 1000 else ''}\n```")
+                elif msg_type == 'tool':
+                    tool_name = metadata.get('tool_name', 'unknown')
+                    output.append(f"\n## [{i}] TOOL: {tool_name} ({created})")
+                    # Truncate tool results more aggressively
+                    output.append(f"```json\n{content[:500]}{'...' if len(content) > 500 else ''}\n```")
+                else:
+                    output.append(f"\n## [{i}] {msg_type.upper()} ({created})")
+                    output.append(f"```\n{content[:500]}{'...' if len(content) > 500 else ''}\n```")
+
+            return "\n".join(output)
+
+        finally:
+            await pg.disconnect()
+
+    @mcp.resource("rem://sessions")
+    async def list_recent_sessions() -> str:
+        """
+        List recent sessions with basic info.
+
+        Returns the most recent 20 sessions with:
+        - Session ID
+        - First user message (preview)
+        - Message count
+        - Timestamp
+        """
+        from ...services.postgres import get_postgres_service
+
+        pg = get_postgres_service()
+        await pg.connect()
+
+        try:
+            # Query recent sessions
+            query = """
+            SELECT
+                session_id,
+                MIN(created_at) as started_at,
+                COUNT(*) as message_count,
+                MIN(CASE WHEN message_type = 'user' THEN content END) as first_message
+            FROM messages
+            WHERE session_id IS NOT NULL
+            GROUP BY session_id
+            ORDER BY MIN(created_at) DESC
+            LIMIT 20
+            """
+            sessions = await pg.fetch(query)
+
+            if not sessions:
+                return "# Recent Sessions\n\nNo sessions found."
+
+            output = ["# Recent Sessions\n"]
+            output.append(f"Showing {len(sessions)} most recent sessions:\n")
+
+            for session in sessions:
+                session_id = session['session_id']
+                started = session['started_at']
+                count = session['message_count']
+                first_msg = session['first_message'] or "(no user message)"
+                preview = first_msg[:80] + "..." if len(first_msg) > 80 else first_msg
+
+                output.append(f"\n## {session_id}")
+                output.append(f"- **Started:** {started}")
+                output.append(f"- **Messages:** {count}")
+                output.append(f"- **First message:** {preview}")
+                output.append(f"- **Load:** `rem://sessions/{session_id}`")
+
+            return "\n".join(output)
+
+        finally:
+            await pg.disconnect()
+
+
 # Resource dispatcher for read_resource tool
 async def load_resource(uri: str) -> dict | str:
     """
@@ -571,6 +703,7 @@ async def load_resource(uri: str) -> dict | str:
     register_agent_resources(mcp)
     register_file_resources(mcp)
     register_status_resources(mcp)
+    register_session_resources(mcp)
 
     # 1. Try exact match in regular resources
     resources = await mcp.get_resources()

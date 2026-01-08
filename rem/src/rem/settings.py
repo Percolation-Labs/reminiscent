@@ -424,6 +424,49 @@ class AuthSettings(BaseSettings):
     google: GoogleOAuthSettings = Field(default_factory=GoogleOAuthSettings)
     microsoft: MicrosoftOAuthSettings = Field(default_factory=MicrosoftOAuthSettings)
 
+    # Pre-approved login codes (bypass email verification)
+    # Format: comma-separated codes with prefix A=admin, B=normal user
+    # Example: "A12345,A67890,B11111,B22222"
+    preapproved_codes: str = Field(
+        default="",
+        description=(
+            "Comma-separated list of pre-approved login codes. "
+            "Prefix A = admin user, B = normal user. "
+            "Example: 'A12345,A67890,B11111'. "
+            "Users can login with these codes without email verification."
+        ),
+    )
+
+    def check_preapproved_code(self, code: str) -> dict | None:
+        """
+        Check if a code is in the pre-approved list.
+
+        Args:
+            code: The code to check (including prefix)
+
+        Returns:
+            Dict with 'role' key if valid, None if not found.
+            - A prefix -> role='admin'
+            - B prefix -> role='user'
+        """
+        if not self.preapproved_codes:
+            return None
+
+        codes = [c.strip().upper() for c in self.preapproved_codes.split(",") if c.strip()]
+        code_upper = code.strip().upper()
+
+        if code_upper not in codes:
+            return None
+
+        # Parse prefix to determine role
+        if code_upper.startswith("A"):
+            return {"role": "admin", "code": code_upper}
+        elif code_upper.startswith("B"):
+            return {"role": "user", "code": code_upper}
+        else:
+            # Unknown prefix, treat as user
+            return {"role": "user", "code": code_upper}
+
     @field_validator("session_secret", mode="before")
     @classmethod
     def generate_dev_secret(cls, v: str | None, info: ValidationInfo) -> str:
