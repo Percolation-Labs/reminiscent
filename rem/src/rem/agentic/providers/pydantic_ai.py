@@ -681,25 +681,25 @@ async def create_agent(
 
         set_agent_resource_attributes(agent_schema=agent_schema)
 
-    # Extract schema metadata for search_rem tool description suffix
-    # This allows entity schemas to add context-specific notes to the search_rem tool
-    search_rem_suffix = None
-    if metadata:
-        # Check for default_search_table in metadata (set by entity schemas)
-        extra = agent_schema.get("json_schema_extra", {}) if agent_schema else {}
-        default_table = extra.get("default_search_table")
-        has_embeddings = extra.get("has_embeddings", False)
-
-        if default_table:
-            # Build description suffix for search_rem
-            search_rem_suffix = f"\n\nFor this schema, use `search_rem` to query `{default_table}`. "
-            if has_embeddings:
-                search_rem_suffix += f"SEARCH works well on {default_table} (has embeddings). "
-            search_rem_suffix += f"Example: `SEARCH \"your query\" FROM {default_table} LIMIT 10`"
-
     # Add tools from MCP server (in-process, no subprocess)
     # Track loaded MCP servers for resource resolution
     loaded_mcp_server = None
+
+    # Build map of tool_name → schema description from agent schema tools section
+    # This allows agent-specific tool guidance to override/augment MCP tool descriptions
+    schema_tool_descriptions: dict[str, str] = {}
+    tool_configs = metadata.tools if metadata and hasattr(metadata, 'tools') else []
+    for tool_config in tool_configs:
+        if hasattr(tool_config, 'name'):
+            t_name = tool_config.name
+            t_desc = tool_config.description or ""
+        else:
+            t_name = tool_config.get("name", "")
+            t_desc = tool_config.get("description", "")
+        # Skip resource URIs (handled separately below)
+        if t_name and "://" not in t_name and t_desc:
+            schema_tool_descriptions[t_name] = t_desc
+            logger.debug(f"Schema tool description for '{t_name}': {len(t_desc)} chars")
 
     for server_config in mcp_server_configs:
         server_type = server_config.get("type")
@@ -725,8 +725,8 @@ async def create_agent(
                 mcp_tools_dict = await mcp_server.get_tools()
 
                 for tool_name, tool_func in mcp_tools_dict.items():
-                    # Add description suffix to search_rem tool if schema specifies a default table
-                    tool_suffix = search_rem_suffix if tool_name == "search_rem" else None
+                    # Get schema description suffix if agent schema defines one for this tool
+                    tool_suffix = schema_tool_descriptions.get(tool_name)
 
                     wrapped_tool = create_mcp_tool_wrapper(
                         tool_name,
@@ -735,7 +735,7 @@ async def create_agent(
                         description_suffix=tool_suffix,
                     )
                     tools.append(wrapped_tool)
-                    logger.debug(f"Loaded MCP tool: {tool_name}" + (" (with schema suffix)" if tool_suffix else ""))
+                    logger.debug(f"Loaded MCP tool: {tool_name}" + (" (with schema desc)" if tool_suffix else ""))
 
                 logger.info(f"Loaded {len(mcp_tools_dict)} tools from MCP server: {server_id} (in-process)")
 

@@ -674,6 +674,95 @@ def register_session_resources(mcp: FastMCP):
             await pg.disconnect()
 
 
+def register_user_resources(mcp: FastMCP):
+    """
+    Register user profile resources for on-demand profile loading.
+
+    Args:
+        mcp: FastMCP server instance
+    """
+
+    @mcp.resource("user://profile/{user_id}")
+    async def get_user_profile(user_id: str) -> str:
+        """
+        Load a user's profile by ID.
+
+        Returns the user's profile information including:
+        - Email and name
+        - Summary (AI-generated profile summary)
+        - Interests and preferred topics
+        - Activity level
+
+        This resource is protected - each user can only access their own profile.
+        The user_id should match the authenticated user's ID from the JWT token.
+
+        Args:
+            user_id: User UUID from authentication
+
+        Returns:
+            Formatted user profile as markdown string, or error if not found
+        """
+        from ...services.postgres import get_postgres_service
+        from ...services.postgres.repository import Repository
+        from ...models.entities.user import User
+
+        pg = get_postgres_service()
+        await pg.connect()
+
+        try:
+            user_repo = Repository(User, "users", db=pg)
+            # Look up user by ID (user_id from JWT is the primary key)
+            user = await user_repo.get_by_id(user_id, tenant_id=None)
+
+            if not user:
+                return f"# User Profile Not Found\n\nNo user found with ID: {user_id}"
+
+            # Build profile output
+            output = [f"# User Profile: {user.name or user.email or 'Unknown'}"]
+            output.append("")
+
+            if user.email:
+                output.append(f"**Email:** {user.email}")
+
+            if user.role:
+                output.append(f"**Role:** {user.role}")
+
+            if user.tier:
+                output.append(f"**Tier:** {user.tier.value if hasattr(user.tier, 'value') else user.tier}")
+
+            if user.summary:
+                output.append(f"\n## Summary\n{user.summary}")
+
+            if user.interests:
+                output.append(f"\n## Interests\n- " + "\n- ".join(user.interests[:10]))
+
+            if user.preferred_topics:
+                output.append(f"\n## Preferred Topics\n- " + "\n- ".join(user.preferred_topics[:10]))
+
+            if user.activity_level:
+                output.append(f"\n**Activity Level:** {user.activity_level}")
+
+            if user.last_active_at:
+                output.append(f"**Last Active:** {user.last_active_at}")
+
+            # Add metadata if present (but redact sensitive fields)
+            if user.metadata:
+                safe_metadata = {k: v for k, v in user.metadata.items()
+                               if k not in ('login_code', 'password', 'token', 'secret')}
+                if safe_metadata:
+                    output.append(f"\n## Additional Info")
+                    for key, value in list(safe_metadata.items())[:5]:
+                        output.append(f"- **{key}:** {value}")
+
+            return "\n".join(output)
+
+        except Exception as e:
+            return f"# Error Loading Profile\n\nFailed to load user profile: {e}"
+
+        finally:
+            await pg.disconnect()
+
+
 # Resource dispatcher for read_resource tool
 async def load_resource(uri: str) -> dict | str:
     """
@@ -704,6 +793,7 @@ async def load_resource(uri: str) -> dict | str:
     register_file_resources(mcp)
     register_status_resources(mcp)
     register_session_resources(mcp)
+    register_user_resources(mcp)
 
     # 1. Try exact match in regular resources
     resources = await mcp.get_resources()

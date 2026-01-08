@@ -4,15 +4,12 @@ Centralized context builder for agent execution.
 Session History (ALWAYS loaded with compression):
 - Each chat request is a single message, so session history MUST be recovered
 - Uses SessionMessageStore with compression to keep context efficient
-- Long assistant responses include REM LOOKUP hints: "... [REM LOOKUP session-{id}-msg-{index}] ..."
-- Agent can retrieve full content on-demand using REM LOOKUP
 - Prevents context window bloat while maintaining conversation continuity
 
 User Context (on-demand by default):
-- System message includes REM LOOKUP hint for user profile
-- Agent decides whether to load profile based on query
-- More efficient for queries that don't need personalization
-- Example: "User: sarah@example.com. To load user profile: Use REM LOOKUP \"sarah@example.com\""
+- System message includes user email for context awareness
+- Fails silently if user not found - agent proceeds without user context
+- Example: "User: sarah@example.com"
 
 User Context (auto-inject when enabled):
 - Set CHAT__AUTO_INJECT_USER_CONTEXT=true
@@ -22,8 +19,8 @@ User Context (auto-inject when enabled):
 Design Pattern:
 1. Extract AgentContext from headers (user_id, tenant_id, session_id)
 2. If auto-inject enabled: Load User/Session from database
-3. If auto-inject disabled: Provide REM LOOKUP hints in system message
-4. Construct system message with date + context (injected or hints)
+3. If auto-inject disabled: Show user email for context (fail silently if not found)
+4. Construct system message with date + context
 5. Return complete context ready for agent execution
 
 Integration Points:
@@ -40,11 +37,10 @@ Usage (on-demand, default):
 
     # Messages list structure (on-demand):
     # [
-    #   {"role": "system", "content": "Today's date: 2025-11-22\nUser: sarah@example.com\nTo load user profile: Use REM LOOKUP \"sarah@example.com\"\nSession ID: sess-123\nTo load session history: Use REM LOOKUP messages?session_id=sess-123"},
+    #   {"role": "system", "content": "Today's date: 2025-11-22\n\nUser: sarah@example.com"},
     #   {"role": "user", "content": "What's next for the API migration?"}
     # ]
 
-    # Agent receives hints and can decide to load context if needed
     agent = await create_agent(context=context, ...)
     prompt = "\n".join(msg.content for msg in messages)
     result = await agent.run(prompt)
@@ -52,7 +48,7 @@ Usage (on-demand, default):
 Usage (auto-inject, CHAT__AUTO_INJECT_USER_CONTEXT=true):
     # Messages list structure (auto-inject):
     # [
-    #   {"role": "system", "content": "Today's date: 2025-11-22\n\nUser Context (auto-injected):\nSummary: ...\nInterests: ...\n\nSession History (auto-injected, 5 messages):"},
+    #   {"role": "system", "content": "Today's date: 2025-11-22\n\nUser Context (auto-injected):\nSummary: ...\nInterests: ..."},
     #   {"role": "user", "content": "Previous message"},
     #   {"role": "assistant", "content": "Previous response"},
     #   {"role": "user", "content": "What's next for the API migration?"}
@@ -110,13 +106,11 @@ class ContextBuilder:
 
         Session History (ALWAYS loaded with compression):
         - If session_id provided, session history is ALWAYS loaded using SessionMessageStore
-        - Compression keeps it efficient with REM LOOKUP hints for long messages
-        - Example: "... [Message truncated - REM LOOKUP session-{id}-msg-{index}] ..."
-        - Agent can retrieve full content on-demand using REM LOOKUP
+        - Compression keeps context efficient
 
         User Context (on-demand by default):
-        - System message includes REM LOOKUP hint: "User: {email}. To load user profile: Use REM LOOKUP \"{email}\""
-        - Agent decides whether to load profile based on query
+        - System message includes user email: "User: {email}"
+        - Fails silently if user not found - agent proceeds without user context
 
         User Context (auto-inject when enabled):
         - Set CHAT__AUTO_INJECT_USER_CONTEXT=true
@@ -137,9 +131,9 @@ class ContextBuilder:
 
             # messages structure:
             # [
-            #   {"role": "system", "content": "Today's date: 2025-11-22\nUser: sarah@example.com\nTo load user profile: Use REM LOOKUP \"sarah@example.com\""},
+            #   {"role": "system", "content": "Today's date: 2025-11-22\n\nUser: sarah@example.com"},
             #   {"role": "user", "content": "Previous message"},
-            #   {"role": "assistant", "content": "Start of long response... [REM LOOKUP session-123-msg-1] ...end"},
+            #   {"role": "assistant", "content": "Previous response"},
             #   {"role": "user", "content": "New message"}
             # ]
         """
@@ -189,18 +183,18 @@ class ContextBuilder:
                     context_hint += f"\n\nUser Context (auto-injected):\n{user_context_content}"
                 else:
                     context_hint += "\n\nNo user context available (anonymous or new user)."
-            elif context.user_id:
-                # On-demand: Provide hint to use REM LOOKUP
-                # user_id is UUID5 hash of email - load user to get email for display and LOOKUP
-                user_repo = Repository(User, "users", db=db)
-                user = await user_repo.get_by_id(context.user_id, context.tenant_id)
-                if user and user.email:
-                    # Show email (more useful than UUID) and LOOKUP hint
-                    context_hint += f"\n\nUser: {user.email}"
-                    context_hint += f"\nTo load user profile: Use REM LOOKUP \"{user.email}\""
-                else:
-                    context_hint += f"\n\nUser ID: {context.user_id}"
-                    context_hint += "\nUser profile not available."
+            elif context.user_id and db:
+                # On-demand: Show user email for context (no REM LOOKUP - it requires exact user_id match)
+                # Fail silently if user lookup fails - just proceed without user context
+                try:
+                    user_repo = Repository(User, "users", db=db)
+                    user = await user_repo.get_by_id(context.user_id, context.tenant_id)
+                    if user and user.email:
+                        context_hint += f"\n\nUser: {user.email}"
+                    # If user not found, just proceed without adding user context
+                except Exception as e:
+                    # Fail silently - don't block agent execution if user lookup fails
+                    logger.debug(f"Could not load user context: {e}")
 
             # Add system context hint
             messages.append(ContextMessage(role="system", content=context_hint))

@@ -95,9 +95,10 @@ async def handle_child_tool_start(
             )
             tool_msg = {
                 "role": "tool",
-                "content": "",  # Content populated on completion
+                # Content is the tool call args as JSON - this is what the agent sees on reload
+                "content": json.dumps(arguments) if arguments else "",
                 "timestamp": to_iso(utc_now()),
-                # Store tool call details for reconstruction (matches parent format)
+                # Also store in tool_arguments for pydantic-ai message reconstruction
                 "tool_call_id": tool_id,
                 "tool_name": full_tool_name,
                 "tool_arguments": arguments,
