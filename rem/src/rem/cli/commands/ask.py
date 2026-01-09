@@ -164,9 +164,13 @@ async def run_agent_non_streaming(
     context: AgentContext | None = None,
     plan: bool = False,
     max_iterations: int | None = None,
+    user_message: str | None = None,
 ) -> dict[str, Any] | None:
     """
-    Run agent in non-streaming mode using agent.run() with usage limits.
+    Run agent in non-streaming mode using agent.iter() to capture tool calls.
+
+    This mirrors the streaming code path to ensure tool messages are properly
+    persisted to the database for state tracking across turns.
 
     Args:
         agent: Pydantic AI agent
@@ -176,77 +180,183 @@ async def run_agent_non_streaming(
         context: Optional AgentContext for session persistence
         plan: If True, output only the generated query (for query-agent)
         max_iterations: Maximum iterations/requests (from agent schema or settings)
+        user_message: The user's original message (for database storage)
 
     Returns:
         Output data if successful, None otherwise
     """
     from pydantic_ai import UsageLimits
+    from pydantic_ai.agent import Agent
+    from pydantic_ai.messages import (
+        FunctionToolResultEvent,
+        PartStartEvent,
+        PartEndEvent,
+        TextPart,
+        ToolCallPart,
+    )
     from rem.utils.date_utils import to_iso_with_z, utc_now
 
     logger.info("Running agent in non-streaming mode...")
 
     try:
-        # Run agent and get complete result with usage limits
-        usage_limits = UsageLimits(request_limit=max_iterations) if max_iterations else None
-        result = await agent.run(prompt, usage_limits=usage_limits)
+        # Track tool calls for persistence (same as streaming code path)
+        tool_calls: list = []
+        pending_tool_data: dict = {}
+        pending_tool_completions: list = []
+        accumulated_content: list = []
+
+        # Get the underlying pydantic-ai agent
+        pydantic_agent = agent.agent if hasattr(agent, 'agent') else agent
+
+        # Use agent.iter() to capture tool calls (same as streaming)
+        async with pydantic_agent.iter(prompt) as agent_run:
+            async for node in agent_run:
+                # Handle model request nodes (text + tool call starts)
+                if Agent.is_model_request_node(node):
+                    async with node.stream(agent_run.ctx) as request_stream:
+                        async for event in request_stream:
+                            # Capture text content
+                            if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart):
+                                if event.part.content:
+                                    accumulated_content.append(event.part.content)
+
+                            # Capture tool call starts
+                            elif isinstance(event, PartStartEvent) and isinstance(event.part, ToolCallPart):
+                                tool_name = event.part.tool_name
+                                if tool_name == "final_result":
+                                    continue
+
+                                import uuid
+                                tool_id = f"call_{uuid.uuid4().hex[:8]}"
+                                pending_tool_completions.append((tool_name, tool_id))
+
+                                # Extract arguments
+                                args_dict = {}
+                                if hasattr(event.part, 'args'):
+                                    args = event.part.args
+                                    if isinstance(args, str):
+                                        try:
+                                            args_dict = json.loads(args)
+                                        except json.JSONDecodeError:
+                                            args_dict = {"raw": args}
+                                    elif isinstance(args, dict):
+                                        args_dict = args
+
+                                pending_tool_data[tool_id] = {
+                                    "tool_name": tool_name,
+                                    "tool_id": tool_id,
+                                    "arguments": args_dict,
+                                }
+
+                                # Print tool call for CLI visibility
+                                print(f"\n[Calling: {tool_name}]", flush=True)
+
+                            # Capture tool call end (update arguments if changed)
+                            elif isinstance(event, PartEndEvent) and isinstance(event.part, ToolCallPart):
+                                pass  # Arguments already captured at start
+
+                # Handle tool execution nodes (results)
+                elif Agent.is_call_tools_node(node):
+                    async with node.stream(agent_run.ctx) as tools_stream:
+                        async for event in tools_stream:
+                            if isinstance(event, FunctionToolResultEvent):
+                                # Get tool info from pending queue
+                                if pending_tool_completions:
+                                    tool_name, tool_id = pending_tool_completions.pop(0)
+                                else:
+                                    import uuid
+                                    tool_name = "tool"
+                                    tool_id = f"call_{uuid.uuid4().hex[:8]}"
+
+                                result_content = event.result.content if hasattr(event.result, 'content') else event.result
+
+                                # Capture tool call for persistence
+                                if tool_id in pending_tool_data:
+                                    tool_data = pending_tool_data[tool_id]
+                                    tool_data["result"] = result_content
+                                    tool_calls.append(tool_data)
+                                    del pending_tool_data[tool_id]
+
+            # Get final result
+            result = agent_run.result
 
         # Extract output data
         output_data = None
         assistant_content = None
-        if hasattr(result, "output"):
+        if result is not None and hasattr(result, "output"):
             output = result.output
             from rem.agentic.serialization import serialize_agent_result
             output_data = serialize_agent_result(output)
 
             if plan and isinstance(output_data, dict) and "query" in output_data:
-                # Plan mode: Output only the query
-                # Use sql formatting if possible or just raw string
                 assistant_content = output_data["query"]
                 print(assistant_content)
             else:
-                # Normal mode
-                assistant_content = json.dumps(output_data, indent=2)
+                # For string output, use it directly
+                if isinstance(output_data, str):
+                    assistant_content = output_data
+                else:
+                    assistant_content = json.dumps(output_data, indent=2)
                 print(assistant_content)
         else:
-            # Fallback for text-only results
-            assistant_content = str(result)
-            print(assistant_content)
+            assistant_content = str(result) if result else ""
+            if assistant_content:
+                print(assistant_content)
 
         # Save to file if requested
         if output_file and output_data:
             await _save_output_file(output_file, output_data)
 
-        # Save session messages (if session_id provided and postgres enabled)
+        # Save session messages including tool calls (same as streaming code path)
         if context and context.session_id and settings.postgres.enabled:
             from ...services.session.compression import SessionMessageStore
 
-            # Extract just the user query from prompt
-            # Prompt format from ContextBuilder: system + history + user message
-            # We need to extract the last user message
-            user_message_content = prompt.split("\n\n")[-1] if "\n\n" in prompt else prompt
+            timestamp = to_iso_with_z(utc_now())
+            messages_to_store = []
 
-            user_message = {
+            # Save user message first
+            user_message_content = user_message or (prompt.split("\n\n")[-1] if "\n\n" in prompt else prompt)
+            messages_to_store.append({
                 "role": "user",
                 "content": user_message_content,
-                "timestamp": to_iso_with_z(utc_now()),
-            }
+                "timestamp": timestamp,
+            })
 
-            assistant_message = {
-                "role": "assistant",
-                "content": assistant_content,
-                "timestamp": to_iso_with_z(utc_now()),
-            }
+            # Save tool call messages (message_type: "tool") - CRITICAL for state tracking
+            for tool_call in tool_calls:
+                if not tool_call:
+                    continue
+                tool_message = {
+                    "role": "tool",
+                    "content": json.dumps(tool_call.get("result", {}), default=str),
+                    "timestamp": timestamp,
+                    "tool_call_id": tool_call.get("tool_id"),
+                    "tool_name": tool_call.get("tool_name"),
+                    "tool_arguments": tool_call.get("arguments"),
+                }
+                messages_to_store.append(tool_message)
 
-            # Store messages with compression
+            # Save assistant message
+            if assistant_content:
+                messages_to_store.append({
+                    "role": "assistant",
+                    "content": assistant_content,
+                    "timestamp": timestamp,
+                })
+
+            # Store all messages
             store = SessionMessageStore(user_id=context.user_id or settings.test.effective_user_id)
             await store.store_session_messages(
                 session_id=context.session_id,
-                messages=[user_message, assistant_message],
+                messages=messages_to_store,
                 user_id=context.user_id,
-                compress=True,
+                compress=False,  # Store uncompressed; compression happens on reload
             )
 
-            logger.debug(f"Saved conversation to session {context.session_id}")
+            logger.debug(
+                f"Saved {len(tool_calls)} tool calls + user/assistant messages "
+                f"to session {context.session_id}"
+            )
 
         return output_data
 
@@ -332,8 +442,8 @@ async def _save_output_file(file_path: Path, data: dict[str, Any]) -> None:
 )
 @click.option(
     "--stream/--no-stream",
-    default=False,
-    help="Enable streaming mode (default: disabled)",
+    default=True,
+    help="Enable streaming mode (default: enabled)",
 )
 @click.option(
     "--user-id",
@@ -538,6 +648,7 @@ async def _ask_async(
             output_file=output_file,
             context=context,
             plan=plan,
+            user_message=query,
         )
 
     # Log session ID for reuse

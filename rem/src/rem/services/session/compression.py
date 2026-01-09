@@ -96,7 +96,7 @@ class MessageCompressor:
         Returns:
             Compressed message dict
         """
-        content = message.get("content", "")
+        content = message.get("content") or ""
 
         # Don't compress short messages or system messages
         if (
@@ -242,7 +242,7 @@ class SessionMessageStore:
         # Use pre-generated id from message dict if available (for frontend feedback)
         msg = Message(
             id=message.get("id"),  # Use pre-generated ID if provided
-            content=message.get("content", ""),
+            content=message.get("content") or "",
             message_type=message.get("role", "assistant"),
             session_id=session_id,
             tenant_id=self.user_id,  # Set tenant_id to user_id (application scoped to user)
@@ -337,7 +337,7 @@ class SessionMessageStore:
         compressed_messages = []
 
         for idx, message in enumerate(messages):
-            content = message.get("content", "")
+            content = message.get("content") or ""
 
             # Only store and compress long assistant responses
             if (

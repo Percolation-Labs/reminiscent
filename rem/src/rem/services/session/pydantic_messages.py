@@ -106,7 +106,7 @@ def session_to_pydantic_messages(
     while i < len(session_history):
         msg = session_history[i]
         role = msg.get("role", "")
-        content = msg.get("content", "")
+        content = msg.get("content") or ""
 
         if role == "user":
             # User messages become ModelRequest with UserPromptPart
@@ -124,7 +124,7 @@ def session_to_pydantic_messages(
                 tool_msg = session_history[j]
                 tool_name = tool_msg.get("tool_name", "unknown_tool")
                 tool_call_id = tool_msg.get("tool_call_id", f"call_{j}")
-                tool_content = tool_msg.get("content", "{}")
+                tool_content = tool_msg.get("content") or "{}"
 
                 # tool_arguments: prefer explicit field, fallback to parsing content
                 tool_arguments = tool_msg.get("tool_arguments")
@@ -190,7 +190,7 @@ def session_to_pydantic_messages(
             # Orphan tool message (no preceding assistant) - synthesize both parts
             tool_name = msg.get("tool_name", "unknown_tool")
             tool_call_id = msg.get("tool_call_id", f"call_{i}")
-            tool_content = msg.get("content", "{}")
+            tool_content = msg.get("content") or "{}"
 
             # tool_arguments: prefer explicit field, fallback to parsing content
             tool_arguments = msg.get("tool_arguments")
