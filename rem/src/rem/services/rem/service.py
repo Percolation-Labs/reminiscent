@@ -478,6 +478,53 @@ class RemService:
         parser = RemQueryParser()
         return parser.parse(query_string)
 
+    async def execute_query_string(
+        self, query_string: str, user_id: str | None = None
+    ) -> dict[str, Any]:
+        """
+        Execute a REM dialect query string directly.
+
+        This is the unified entry point for executing REM queries from both
+        the CLI and API. It handles parsing the query string, creating the
+        RemQuery model, and executing it.
+
+        Args:
+            query_string: REM dialect query (e.g., 'LOOKUP "Sarah Chen"',
+                         'SEARCH resources "API design"', 'SELECT * FROM users')
+            user_id: Optional user ID for query isolation
+
+        Returns:
+            Dict with query results and metadata:
+            - query_type: The type of query executed
+            - results: List of result rows
+            - count: Number of results
+            - Additional fields depending on query type
+
+        Raises:
+            ValueError: If the query string is invalid
+            QueryExecutionError: If query execution fails
+
+        Example:
+            >>> result = await rem_service.execute_query_string(
+            ...     'LOOKUP "Sarah Chen"',
+            ...     user_id="user-123"
+            ... )
+            >>> print(result["count"])
+            1
+        """
+        # Parse the query string into type and parameters
+        query_type, parameters = self._parse_query_string(query_string)
+
+        # Create and validate the RemQuery model
+        rem_query = RemQuery.model_validate({
+            "query_type": query_type,
+            "parameters": parameters,
+            "user_id": user_id,
+        })
+
+        # Execute and return results
+        return await self.execute_query(rem_query)
+
     async def ask_rem(
         self, natural_query: str, tenant_id: str, llm_model: str | None = None, plan_mode: bool = False
     ) -> dict[str, Any]:

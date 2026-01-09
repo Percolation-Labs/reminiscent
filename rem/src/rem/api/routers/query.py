@@ -90,8 +90,6 @@ from .common import ErrorResponse
 
 from ...services.postgres import get_postgres_service
 from ...services.rem.service import RemService
-from ...services.rem.parser import RemQueryParser
-from ...models.core import RemQuery
 from ...settings import settings
 
 router = APIRouter(prefix="/api/v1", tags=["query"])
@@ -331,7 +329,7 @@ async def execute_query(
             return response
 
         else:
-            # REM dialect mode - parse and execute directly
+            # REM dialect mode - use unified execute_query_string
             if not request.query:
                 raise HTTPException(
                     status_code=400,
@@ -340,17 +338,10 @@ async def execute_query(
 
             logger.info(f"REM dialect query: {request.query[:100]}...")
 
-            parser = RemQueryParser()
-            query_type, parameters = parser.parse(request.query)
-
-            # Create and execute RemQuery
-            rem_query = RemQuery.model_validate({
-                "query_type": query_type,
-                "parameters": parameters,
-                "user_id": effective_user_id,
-            })
-
-            result = await rem_service.execute_query(rem_query)
+            # Use the unified execute_query_string method
+            result = await rem_service.execute_query_string(
+                request.query, user_id=effective_user_id
+            )
 
             return QueryResponse(
                 query_type=result["query_type"],
