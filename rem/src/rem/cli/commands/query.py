@@ -19,7 +19,10 @@ import re
 
 import click
 from loguru import logger
-
+from ...services.rem.service import RemService
+from ...services.rem.parser import RemQueryParser
+from ...services.rem import QueryExecutionError
+from ...models.core import RemQuery 
 
 @click.command("query")
 @click.option("--sql", "-s", default=None, help="SQL query string to execute")
@@ -78,64 +81,41 @@ async def _run_query_async(sql_text: str, params: List[str], as_json: bool, user
     if not db:
         click.secho("✗ PostgreSQL is disabled in settings. Enable with POSTGRES__ENABLED=true", fg="red")
         raise click.Abort()
+    
+    if db.pool is None:
+        await db.connect()
+        
+    rem_service = RemService(db)
+    
 
+    query_parser = RemQueryParser()
     # Use connection string from settings to provide helpful error messages early
-    logger.debug(f"Connecting to database: {settings.postgres.connection_string}")
+    query_type, parameters = query_parser.parse(sql_text)
 
-    await db.connect()
+    rem_query = RemQuery.model_validate({
+        "query_type": query_type,
+        "parameters": parameters,
+        "user_id": user_id,
+    })
 
     try:
-        # If user_id provided and query touches the resources table, inject a parameterized filter
-        if user_id:
-            lower_sql = sql_text.lower()
-            if re.search(r'\bfrom\s+resources\b', lower_sql) or re.search(r'\bjoin\s+resources\b', lower_sql):
-                # Insert filter before ORDER BY / LIMIT / OFFSET / GROUP BY / HAVING if present
-                tail_pattern = re.compile(r'\b(order\s+by|limit|offset|group\s+by|having)\b', re.IGNORECASE)
-                m = tail_pattern.search(sql_text)
-                if m:
-                    main = sql_text[: m.start()]
-                    tail = sql_text[m.start() :]
-                else:
-                    main = sql_text
-                    tail = ""
+        result = await rem_service.execute_query(rem_query)
+        # Extract rows from the result dict returned by RemService.execute_query
+        output_rows = result.get("results", [])
+    except QueryExecutionError as qe:
+        logger.exception("Query execution failed")
+        click.secho(f"✗ Query execution failed: {qe}. Please check the query you provided and try again.", fg="red")
+        raise click.Abort()
+    except Exception as exc:  # pragma: no cover - CLI error path
+        logger.exception("Unexpected error during query execution")
+        click.secho("✗ An unexpected error occurred while executing the query. Please check the query you provided and try again.", fg="red")
+        raise click.Abort()
 
-                placeholder = f"${len(params) + 1}"
-                if re.search(r'\bwhere\b', main, re.IGNORECASE):
-                    main = main + f" AND user_id = {placeholder}"
-                else:
-                    main = main + f" WHERE user_id = {placeholder}"
-
-                sql_text = main + tail
-                params.append(user_id)
-
-        # Print the final SQL and params that will be executed
-        click.secho("SQL to execute:", fg="yellow")
-        click.echo(sql_text)
-        if params:
-            click.echo(f"Params: {params}")
-
-        # Decide whether this is a read (SELECT) or non-read statement.
-        # For simplicity, use db.fetch which works for queries returning rows.
-        rows = await db.fetch(sql_text, *params)
-
-        # Convert asyncpg.Record to dicts if needed
-        output_rows = []
-        for row in rows:
-            try:
-                # asyncpg.Record behaves like a mapping
-                output_rows.append(dict(row))
-            except Exception:
-                # Fallback - represent the record as-is
-                output_rows.append(row)
-
-        if as_json:
-            click.echo(json.dumps(output_rows, default=str, indent=2))
-        else:
-            for r in output_rows:
-                click.echo(str(r))
-
-    finally:
-        await db.disconnect()
+    if as_json:
+        click.echo(json.dumps(output_rows, default=str, indent=2))
+    else:
+        for r in output_rows:
+            click.echo(str(r))
 
 
 def register_command(cli_group):
