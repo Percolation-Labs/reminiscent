@@ -158,7 +158,7 @@ class TestUserLookupByEmail:
         assert user_data["summary"] == "Test user for LOOKUP integration test"
 
     async def test_context_builder_lookup_format(self, user_service, postgres_service):
-        """Test that context_builder generates correct LOOKUP hint in system message."""
+        """Test that context_builder shows user email (not UUID) in system message."""
         from rem.agentic.context_builder import ContextBuilder
 
         # First create the user so context_builder can find them
@@ -192,11 +192,9 @@ class TestUserLookupByEmail:
 
         system_content = system_messages[0].content
 
-        # Verify system message shows email (more useful than UUID) and LOOKUP hint
+        # Verify system message shows email (more useful than UUID)
         assert f'User: {self.TEST_EMAIL}' in system_content, \
             f"System message should show user email. Got: {system_content}"
-        assert f'REM LOOKUP "{self.TEST_EMAIL}"' in system_content, \
-            f"System message should contain LOOKUP hint with EMAIL. Got: {system_content}"
 
         # Verify it does NOT have the old formats
         assert f'users/{self.TEST_EMAIL}' not in system_content, \

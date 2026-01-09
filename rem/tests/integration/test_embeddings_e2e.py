@@ -73,6 +73,7 @@ async def rem_query_service(postgres_service) -> REMQueryService:
 
 
 @pytest.mark.asyncio
+@pytest.mark.llm
 async def test_embeddings_e2e_workflow(
     postgres_service, embedding_worker, rem_query_service, resources_seed_data
 ):
@@ -182,6 +183,7 @@ async def test_embeddings_e2e_workflow(
 
 
 @pytest.mark.asyncio
+@pytest.mark.llm
 async def test_search_without_embeddings(postgres_service, rem_query_service):
     """
     Test that SEARCH gracefully handles missing embeddings.
