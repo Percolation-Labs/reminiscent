@@ -152,6 +152,7 @@ class ContextBuilder:
                 default_model=context.default_model,
                 agent_schema_uri=context.agent_schema_uri,
                 is_eval=context.is_eval,
+                client_id=context.client_id,
             )
 
         # Initialize DB if not provided and needed (for user context or session history)
@@ -170,6 +171,10 @@ class ContextBuilder:
             # Build context hint message
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             context_hint = f"Today's date: {today}."
+
+            # Add client identifier if present
+            if context.client_id:
+                context_hint += f"\nClient: {context.client_id}"
 
             # Add user context (auto-inject or on-demand hint)
             if settings.chat.auto_inject_user_context and context.user_id and db:
@@ -312,6 +317,7 @@ class ContextBuilder:
         session_id: str | None = None,
         message: str = "Hello",
         model: str | None = None,
+        client_id: str | None = None,
     ) -> tuple[AgentContext, list[ContextMessage]]:
         """
         Build context for testing (no database lookup).
@@ -319,7 +325,7 @@ class ContextBuilder:
         Creates minimal context with:
         - Test user (test@rem.ai)
         - Test tenant
-        - Context hint with date
+        - Context hint with date and client
         - Single user message
 
         Args:
@@ -328,6 +334,7 @@ class ContextBuilder:
             session_id: Optional session ID
             message: User message content
             model: Optional model override
+            client_id: Optional client identifier (e.g., "cli", "test")
 
         Returns:
             Tuple of (AgentContext, messages list)
@@ -335,7 +342,8 @@ class ContextBuilder:
         Example:
             context, messages = await ContextBuilder.build_from_test(
                 user_id="test@rem.ai",
-                message="What's the weather like?"
+                message="What's the weather like?",
+                client_id="cli"
             )
         """
         from ..settings import settings
@@ -346,11 +354,15 @@ class ContextBuilder:
             tenant_id=tenant_id,
             session_id=session_id,
             default_model=model or settings.llm.default_model,
+            client_id=client_id,
         )
 
         # Build minimal messages
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        context_hint = f"Today's date: {today}.\n\nTest user context: {user_id} (test mode, no profile loaded)."
+        context_hint = f"Today's date: {today}."
+        if client_id:
+            context_hint += f"\nClient: {client_id}"
+        context_hint += f"\n\nTest user context: {user_id} (test mode, no profile loaded)."
 
         messages = [
             ContextMessage(role="system", content=context_hint),

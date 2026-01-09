@@ -5,12 +5,16 @@ storage format into pydantic-ai's native ModelRequest/ModelResponse types.
 
 Key insight: When we store tool results, we only store the result (ToolReturnPart).
 But LLM APIs require matching ToolCallPart for each ToolReturnPart. So we synthesize
-the ToolCallPart from stored metadata (tool_name, tool_call_id, tool_arguments).
+the ToolCallPart from stored metadata (tool_name, tool_call_id) and arguments.
+
+Tool arguments can come from two places:
+- Parent tool calls (ask_agent): tool_arguments stored in metadata (content = result)
+- Child tool calls (register_metadata): arguments parsed from content (content = args as JSON)
 
 Storage format (our simplified format):
     {"role": "user", "content": "..."}
     {"role": "assistant", "content": "..."}
-    {"role": "tool", "content": "{...}", "tool_name": "...", "tool_call_id": "...", "tool_arguments": {...}}
+    {"role": "tool", "content": "{...}", "tool_name": "...", "tool_call_id": "...", "tool_arguments": {...}}  # optional
 
 Pydantic-ai format (what the LLM expects):
     ModelRequest(parts=[UserPromptPart(content="...")])
@@ -120,8 +124,15 @@ def session_to_pydantic_messages(
                 tool_msg = session_history[j]
                 tool_name = tool_msg.get("tool_name", "unknown_tool")
                 tool_call_id = tool_msg.get("tool_call_id", f"call_{j}")
-                tool_arguments = tool_msg.get("tool_arguments", {})
                 tool_content = tool_msg.get("content", "{}")
+
+                # tool_arguments: prefer explicit field, fallback to parsing content
+                tool_arguments = tool_msg.get("tool_arguments")
+                if tool_arguments is None and isinstance(tool_content, str) and tool_content:
+                    try:
+                        tool_arguments = json.loads(tool_content)
+                    except json.JSONDecodeError:
+                        tool_arguments = {}
 
                 # Parse tool content if it's a JSON string
                 if isinstance(tool_content, str):
@@ -179,8 +190,15 @@ def session_to_pydantic_messages(
             # Orphan tool message (no preceding assistant) - synthesize both parts
             tool_name = msg.get("tool_name", "unknown_tool")
             tool_call_id = msg.get("tool_call_id", f"call_{i}")
-            tool_arguments = msg.get("tool_arguments", {})
             tool_content = msg.get("content", "{}")
+
+            # tool_arguments: prefer explicit field, fallback to parsing content
+            tool_arguments = msg.get("tool_arguments")
+            if tool_arguments is None and isinstance(tool_content, str) and tool_content:
+                try:
+                    tool_arguments = json.loads(tool_content)
+                except json.JSONDecodeError:
+                    tool_arguments = {}
 
             # Parse tool content
             if isinstance(tool_content, str):

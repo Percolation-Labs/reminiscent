@@ -12,7 +12,8 @@ Design Pattern:
 
 Message Types on Reload:
 - user: Returned as-is
-- tool: Returned as-is with metadata (tool_call_id, tool_name, tool_arguments)
+- tool: Returned with metadata (tool_call_id, tool_name). tool_arguments may be in
+  metadata (parent calls) or parsed from content (child calls) by pydantic_messages.py
 - assistant: Compressed on load if long (>400 chars), with REM LOOKUP for recovery
 """
 

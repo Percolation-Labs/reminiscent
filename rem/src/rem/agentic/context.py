@@ -16,6 +16,7 @@ Headers Mapping:
     X-Agent-Schema   → context.agent_schema_uri (default: "rem")
     X-Model-Name     → context.default_model
     X-Is-Eval        → context.is_eval (marks session as evaluation)
+    X-Client-Id      → context.client_id (e.g., "web", "mobile", "cli")
 
 Key Design Pattern:
 - AgentContext is passed to agent factory, not stored in agents
@@ -222,6 +223,11 @@ class AgentContext(BaseModel):
         description="Whether this is an evaluation session (set via X-Is-Eval header)",
     )
 
+    client_id: str | None = Field(
+        default=None,
+        description="Client identifier (e.g., 'web', 'mobile', 'cli') set via X-Client-Id header",
+    )
+
     model_config = {"populate_by_name": True}
 
     def child_context(
@@ -232,7 +238,7 @@ class AgentContext(BaseModel):
         """
         Create a child context for nested agent calls.
 
-        Inherits user_id, tenant_id, session_id, is_eval from parent.
+        Inherits user_id, tenant_id, session_id, is_eval, client_id from parent.
         Allows overriding agent_schema_uri and default_model for the child.
 
         Args:
@@ -256,6 +262,7 @@ class AgentContext(BaseModel):
             default_model=model_override or self.default_model,
             agent_schema_uri=agent_schema_uri or self.agent_schema_uri,
             is_eval=self.is_eval,
+            client_id=self.client_id,
         )
 
     @staticmethod
@@ -374,6 +381,7 @@ class AgentContext(BaseModel):
             default_model=normalized.get("x-model-name") or settings.llm.default_model,
             agent_schema_uri=normalized.get("x-agent-schema"),
             is_eval=is_eval,
+            client_id=normalized.get("x-client-id"),
         )
 
     @classmethod
@@ -391,6 +399,7 @@ class AgentContext(BaseModel):
         - X-Model-Name: Model override
         - X-Agent-Schema: Agent schema URI
         - X-Is-Eval: Whether this is an evaluation session (true/false)
+        - X-Client-Id: Client identifier (e.g., "web", "mobile", "cli")
 
         Args:
             headers: Dictionary of HTTP headers (case-insensitive)
@@ -404,7 +413,8 @@ class AgentContext(BaseModel):
                 "X-Tenant-Id": "acme-corp",
                 "X-Session-Id": "sess-456",
                 "X-Model-Name": "anthropic:claude-opus-4-20250514",
-                "X-Is-Eval": "true"
+                "X-Is-Eval": "true",
+                "X-Client-Id": "web"
             }
             context = AgentContext.from_headers(headers)
         """
@@ -422,4 +432,5 @@ class AgentContext(BaseModel):
             default_model=normalized.get("x-model-name") or settings.llm.default_model,
             agent_schema_uri=normalized.get("x-agent-schema"),
             is_eval=is_eval,
+            client_id=normalized.get("x-client-id"),
         )

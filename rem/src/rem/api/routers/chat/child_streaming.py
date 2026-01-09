@@ -87,7 +87,7 @@ async def handle_child_tool_start(
         arguments=arguments,
     ))
 
-    # 3. SAVE TO DB (match parent format with tool_arguments for reconstruction)
+    # 3. SAVE TO DB - content contains args as JSON (pydantic_messages.py parses it)
     if session_id and settings.postgres.enabled:
         try:
             store = SessionMessageStore(
@@ -96,12 +96,11 @@ async def handle_child_tool_start(
             tool_msg = {
                 "role": "tool",
                 # Content is the tool call args as JSON - this is what the agent sees on reload
+                # and what pydantic_messages.py parses for ToolCallPart.args
                 "content": json.dumps(arguments) if arguments else "",
                 "timestamp": to_iso(utc_now()),
-                # Also store in tool_arguments for pydantic-ai message reconstruction
                 "tool_call_id": tool_id,
                 "tool_name": full_tool_name,
-                "tool_arguments": arguments,
             }
             await store.store_session_messages(
                 session_id=session_id,

@@ -368,6 +368,8 @@ class SessionMessageStore:
                 }
 
                 # For tool messages, include tool call details in metadata
+                # Note: tool_arguments is stored only when provided (parent tool calls)
+                # For child tool calls (e.g., register_metadata), args are in content as JSON
                 if message.get("role") == "tool":
                     if message.get("tool_call_id"):
                         msg_metadata["tool_call_id"] = message.get("tool_call_id")
@@ -436,6 +438,8 @@ class SessionMessageStore:
                 }
 
                 # For tool messages, reconstruct tool call metadata
+                # Note: tool_arguments may be in metadata (parent calls) or parsed from
+                # content (child calls like register_metadata) by pydantic_messages.py
                 if role == "tool" and msg.metadata:
                     if msg.metadata.get("tool_call_id"):
                         msg_dict["tool_call_id"] = msg.metadata["tool_call_id"]
