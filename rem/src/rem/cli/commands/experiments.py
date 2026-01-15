@@ -1568,7 +1568,7 @@ def export(
         rem experiments export my-experiment
 
         # Export to specific bucket
-        rem experiments export my-experiment --bucket siggy-data
+        rem experiments export my-experiment --bucket my-data-lake
 
         # Include results in export
         rem experiments export my-experiment --include-results

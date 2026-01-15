@@ -142,20 +142,16 @@ import sys
 from pathlib import Path
 from kreuzberg import ExtractionConfig, extract_file_sync
 
-# Parse document with kreuzberg 3.x
-config = ExtractionConfig(
-    extract_tables=True,
-    chunk_content=False,
-    extract_keywords=False,
-)
+# Parse document with kreuzberg 4.x (uses sensible defaults)
+config = ExtractionConfig()
 
 result = extract_file_sync(Path(sys.argv[1]), config=config)
 
 # Serialize result to JSON
 output = {
     'content': result.content,
-    'tables': [t.model_dump() for t in result.tables] if result.tables else [],
-    'metadata': result.metadata
+    'tables': [],
+    'metadata': {}
 }
 print(json.dumps(output))
 """
@@ -203,9 +199,9 @@ print(json.dumps(output))
                     }
                 except Exception as e:
                     logger.error(f"Subprocess parsing failed: {e}. Falling back to text-only.")
-                    # Fallback to simple text extraction (kreuzberg 3.x API)
+                    # Fallback to simple text extraction (kreuzberg 4.x API)
                     from kreuzberg import ExtractionConfig, extract_file_sync
-                    config = ExtractionConfig(extract_tables=False)
+                    config = ExtractionConfig()
                     result = extract_file_sync(tmp_path, config=config)
                     text = result.content
                     extraction_metadata = {
@@ -213,17 +209,12 @@ print(json.dumps(output))
                         "file_extension": tmp_path.suffix,
                     }
             else:
-                # Normal execution (not in daemon) - kreuzberg 4.x with native ONNX/Rust
+                # Normal execution (not in daemon) - kreuzberg 4.x
                 from kreuzberg import ExtractionConfig, extract_file_sync
-                config = ExtractionConfig(
-                    enable_quality_processing=True,  # Enables table extraction with native ONNX
-                    chunk_content=False,  # We handle chunking ourselves
-                    extract_tables=False,  # Disable table extraction to avoid PyTorch dependency
-                )
+                config = ExtractionConfig()
                 result = extract_file_sync(tmp_path, config=config)
                 text = result.content
                 extraction_metadata = {
-                    "table_count": len(result.tables) if result.tables else 0,
                     "parser": "kreuzberg",
                     "file_extension": tmp_path.suffix,
                 }

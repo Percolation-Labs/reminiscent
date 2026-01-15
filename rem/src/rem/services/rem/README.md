@@ -40,15 +40,16 @@ FuzzyQuery ::= FUZZY <text:string> [THRESHOLD <t:float>] [LIMIT <n:int>]
   available   : Stage 1+
   example     : FUZZY "sara" THRESHOLD 0.5 LIMIT 10
 
-SearchQuery ::= SEARCH <text:string> [TABLE <table:string>] [WHERE <clause:string>] [LIMIT <n:int>]
+SearchQuery ::= SEARCH <text:string> [IN|TABLE <table:string>] [WHERE <clause:string>] [LIMIT <n:int>]
   text        : Semantic query text
-  table       : Target table (default: "resources")
+  table       : Target table (default: "resources"). Use IN or TABLE keyword.
   clause      : Optional PostgreSQL WHERE clause for hybrid filtering (combines vector + structured)
   limit       : Max results (default: 10)
   performance : Indexed (pgvector)
   available   : Stage 3+
   examples    :
-    - SEARCH "database migration" TABLE resources LIMIT 10
+    - SEARCH "database migration" IN resources LIMIT 10
+    - SEARCH "parcel delivery" IN ontologies
     - SEARCH "team discussion" TABLE moments WHERE "moment_type='meeting'" LIMIT 5
     - SEARCH "project updates" WHERE "created_at >= '2024-01-01'" LIMIT 20
     - SEARCH "AI research" WHERE "tags @> ARRAY['machine-learning']" LIMIT 10

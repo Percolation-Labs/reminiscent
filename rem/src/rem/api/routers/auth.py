@@ -83,7 +83,7 @@ User Tiers (models.entities.UserTier):
 
 Configuration:
     # Allow only specific domains for new signups
-    EMAIL__TRUSTED_EMAIL_DOMAINS=siggymd.ai,example.com
+    EMAIL__TRUSTED_EMAIL_DOMAINS=mycompany.com,example.com
 
     # Allow all domains (no restrictions)
     EMAIL__TRUSTED_EMAIL_DOMAINS=

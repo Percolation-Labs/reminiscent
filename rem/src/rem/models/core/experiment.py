@@ -461,7 +461,7 @@ class ExperimentConfig(BaseModel):
         """
         Get the evaluator filename with task prefix.
 
-        Returns: {agent_name}-{task}.yaml (e.g., siggy-risk-assessment.yaml)
+        Returns: {agent_name}-{task}.yaml (e.g., rem-risk-assessment.yaml)
         """
         return f"{self.agent_schema_ref.name}-{self.task}.yaml"
 

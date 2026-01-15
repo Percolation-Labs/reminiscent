@@ -5,7 +5,7 @@ Handles events from child agents during multi-agent orchestration.
 
 Event Flow:
 ```
-Parent Agent (Siggy)
+Parent Agent (Orchestrator)
       │
       ▼
   ask_agent tool

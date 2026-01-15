@@ -1,6 +1,6 @@
 [project]
 name = "remdb"
-version = "0.3.245"
+version = "0.3.249"
 description = "Resources Entities Moments - Bio-inspired memory system for agentic AI workloads"
 readme = "README.md"
 authors = [
@@ -58,7 +58,7 @@ dependencies = [
     # Schema Tools
     "json-schema-to-pydantic>=0.2.0",
     # Document Processing
-    "kreuzberg>=3.21.0,<4.0.0",  # Document parsing with table extraction
+    "kreuzberg>=4.0.5",  # Document parsing with table extraction
     "semchunk>=2.2.0",
     "tiktoken>=0.5.0",
     "gitpython>=3.1.45",

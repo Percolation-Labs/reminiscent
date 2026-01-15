@@ -349,6 +349,68 @@ def _prepare_schema_for_qwen(schema: dict[str, Any]) -> dict[str, Any]:
     return schema_copy
 
 
+def _render_schema_recursive(schema: dict[str, Any], indent: int = 0) -> list[str]:
+    """
+    Recursively render a JSON schema as YAML-like text with exact field names.
+
+    This ensures the LLM sees the actual field names (e.g., 'title', 'description')
+    for nested objects, not just high-level descriptions.
+
+    Args:
+        schema: JSON Schema dict (can be nested object, array, or primitive)
+        indent: Current indentation level
+
+    Returns:
+        List of lines representing the schema
+    """
+    lines = []
+    prefix = "  " * indent
+
+    schema_type = schema.get("type", "any")
+
+    if schema_type == "object":
+        props = schema.get("properties", {})
+        required = schema.get("required", [])
+
+        for field_name, field_def in props.items():
+            field_type = field_def.get("type", "any")
+            field_desc = field_def.get("description", "")
+            is_required = field_name in required
+
+            # Format field header
+            req_marker = " (required)" if is_required else ""
+            if field_type == "object":
+                lines.append(f"{prefix}{field_name}:{req_marker}")
+                if field_desc:
+                    lines.append(f"{prefix}  # {field_desc}")
+                # Recurse into nested object
+                nested_lines = _render_schema_recursive(field_def, indent + 1)
+                lines.extend(nested_lines)
+            elif field_type == "array":
+                items = field_def.get("items", {})
+                items_type = items.get("type", "any")
+                lines.append(f"{prefix}{field_name}: [{items_type}]{req_marker}")
+                if field_desc:
+                    lines.append(f"{prefix}  # {field_desc}")
+                # If array items are objects, show their structure
+                if items_type == "object":
+                    lines.append(f"{prefix}  # Each item has:")
+                    nested_lines = _render_schema_recursive(items, indent + 2)
+                    lines.extend(nested_lines)
+            else:
+                # Primitive type
+                enum_vals = field_def.get("enum")
+                if enum_vals:
+                    type_str = f"{field_type} (one of: {', '.join(str(v) for v in enum_vals)})"
+                else:
+                    type_str = field_type
+                lines.append(f"{prefix}{field_name}: {type_str}{req_marker}")
+                if field_desc:
+                    lines.append(f"{prefix}  # {field_desc}")
+
+    return lines
+
+
 def _convert_properties_to_prompt(properties: dict[str, Any]) -> str:
     """
     Convert schema properties to prompt guidance text.
@@ -357,21 +419,14 @@ def _convert_properties_to_prompt(properties: dict[str, Any]) -> str:
     definition into natural language guidance that informs the agent
     about the expected response structure without forcing JSON output.
 
-    IMPORTANT: The 'answer' field is the OUTPUT to the user. All other
-    fields are INTERNAL tracking that should NOT appear in the output.
+    CRITICAL: This function now recursively renders nested schemas so the LLM
+    can see exact field names (e.g., 'title' vs 'name' in treatment options).
 
     Args:
         properties: JSON Schema properties dict
 
     Returns:
         Prompt text describing the expected response elements
-
-    Example:
-        properties = {
-            "answer": {"type": "string", "description": "The answer"},
-            "confidence": {"type": "number", "description": "Confidence 0-1"}
-        }
-        # Returns guidance that only answer should be output
     """
     if not properties:
         return ""
@@ -391,35 +446,40 @@ def _convert_properties_to_prompt(properties: dict[str, Any]) -> str:
         lines.append(f"**OUTPUT (what the user sees):** {answer_desc}")
         lines.append("")
 
-    # Document internal fields for tracking/thinking
+    # Document internal fields with FULL recursive schema
     if internal_fields:
         lines.append("**INTERNAL (for your tracking only - do NOT include in output):**")
+        lines.append("")
+        lines.append("Schema (use these EXACT field names):")
+        lines.append("```yaml")
+
+        # Render each internal field recursively
         for field_name, field_def in internal_fields.items():
             field_type = field_def.get("type", "any")
-            description = field_def.get("description", "")
+            field_desc = field_def.get("description", "")
 
-            # Format based on type
-            if field_type == "array":
-                type_hint = "list"
-            elif field_type == "number":
-                type_hint = "number"
-                if "minimum" in field_def or "maximum" in field_def:
-                    min_val = field_def.get("minimum", "")
-                    max_val = field_def.get("maximum", "")
-                    if min_val != "" and max_val != "":
-                        type_hint = f"number ({min_val}-{max_val})"
-            elif field_type == "boolean":
-                type_hint = "yes/no"
+            if field_type == "object":
+                lines.append(f"{field_name}:")
+                if field_desc:
+                    lines.append(f"  # {field_desc}")
+                nested_lines = _render_schema_recursive(field_def, indent=1)
+                lines.extend(nested_lines)
+            elif field_type == "array":
+                items = field_def.get("items", {})
+                items_type = items.get("type", "any")
+                lines.append(f"{field_name}: [{items_type}]")
+                if field_desc:
+                    lines.append(f"  # {field_desc}")
+                if items_type == "object":
+                    lines.append(f"  # Each item has:")
+                    nested_lines = _render_schema_recursive(items, indent=2)
+                    lines.extend(nested_lines)
             else:
-                type_hint = field_type
+                lines.append(f"{field_name}: {field_type}")
+                if field_desc:
+                    lines.append(f"  # {field_desc}")
 
-            field_line = f"- {field_name}"
-            if type_hint and type_hint != "string":
-                field_line += f" ({type_hint})"
-            if description:
-                field_line += f": {description}"
-
-            lines.append(field_line)
+        lines.append("```")
 
     lines.append("")
     lines.append("⚠️ CRITICAL: Your response must be ONLY the conversational answer text.")

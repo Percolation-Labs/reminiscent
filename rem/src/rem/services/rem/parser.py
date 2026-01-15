@@ -64,7 +64,7 @@ class RemQueryParser:
             token_upper = token.upper()
 
             # Handle REM keywords that take a value
-            if token_upper in ("LIMIT", "DEPTH", "THRESHOLD", "TYPE", "FROM", "WITH"):
+            if token_upper in ("LIMIT", "DEPTH", "THRESHOLD", "TYPE", "FROM", "WITH", "TABLE", "IN", "WHERE"):
                 if i + 1 < len(tokens):
                     keyword_map = {
                         "LIMIT": "limit",
@@ -73,6 +73,9 @@ class RemQueryParser:
                         "TYPE": "edge_types",
                         "FROM": "initial_query",
                         "WITH": "initial_query",
+                        "TABLE": "table_name",
+                        "IN": "table_name",  # IN is alias for TABLE
+                        "WHERE": "where_clause",
                     }
                     key = keyword_map[token_upper]
                     value = tokens[i + 1]
@@ -161,15 +164,9 @@ class RemQueryParser:
             params["query_text"] = combined_value
 
         elif query_type == QueryType.SEARCH:
-            # SEARCH expects: SEARCH <table> <query_text> [LIMIT n]
-            # First positional arg is table name, rest is query text
-            if len(positional_args) >= 2:
-                params["table_name"] = positional_args[0]
-                params["query_text"] = " ".join(positional_args[1:])
-            elif len(positional_args) == 1:
-                # Could be table name or query text - assume query text if no table
-                params["query_text"] = positional_args[0]
-            # If no positional args, params stays empty
+            # SEARCH expects: SEARCH <text> [TABLE <table>] [WHERE <clause>] [LIMIT n]
+            # All positional args are query_text, TABLE/WHERE/LIMIT are handled as keywords
+            params["query_text"] = combined_value
 
         elif query_type == QueryType.TRAVERSE:
             params["initial_query"] = combined_value

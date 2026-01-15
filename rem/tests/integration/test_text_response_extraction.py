@@ -2,7 +2,7 @@
 Test that text_response from ask_agent tool results gets extracted as assistant content.
 
 In the orchestrator pattern:
-1. Parent agent (siggy) calls ask_agent tool
+1. Parent agent (orchestrator) calls ask_agent tool
 2. Child agent (intake_diverge) returns text_response in result
 3. Parent should use text_response as its assistant message
 

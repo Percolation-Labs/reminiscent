@@ -21,11 +21,11 @@ IMPORTANT - Testing Requirements:
     ║  2. Session IDs MUST be UUIDs - use python3 -c "import uuid; print(uuid.uuid4())"                  ║
     ║  3. Port-forward OTEL collector: kubectl port-forward -n observability                             ║
     ║       svc/otel-collector-collector 4318:4318                                                       ║
-    ║  4. Port-forward Phoenix: kubectl port-forward -n siggy svc/phoenix 6006:6006                      ║
+    ║  4. Port-forward Phoenix: kubectl port-forward -n rem svc/phoenix 6006:6006                        ║
     ║  5. Set environment variables when starting the API:                                               ║
     ║       OTEL__ENABLED=true PHOENIX__ENABLED=true PHOENIX_API_KEY=<jwt> uvicorn ...                   ║
     ║  6. Get PHOENIX_API_KEY:                                                                           ║
-    ║       kubectl get secret -n siggy rem-phoenix-api-key -o jsonpath='{.data.PHOENIX_API_KEY}'        ║
+    ║       kubectl get secret -n rem rem-phoenix-api-key -o jsonpath='{.data.PHOENIX_API_KEY}'          ║
     ║         | base64 -d                                                                                ║
     ╚════════════════════════════════════════════════════════════════════════════════════════════════════╝
 

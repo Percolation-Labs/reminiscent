@@ -39,7 +39,7 @@ def get_phoenix_config():
         print("  1. Set PHOENIX_API_KEY environment variable")
         print("  2. Configure in rem settings")
         print("  3. Port-forward Phoenix and set the API key:")
-        print("     kubectl port-forward -n siggy svc/phoenix 6006:6006")
+        print("     kubectl port-forward -n rem svc/phoenix 6006:6006")
         sys.exit(1)
 
     return api_key, base_url

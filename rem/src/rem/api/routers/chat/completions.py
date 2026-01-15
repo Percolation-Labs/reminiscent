@@ -16,11 +16,11 @@ IMPORTANT: Session IDs MUST be UUIDs. Non-UUID session IDs will cause message
     kubectl port-forward -n observability svc/otel-collector-collector 4318:4318
 
     # Terminal 2: Phoenix UI - view traces at http://localhost:6006
-    kubectl port-forward -n siggy svc/phoenix 6006:6006
+    kubectl port-forward -n rem svc/phoenix 6006:6006
 
 2. Get Phoenix API Key (REQUIRED for feedback->Phoenix sync):
 
-    export PHOENIX_API_KEY=$(kubectl get secret -n siggy rem-phoenix-api-key \\
+    export PHOENIX_API_KEY=$(kubectl get secret -n rem rem-phoenix-api-key \\
       -o jsonpath='{.data.PHOENIX_API_KEY}' | base64 -d)
 
 3. Start API with OTEL and Phoenix enabled:
@@ -70,7 +70,7 @@ OTEL Architecture
 =================
 
     REM API --[OTLP/HTTP]--> OTEL Collector --[relay]--> Phoenix
-             (port 4318)    (k8s: observability)         (k8s: siggy)
+             (port 4318)    (k8s: observability)         (k8s: rem)
 
 Environment Variables:
     OTEL__ENABLED=true              Enable OTEL tracing (required for trace capture)

@@ -229,7 +229,7 @@ json_schema_extra:
     - uri: rem://agents
       description: "List all available agent schemas with descriptions"
     - uri: rem://agents/{agent_name}
-      description: "Load a specific agent schema by name (e.g., 'rem', 'siggy')"
+      description: "Load a specific agent schema by name (e.g., 'rem', 'intake')"
   tools:
     - name: save_agent
       description: "Save the agent schema. Only call when user approves the preview in Step 6."

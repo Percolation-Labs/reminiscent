@@ -765,7 +765,7 @@ class DataLakeSettings(BaseSettings):
         │       └── cpt/                # CPT codes
         └── calibration/                # Agent calibration
             ├── experiments/            # Experiment configs + results
-            │   └── {agent}/{task}/     # e.g., siggy/risk-assessment
+            │   └── {agent}/{task}/     # e.g., rem/risk-assessment
             └── datasets/               # Shared evaluation datasets
 
     Experiment Storage:
@@ -1641,7 +1641,7 @@ class EmailSettings(BaseSettings):
             "Existing users can always login regardless of domain. "
             "New users must have an email from a trusted domain. "
             "Empty string means all domains are allowed. "
-            "Example: 'siggymd.ai,example.com'"
+            "Example: 'mycompany.com,example.com'"
         ),
     )
 

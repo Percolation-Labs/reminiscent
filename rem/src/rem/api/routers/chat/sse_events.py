@@ -321,7 +321,7 @@ class MetadataEvent(BaseModel):
     # Agent info
     agent_schema: str | None = Field(
         default=None,
-        description="Name of the top-level agent schema (e.g., 'siggy', 'rem')"
+        description="Name of the top-level agent schema (e.g., 'rem', 'intake')"
     )
     responding_agent: str | None = Field(
         default=None,
