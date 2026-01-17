@@ -404,52 +404,47 @@ async def stream_openai_response(
                                     tool_calls_out.append(tool_data)
                                     del state.pending_tool_data[tool_id]
 
-                                if not is_metadata_event:
-                                    # NOTE: text_response fallback is DISABLED
-                                    # Child agents now stream content via child_content events (above)
-                                    # which provides real-time streaming. The text_response in tool
-                                    # result would duplicate that content, so we skip it entirely.
+                                # Always emit ToolCallEvent completion for frontend tracking
+                                # Send full result for dict/list types, stringify others
+                                if isinstance(result_content, (dict, list)):
+                                    result_for_sse = result_content
+                                else:
+                                    result_for_sse = str(result_content)
 
-                                    # Normal tool completion - emit ToolCallEvent
-                                    # For finalize_intake, send full result dict for frontend
-                                    if tool_name == "finalize_intake" and isinstance(result_content, dict):
-                                        result_for_sse = result_content
+                                # Log result count for search_rem
+                                if tool_name == "search_rem" and isinstance(result_content, dict):
+                                    results = result_content.get("results", {})
+                                    # Handle nested result structure: results may be a dict with 'results' list and 'count'
+                                    if isinstance(results, dict):
+                                        count = results.get("count", len(results.get("results", [])))
+                                        query_type = results.get("query_type", "?")
+                                        query_text = results.get("query_text", results.get("key", ""))
+                                        table = results.get("table_name", "")
+                                    elif isinstance(results, list):
+                                        count = len(results)
+                                        query_type = "?"
+                                        query_text = ""
+                                        table = ""
                                     else:
-                                        result_str = str(result_content)
-                                        result_for_sse = result_str[:200] + "..." if len(result_str) > 200 else result_str
+                                        count = "?"
+                                        query_type = "?"
+                                        query_text = ""
+                                        table = ""
+                                    status = result_content.get("status", "unknown")
+                                    # Truncate query text for logging
+                                    if query_text and len(str(query_text)) > 40:
+                                        query_text = str(query_text)[:40] + "..."
+                                    logger.info(f"  ↳ {tool_name} {query_type} '{query_text}' table={table} → {count} results")
 
-                                    # Log result count for search_rem
-                                    if tool_name == "search_rem" and isinstance(result_content, dict):
-                                        results = result_content.get("results", {})
-                                        # Handle nested result structure: results may be a dict with 'results' list and 'count'
-                                        if isinstance(results, dict):
-                                            count = results.get("count", len(results.get("results", [])))
-                                            query_type = results.get("query_type", "?")
-                                            query_text = results.get("query_text", results.get("key", ""))
-                                            table = results.get("table_name", "")
-                                        elif isinstance(results, list):
-                                            count = len(results)
-                                            query_type = "?"
-                                            query_text = ""
-                                            table = ""
-                                        else:
-                                            count = "?"
-                                            query_type = "?"
-                                            query_text = ""
-                                            table = ""
-                                        status = result_content.get("status", "unknown")
-                                        # Truncate query text for logging
-                                        if query_text and len(str(query_text)) > 40:
-                                            query_text = str(query_text)[:40] + "..."
-                                        logger.info(f"  ↳ {tool_name} {query_type} '{query_text}' table={table} → {count} results")
-
-                                    yield format_sse_event(ToolCallEvent(
-                                        tool_name=tool_name,
-                                        tool_id=tool_id,
-                                        status="completed",
-                                        arguments=completed_args,
-                                        result=result_for_sse
-                                    ))
+                                # Always emit ToolCallEvent completion for frontend tracking
+                                # This includes register_metadata calls so they turn green in the UI
+                                yield format_sse_event(ToolCallEvent(
+                                    tool_name=tool_name,
+                                    tool_id=tool_id,
+                                    status="completed",
+                                    arguments=completed_args,
+                                    result=result_for_sse
+                                ))
 
                                 # Update progress after tool completion
                                 state.current_step = 3

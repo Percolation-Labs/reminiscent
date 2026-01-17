@@ -1840,14 +1840,28 @@ class Settings(BaseSettings):
     debug: DebugSettings = Field(default_factory=DebugSettings)
 
 
-# Auto-load .env file from current directory if it exists
-# This happens BEFORE config file loading, so .env takes precedence
+# Auto-load .env file from current directory or parent directories
+# This happens BEFORE config file loading, so .env takes precedence over shell env vars
 from pathlib import Path
 from dotenv import load_dotenv
 
-_dotenv_path = Path(".env")
-if _dotenv_path.exists():
-    load_dotenv(_dotenv_path, override=False)  # Don't override existing env vars
+
+def _find_dotenv() -> Path | None:
+    """Search for .env in current dir and up to 3 parent directories."""
+    current = Path.cwd()
+    for _ in range(4):  # Current + 3 parents
+        env_path = current / ".env"
+        if env_path.exists():
+            return env_path
+        if current.parent == current:  # Reached root
+            break
+        current = current.parent
+    return None
+
+
+_dotenv_path = _find_dotenv()
+if _dotenv_path:
+    load_dotenv(_dotenv_path, override=True)  # .env takes precedence over shell env vars
     logger.debug(f"Loaded environment from {_dotenv_path.resolve()}")
 
 # Load configuration from ~/.rem/config.yaml before initializing settings

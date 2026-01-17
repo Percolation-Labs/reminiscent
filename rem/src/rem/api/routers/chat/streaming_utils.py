@@ -177,19 +177,17 @@ def build_tool_complete_event(
     arguments: dict | None = None,
     result: Any = None,
 ) -> str:
-    """Build a tool call completed SSE event."""
-    result_str = None
-    if result is not None:
-        result_str = str(result)
-        if len(result_str) > 200:
-            result_str = result_str[:200] + "..."
+    """Build a tool call completed SSE event.
 
+    Note: Full result is sent in SSE events for UI display.
+    Truncation only happens in log_tool_result() for log readability.
+    """
     return format_sse_event(ToolCallEvent(
         tool_name=tool_name,
         tool_id=tool_id,
         status="completed",
         arguments=arguments,
-        result=result_str,
+        result=result,
     ))
 
 

@@ -178,12 +178,11 @@ async def handle_child_tool_result(
         ))
 
     # Emit tool completion
-    # Preserve full result dict if it contains an artifact (e.g. finalize_intake)
-    # This is needed for frontend to extract artifact URLs for download
-    if isinstance(result, dict) and result.get("artifact"):
-        result_for_sse = result  # Full dict with artifact
+    # Preserve full result for dict/list types (needed for frontend)
+    if isinstance(result, (dict, list)):
+        result_for_sse = result
     else:
-        result_for_sse = str(result)[:200] if result else None
+        result_for_sse = str(result) if result else None
 
     yield format_sse_event(ToolCallEvent(
         tool_name=f"{child_agent}:tool",
