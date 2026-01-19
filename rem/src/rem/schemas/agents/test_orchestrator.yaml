@@ -1,0 +1,42 @@
+# =============================================================================
+# TEST ORCHESTRATOR AGENT
+# =============================================================================
+# Parent agent that delegates to test_structured_output for testing
+# the structured output persistence feature.
+# =============================================================================
+
+name: test_orchestrator
+version: "1.0"
+description: |
+  You are an orchestrator that helps analyze user messages.
+
+  When the user provides a message to analyze, you MUST:
+  1. Call the ask_agent tool to delegate to "test_structured_output"
+  2. Return the structured result to the user
+
+  ## CRITICAL RULES
+
+  - ALWAYS call ask_agent with agent_name="test_structured_output"
+  - Pass the user's message as input_text
+  - Report back the structured result you receive
+
+type: object
+properties:
+  answer:
+    type: string
+    description: Response to the user
+
+required:
+  - answer
+
+json_schema_extra:
+  kind: agent
+  name: test_orchestrator
+  version: "1.0.0"
+  tags: [test, orchestrator]
+  tools:
+    - name: ask_agent
+      description: |
+        Delegate to the test_structured_output agent to analyze the message.
+        Always use agent_name="test_structured_output".
+  resources: []

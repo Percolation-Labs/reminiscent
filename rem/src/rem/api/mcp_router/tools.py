@@ -1506,16 +1506,66 @@ async def ask_agent(
         }
 
     # Serialize output
-    from rem.agentic.serialization import serialize_agent_result
+    from rem.agentic.serialization import serialize_agent_result, is_pydantic_model
     output = serialize_agent_result(result.output)
 
     logger.info(f"Agent '{agent_name}' completed successfully")
+
+    # If child agent returned structured output (Pydantic model), emit as tool_call SSE event
+    # This allows the frontend to render structured results (forms, cards, etc.)
+    is_structured_output = is_pydantic_model(result.output)
+    structured_tool_id = f"{agent_name}_structured_output"
+    logger.debug(f"ask_agent '{agent_name}': is_structured_output={is_structured_output}, output_type={type(result.output).__name__}")
+
+    if use_streaming and is_structured_output and push_event is not None:
+        # Emit structured output as a tool_call event with the serialized result
+        # Use agent_name as tool_name so it appears as the logical tool (e.g., "finalize_intake_agent")
+        await push_event.put({
+            "type": "tool_call",
+            "tool_name": agent_name,  # Use agent name as tool name for clarity
+            "tool_id": structured_tool_id,
+            "status": "completed",
+            "arguments": {"input_text": input_text},
+            "result": output,  # Serialized Pydantic model as dict
+        })
+        logger.debug(f"ask_agent '{agent_name}': emitted structured output as tool_call SSE event")
+
+    # Save structured output as a tool message in the database
+    # This makes structured output agents look like tool calls in session history
+    if is_structured_output and child_context and child_context.session_id and settings.postgres.enabled:
+        try:
+            from ...services.session import SessionMessageStore
+            from ...utils.date_utils import utc_now, to_iso
+
+            store = SessionMessageStore(user_id=child_context.user_id or "default")
+
+            # Build tool message in the same format as regular tool calls
+            tool_message = {
+                "role": "tool",
+                "content": json.dumps(output, default=str),  # Structured output as JSON
+                "timestamp": to_iso(utc_now()),
+                "tool_call_id": structured_tool_id,
+                "tool_name": agent_name,  # Agent name as tool name
+                "tool_arguments": {"input_text": input_text},
+            }
+
+            # Store as a single message (not using store_session_messages to avoid compression)
+            await store.store_session_messages(
+                session_id=child_context.session_id,
+                messages=[tool_message],
+                user_id=child_context.user_id,
+                compress=False,  # Don't compress tool results
+            )
+            logger.debug(f"ask_agent '{agent_name}': saved structured output as tool message in session")
+        except Exception as e:
+            logger.warning(f"ask_agent '{agent_name}': failed to save structured output to database: {e}")
 
     response = {
         "status": "success",
         "output": output,
         "agent_schema": agent_name,
         "input_text": input_text,
+        "is_structured_output": is_structured_output,  # Flag for caller to know result type
     }
 
     # Only include text_response if content was NOT streamed

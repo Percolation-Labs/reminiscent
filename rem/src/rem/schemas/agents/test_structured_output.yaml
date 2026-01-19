@@ -1,0 +1,52 @@
+# =============================================================================
+# TEST STRUCTURED OUTPUT AGENT
+# =============================================================================
+# Simple agent for testing structured_output: true functionality
+# =============================================================================
+
+name: test_structured_output
+version: "1.0"
+description: |
+  You are a test agent that produces structured output.
+
+  Your ONLY job is to return a structured response matching the schema below.
+
+  Based on the user's input, extract:
+  - summary: A brief summary of what they said
+  - sentiment: positive, negative, or neutral
+  - keywords: List of key words from their message
+
+  DO NOT ask questions. Just produce the structured output.
+
+type: object
+properties:
+  result:
+    type: object
+    description: Structured analysis result
+    properties:
+      summary:
+        type: string
+        description: Brief summary of the input
+      sentiment:
+        type: string
+        enum: [positive, negative, neutral]
+        description: Overall sentiment
+      keywords:
+        type: array
+        items:
+          type: string
+        description: Key words extracted from input
+    required: [summary, sentiment, keywords]
+    additionalProperties: false
+
+required:
+  - result
+
+json_schema_extra:
+  kind: agent
+  name: test_structured_output
+  version: "1.0.0"
+  tags: [test, structured-output]
+  structured_output: true
+  tools: []
+  resources: []
