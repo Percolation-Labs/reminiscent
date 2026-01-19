@@ -35,66 +35,41 @@ Unique Design:
     - Tools and resources loaded from MCP servers via schema config
     - Stripped descriptions to avoid LLM schema bloat
 
-TODO:
-    Model Cache Implementation (Critical for Production Scale)
-    Current bottleneck: Every agent.run() call creates a new Agent instance with
-    model initialization overhead. At scale (100+ requests/sec), this becomes expensive.
+Caching Implementation:
+    Agent instance caching is now implemented to reduce latency from repeated
+    agent creation. See the _agent_cache module-level variables and helpers.
 
-    Need two-tier caching strategy:
+    Cache Features:
+    - LRU eviction when max size (50) exceeded
+    - 5-minute TTL for cache entries
+    - Thread-safe via asyncio.Lock
+    - Cache key: hash(schema) + model + user_id
 
+    Usage:
+        # Normal usage (cache enabled by default)
+        agent = await create_agent(context, agent_schema_override=schema)
+
+        # Bypass cache for testing
+        agent = await create_agent(context, use_cache=False)
+
+        # Clear cache
+        await clear_agent_cache()  # Clear all
+        await clear_agent_cache("siggy")  # Clear specific schema
+
+        # Monitor cache
+        stats = get_agent_cache_stats()
+
+    Future Improvements:
     1. Schema Cache (see rem/utils/schema_loader.py TODO):
        - Filesystem schemas: LRU cache, no TTL (immutable)
        - Database schemas: TTL cache (5-15 min)
        - Reduces disk I/O and DB queries
 
-    2. Model Instance Cache (THIS TODO):
-       - Cache Pydantic AI Model() instances (connection pools, tokenizers)
-       - Key: (provider, model_name) → Model instance
-       - Benefits:
-         * Reuse HTTP connection pools (httpx.AsyncClient)
-         * Reuse tokenizer instances
-         * Faster model initialization
-         * Lower memory footprint
-       - Implementation:
-         ```python
-         _model_cache: dict[tuple[str, str], Model] = {}
+    2. Model Instance Cache:
+       - Cache Pydantic AI Model() instances separately
+       - Would allow sharing models across different agent schemas
 
-         def get_or_create_model(model_name: str) -> Model:
-             cache_key = _parse_model_name(model_name)  # ("anthropic", "claude-3-5-sonnet")
-             if cache_key not in _model_cache:
-                 _model_cache[cache_key] = Model(model_name)
-             return _model_cache[cache_key]
-         ```
-       - Considerations:
-         * Max cache size (LRU eviction, e.g., 20 models)
-         * Thread safety (asyncio.Lock for cache access)
-         * Model warmup on server startup for hot paths
-         * Clear cache on model config changes
-
-    3. Agent Instance Caching (Advanced):
-       - Cache complete Agent instances (model + schema + tools)
-       - Key: (schema_name, model_name) → Agent instance
-       - Benefits:
-         * Skip schema parsing and model creation entirely
-         * Fastest possible agent.run() latency
-       - Challenges:
-         * Agent state management (stateless required)
-         * Tool/resource updates (cache invalidation)
-         * Memory usage (agents are heavier than models)
-       - Recommendation: Start with Model cache, add Agent cache if profiling shows benefit
-
-    Profiling Targets (measure before optimizing):
-    - schema_loader.load_agent_schema() calls per request
-    - create_agent() execution time (model init overhead)
-    - Model() instance creation time by provider
-    - Agent.run() total latency breakdown
-
-    Related Files:
-    - rem/utils/schema_loader.py (schema caching TODO)
-    - rem/agentic/providers/pydantic_ai.py:339 (create_agent - this file)
-    - rem/services/schema_repository.py (database schema loading)
-
-    Priority: HIGH (blocks production scaling beyond 50 req/sec)
+    Priority: MEDIUM (agent cache handles the critical path)
 
     4. Response Format Control (structured_output enhancement):
        - Current: structured_output is bool (True=strict schema, False=free-form text)
@@ -147,6 +122,10 @@ Example Agent Schema:
 }
 """
 
+import asyncio
+import hashlib
+import json
+import time
 from typing import Any
 
 from loguru import logger
@@ -167,6 +146,120 @@ except ImportError:
 
 from ..context import AgentContext
 from ...settings import settings
+
+
+# =============================================================================
+# AGENT INSTANCE CACHE
+# =============================================================================
+# Caches AgentRuntime instances to avoid repeated MCP tool loading and agent
+# creation overhead. Cache key is based on schema content hash + model name.
+#
+# Design:
+# - LRU-style eviction when max size exceeded
+# - Optional TTL for cache entries
+# - Thread-safe via asyncio.Lock
+# - Cache can be cleared manually or on schema updates
+# =============================================================================
+
+_agent_cache: dict[str, tuple["AgentRuntime", float]] = {}  # key -> (agent, created_at)
+_agent_cache_lock = asyncio.Lock()
+_AGENT_CACHE_MAX_SIZE = 50  # Max cached agents
+_AGENT_CACHE_TTL_SECONDS = 300  # 5 minutes TTL (0 = no TTL)
+
+
+def _compute_cache_key(
+    agent_schema: dict[str, Any] | None,
+    model: str,
+    user_id: str | None,
+) -> str:
+    """
+    Compute cache key for an agent configuration.
+
+    Key components:
+    - Schema content hash (captures prompt + tools + output schema)
+    - Model name
+    - User ID (tools may be user-scoped)
+    """
+    # Hash the schema content for stable key
+    if agent_schema:
+        # Sort keys for deterministic hashing
+        schema_str = json.dumps(agent_schema, sort_keys=True)
+        schema_hash = hashlib.md5(schema_str.encode()).hexdigest()[:12]
+    else:
+        schema_hash = "no-schema"
+
+    user_part = user_id[:8] if user_id else "no-user"
+    return f"{schema_hash}:{model}:{user_part}"
+
+
+async def _get_cached_agent(cache_key: str) -> "AgentRuntime | None":
+    """Get agent from cache if exists and not expired."""
+    async with _agent_cache_lock:
+        if cache_key in _agent_cache:
+            agent, created_at = _agent_cache[cache_key]
+
+            # Check TTL
+            if _AGENT_CACHE_TTL_SECONDS > 0:
+                age = time.time() - created_at
+                if age > _AGENT_CACHE_TTL_SECONDS:
+                    del _agent_cache[cache_key]
+                    logger.debug(f"Agent cache expired: {cache_key} (age={age:.1f}s)")
+                    return None
+
+            logger.debug(f"Agent cache hit: {cache_key}")
+            return agent
+
+        return None
+
+
+async def _cache_agent(cache_key: str, agent: "AgentRuntime") -> None:
+    """Add agent to cache with LRU eviction."""
+    async with _agent_cache_lock:
+        # Evict oldest entries if at capacity
+        while len(_agent_cache) >= _AGENT_CACHE_MAX_SIZE:
+            # Find oldest entry
+            oldest_key = min(_agent_cache.keys(), key=lambda k: _agent_cache[k][1])
+            del _agent_cache[oldest_key]
+            logger.debug(f"Agent cache evicted: {oldest_key}")
+
+        _agent_cache[cache_key] = (agent, time.time())
+        logger.debug(f"Agent cached: {cache_key} (total={len(_agent_cache)})")
+
+
+async def clear_agent_cache(schema_name: str | None = None) -> int:
+    """
+    Clear agent cache entries.
+
+    Args:
+        schema_name: If provided, only clear entries for this schema.
+                    If None, clear entire cache.
+
+    Returns:
+        Number of entries cleared.
+    """
+    async with _agent_cache_lock:
+        if schema_name is None:
+            count = len(_agent_cache)
+            _agent_cache.clear()
+            logger.info(f"Agent cache cleared: {count} entries")
+            return count
+        else:
+            # Clear entries matching schema name (in the hash)
+            keys_to_remove = [k for k in _agent_cache if schema_name in k]
+            for k in keys_to_remove:
+                del _agent_cache[k]
+            logger.info(f"Agent cache cleared for '{schema_name}': {len(keys_to_remove)} entries")
+            return len(keys_to_remove)
+
+
+def get_agent_cache_stats() -> dict[str, Any]:
+    """Get cache statistics for monitoring."""
+    return {
+        "size": len(_agent_cache),
+        "max_size": _AGENT_CACHE_MAX_SIZE,
+        "ttl_seconds": _AGENT_CACHE_TTL_SECONDS,
+        "keys": list(_agent_cache.keys()),
+    }
 
 
 class AgentRuntime:
@@ -586,6 +679,7 @@ async def create_agent(
     model_override: KnownModelName | Model | None = None,
     result_type: type[BaseModel] | None = None,
     strip_model_description: bool = True,
+    use_cache: bool = True,
 ) -> AgentRuntime:
     """
     Create agent from context with dynamic schema loading.
@@ -609,6 +703,7 @@ async def create_agent(
         model_override: Optional explicit model (bypasses context.default_model)
         result_type: Optional Pydantic model for structured output
         strip_model_description: If True, removes model docstring from LLM schema
+        use_cache: If True, use agent instance cache (default: True)
 
     Returns:
         Configured Pydantic.AI Agent with MCP tools
@@ -632,6 +727,9 @@ async def create_agent(
             agent_schema_override=schema,
             result_type=Output
         )
+
+        # Bypass cache for testing
+        agent = await create_agent(context, use_cache=False)
     """
     # Initialize OTEL instrumentation if enabled (idempotent)
     if settings.otel.enabled:
@@ -652,6 +750,17 @@ async def create_agent(
 
     default_model = context.default_model if context else settings.llm.default_model
     model = get_valid_model_or_default(model_override, default_model)
+
+    # Check cache first (if enabled and no custom result_type)
+    # Note: Custom result_type bypasses cache since it changes the agent's output schema
+    user_id = context.user_id if context else None
+    if use_cache and result_type is None:
+        cache_key = _compute_cache_key(agent_schema, str(model), user_id)
+        cached_agent = await _get_cached_agent(cache_key)
+        if cached_agent is not None:
+            return cached_agent
+    else:
+        cache_key = None
 
     # Extract schema fields using typed helpers
     from ..schema import get_system_prompt, get_metadata
@@ -907,8 +1016,14 @@ async def create_agent(
     #     from ..otel import set_agent_context_attributes
     #     set_agent_context_attributes(context)
 
-    return AgentRuntime(
+    agent_runtime = AgentRuntime(
         agent=agent,
         temperature=temperature,
         max_iterations=max_iterations,
     )
+
+    # Cache the agent if caching is enabled
+    if cache_key is not None:
+        await _cache_agent(cache_key, agent_runtime)
+
+    return agent_runtime

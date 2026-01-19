@@ -15,7 +15,13 @@ from .schema import (
     validate_agent_schema,
     create_agent_schema,
 )
-from .providers.pydantic_ai import create_agent_from_schema_file, create_agent, AgentRuntime
+from .providers.pydantic_ai import (
+    create_agent_from_schema_file,
+    create_agent,
+    AgentRuntime,
+    clear_agent_cache,
+    get_agent_cache_stats,
+)
 from .query_helper import ask_rem, REMQueryOutput
 from .llm_provider_models import (
     ModelInfo,
@@ -41,6 +47,9 @@ __all__ = [
     "create_agent_from_schema_file",
     "create_agent",
     "AgentRuntime",
+    # Agent Cache Management
+    "clear_agent_cache",
+    "get_agent_cache_stats",
     # REM Query Helpers
     "ask_rem",
     "REMQueryOutput",

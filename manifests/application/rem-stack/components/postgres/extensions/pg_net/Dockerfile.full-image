@@ -1,5 +1,5 @@
 # =============================================================================
-# PostgreSQL 18 with pgvector + pg_net + pg_cron Extensions
+# PostgreSQL 18 with pgvector + pg_net + pg_cron + pgaudit Extensions
 # =============================================================================
 #
 # Traditional approach: Full PostgreSQL image with extension pre-installed.
@@ -48,6 +48,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libcurl4-openssl-dev \
     postgresql-server-dev-18 \
+    libkrb5-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install pgvector extension (required by REM)
@@ -76,6 +77,14 @@ RUN git clone --depth 1 https://github.com/citusdata/pg_cron.git \
     && cd / \
     && rm -rf /tmp/pg_cron
 
+# Clone and build pgAudit for HIPAA compliance audit logging
+RUN git clone --depth 1 --branch REL_18_STABLE https://github.com/pgaudit/pgaudit.git \
+    && cd pgaudit \
+    && make USE_PGXS=1 \
+    && make USE_PGXS=1 install \
+    && cd / \
+    && rm -rf /tmp/pgaudit
+
 # Clean up build dependencies to reduce image size
 # IMPORTANT: Keep libcurl4 runtime - pg_net needs libcurl.so.4 at runtime
 # Mark it as manually installed to prevent autoremove from deleting it
@@ -93,4 +102,5 @@ USER 26
 # Verify extensions are installed
 RUN ls -la /usr/share/postgresql/18/extension/vector* \
     && ls -la /usr/share/postgresql/18/extension/pg_net* \
-    && ls -la /usr/share/postgresql/18/extension/pg_cron*
+    && ls -la /usr/share/postgresql/18/extension/pg_cron* \
+    && ls -la /usr/share/postgresql/18/extension/pgaudit*
