@@ -220,7 +220,12 @@ class ContextBuilder:
                 # can see previous tool results when the prompt is concatenated
                 for msg_dict in session_history:
                     role = msg_dict["role"]
-                    content = msg_dict["content"]
+                    content = msg_dict.get("content")
+
+                    # Skip messages with null/empty content (common in tool messages)
+                    if content is None or content == "":
+                        logger.debug(f"Skipping {role} message with null/empty content")
+                        continue
 
                     if role == "tool":
                         # Wrap tool results with clear markers for visibility
