@@ -17,6 +17,12 @@ Moments enable temporal queries:
 - "When did Sarah and Mike meet?"
 - "What was discussed in Q4 retrospective?"
 
+Session Compression:
+- Moments can be created from session message compaction (category="session-compression")
+- source_session_id links back to the originating session
+- previous_moment_keys enables backwards chaining through history
+- LLM can navigate arbitrarily far back by following the chain
+
 Data Model:
 - Inherits from CoreModel (id, tenant_id, timestamps, graph_edges, etc.)
 - name: Human-readable moment name
@@ -28,6 +34,8 @@ Data Model:
 - topic_tags: Topic/concept tags (project names, technologies)
 - summary: Natural language description
 - source_resource_ids: Resources used to construct this moment
+- source_session_id: Session ID for session-compression moments
+- previous_moment_keys: Keys for backwards chaining
 """
 
 from datetime import datetime
@@ -97,6 +105,16 @@ class Moment(CoreModel):
     source_resource_ids: list[str] = Field(
         default_factory=list,
         description="Resource IDs used to construct this moment",
+    )
+
+    # Session compression fields
+    source_session_id: Optional[str] = Field(
+        default=None,
+        description="Session ID this moment was extracted from (for session-compression moments)",
+    )
+    previous_moment_keys: list[str] = Field(
+        default_factory=list,
+        description="Keys of 1-3 preceding moments, enabling LLM to chain backwards through history",
     )
 
     @model_validator(mode='after')

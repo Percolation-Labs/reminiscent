@@ -30,10 +30,12 @@ from .prompts import register_prompts
 from .resources import (
     register_agent_resources,
     register_file_resources,
+    register_moment_resources,
     register_schema_resources,
     register_status_resources,
 )
 from .tools import (
+    analyze_pages,
     ask_agent,
     ask_rem_agent,
     get_schema,
@@ -172,6 +174,11 @@ def create_mcp_server(is_local: bool = False) -> FastMCP:
             "System Status:\n"
             "• rem://status - System health and statistics\n"
             "\n"
+            "Session Moments (conversation history compression):\n"
+            "• rem://moments - List recent moments (page 1)\n"
+            "• rem://moments/{page} - Paginated moment list\n"
+            "• rem://moments/key/{key} - Get specific moment detail\n"
+            "\n"
             "**Quick Start:**\n"
             "1. User: \"Who is Sarah?\"\n"
             "   → Call: search_rem(query_type=\"lookup\", entity_key=\"Sarah\", user_id=\"...\")\n"
@@ -207,6 +214,9 @@ def create_mcp_server(is_local: bool = False) -> FastMCP:
     # Register multi-agent tools
     mcp.tool()(ask_agent)
 
+    # Register vision tools
+    mcp.tool()(analyze_pages)
+
     # Register test tool only in development environment (not staging/production)
     if settings.environment not in ("staging", "production"):
         mcp.tool()(test_error_handling)
@@ -239,5 +249,6 @@ def create_mcp_server(is_local: bool = False) -> FastMCP:
     register_agent_resources(mcp)
     register_file_resources(mcp)
     register_status_resources(mcp)
+    register_moment_resources(mcp)
 
     return mcp

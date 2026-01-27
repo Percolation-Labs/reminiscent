@@ -28,7 +28,7 @@ Endpoints:
 - /api/v1/chat/completions   : OpenAI-compatible chat completions (streaming & non-streaming)
 - /api/v1/query              : REM query execution (rem-dialect or natural-language)
 - /api/v1/resources          : Resource CRUD (TODO)
-- /api/v1/moments            : Moment CRUD (TODO)
+- /api/v1/moments            : Moment building & retrieval (user-scoped)
 - /api/auth/*                : OAuth/OIDC authentication
 - /docs                      : OpenAPI documentation
 
@@ -392,6 +392,7 @@ def create_app() -> FastAPI:
     from .routers.admin import router as admin_router
     from .routers.shared_sessions import router as shared_sessions_router
     from .routers.query import router as query_router
+    from .routers.moments import router as moments_router
 
     app.include_router(chat_router)
     app.include_router(models_router)
@@ -403,6 +404,7 @@ def create_app() -> FastAPI:
     app.include_router(feedback_router)
     app.include_router(admin_router)
     app.include_router(query_router)
+    app.include_router(moments_router)
 
     # Register auth router (if enabled)
     if settings.auth.enabled:
@@ -417,13 +419,8 @@ def create_app() -> FastAPI:
         app.include_router(dev_router)
 
     # TODO: Register additional routers
-    # from .routers.query import router as query_router
     # from .routers.resources import router as resources_router
-    # from .routers.moments import router as moments_router
-    #
-    # app.include_router(query_router)
     # app.include_router(resources_router)
-    # app.include_router(moments_router)
 
     # Add middleware to rewrite /api/v1/mcp to /api/v1/mcp/
     @app.middleware("http")

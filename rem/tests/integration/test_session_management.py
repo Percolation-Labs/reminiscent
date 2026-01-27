@@ -213,8 +213,8 @@ async def test_session_message_store(tenant_id, session_id, user_id):
     # Note: 4th message has long content, might be compressed
     # Check if any message has compression markers
 
-    # Load messages
-    loaded = await store.load_session_messages(
+    # Load messages (returns tuple of messages and has_partition flag)
+    loaded, _has_partition = await store.load_session_messages(
         session_id=session_id, user_id=user_id, compress_on_load=False
     )
 

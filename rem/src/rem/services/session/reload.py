@@ -69,7 +69,7 @@ async def reload_session(
         store = SessionMessageStore(user_id=user_id)
 
         # Load messages (assistant messages compressed on load, tool messages never compressed)
-        messages = await store.load_session_messages(
+        messages, _has_partition = await store.load_session_messages(
             session_id=session_id, user_id=user_id, compress_on_load=compress_on_load
         )
 

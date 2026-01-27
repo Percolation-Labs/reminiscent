@@ -84,6 +84,7 @@ Schema Caching Status:
 """
 
 import importlib.resources
+import time
 from pathlib import Path
 from typing import Any, cast
 
@@ -104,10 +105,32 @@ SCHEMA_SEARCH_PATHS = [
 # In-memory cache for filesystem schemas (no TTL - immutable)
 _fs_schema_cache: dict[str, dict[str, Any]] = {}
 
-# Future: Database schema cache (with TTL - mutable)
-# Will be used when loading schemas from database (SchemaRepository)
-# _db_schema_cache: dict[tuple[str, str], tuple[dict[str, Any], float]] = {}
-# _db_schema_ttl: int = 300  # 5 minutes in seconds
+# Database schema cache (with TTL - mutable, supports hot-reload)
+# Cache key: (schema_name, user_id or "public") → (schema_dict, timestamp)
+_db_schema_cache: dict[tuple[str, str], tuple[dict[str, Any], float]] = {}
+_db_schema_ttl: int = 300  # 5 minutes in seconds
+
+
+def _get_cached_db_schema(schema_name: str, user_id: str | None) -> dict[str, Any] | None:
+    """Get schema from DB cache if exists and not expired."""
+    cache_key = (schema_name.lower(), user_id or "public")
+    if cache_key in _db_schema_cache:
+        schema, timestamp = _db_schema_cache[cache_key]
+        if time.time() - timestamp < _db_schema_ttl:
+            logger.debug(f"Schema cache hit: {schema_name} (age: {time.time() - timestamp:.0f}s)")
+            return schema
+        else:
+            # Expired, remove from cache
+            del _db_schema_cache[cache_key]
+            logger.debug(f"Schema cache expired: {schema_name}")
+    return None
+
+
+def _cache_db_schema(schema_name: str, user_id: str | None, schema: dict[str, Any]) -> None:
+    """Add schema to DB cache with current timestamp."""
+    cache_key = (schema_name.lower(), user_id or "public")
+    _db_schema_cache[cache_key] = (schema, time.time())
+    logger.debug(f"Schema cached: {schema_name} (TTL: {_db_schema_ttl}s)")
 
 
 def _load_schema_from_database(schema_name: str, user_id: str) -> dict[str, Any] | None:
@@ -463,6 +486,13 @@ async def load_agent_schema_async(
 
     # 2. Try database FIRST (if enabled) - enables hot-reload without redeploy
     if enable_db_fallback and not is_custom_path:
+        # Check DB schema cache first (TTL-based)
+        cached_schema = _get_cached_db_schema(base_name, user_id)
+        if cached_schema is not None:
+            logger.info(f"✅ Loaded schema from cache: {base_name}")
+            return cached_schema
+
+        # Cache miss - query database
         from rem.services.postgres import get_postgres_service
 
         should_disconnect = False
@@ -494,6 +524,8 @@ async def load_agent_schema_async(
                 if row:
                     spec = row.get("spec")
                     if spec and isinstance(spec, dict):
+                        # Cache the schema for future requests
+                        _cache_db_schema(base_name, user_id, spec)
                         logger.info(f"✅ Loaded schema from database: {base_name}")
                         return spec
             finally:

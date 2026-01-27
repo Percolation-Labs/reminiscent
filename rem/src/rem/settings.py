@@ -1768,6 +1768,114 @@ class TestSettings(BaseSettings):
         return str(uuid.uuid5(uuid.NAMESPACE_DNS, self.user_email))
 
 
+class MomentBuilderSettings(BaseSettings):
+    """
+    Moment Builder settings for automatic session compression.
+
+    The Moment Builder enables indefinite conversations by compressing older messages
+    into holistic "moment" summaries. Each compression run typically creates 1 moment
+    (occasionally 2-3 for very long sessions with distinct phases).
+
+    Design Philosophy:
+        - A moment replaces ~70% of context, keeping recent 30% as raw messages
+        - Moments are multifaceted narratives, not granular topic slices
+        - A handful of moments should span significant time (days/weeks of conversation)
+        - Quality over quantity: one rich moment > many thin ones
+
+    Environment variables:
+        MOMENT_BUILDER__ENABLED - Enable automatic moment building (default: false)
+        MOMENT_BUILDER__MESSAGE_THRESHOLD - Trigger after N messages (default: 50)
+        MOMENT_BUILDER__TOKEN_THRESHOLD - Trigger after N tokens (default: 50000)
+        MOMENT_BUILDER__LOAD_MAX_MESSAGES - Max messages to load via CTE (default: 50)
+        MOMENT_BUILDER__INSERT_PARTITION_EVENT - Insert partition event at boundary (default: true)
+        MOMENT_BUILDER__PROMPT_RESOURCE_URI - Custom prompt from Resource entity
+
+    Architecture:
+        1. Triggered async after streaming response completes (fire-and-forget)
+        2. Compacts user/assistant/tool messages into 1-3 Moment entities
+        3. Inserts partition event as checkpoint (moment_keys, recent_moments_summary)
+        4. Updates User.summary with evolving interests
+        5. Session loader uses partition event to reconstruct context without full history
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="MOMENT_BUILDER__",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable automatic moment building (disabled by default)",
+    )
+
+    message_threshold: int = Field(
+        default=250,
+        description="Trigger moment building after N messages since last compaction (~250 exchanges)",
+    )
+
+    token_threshold: int = Field(
+        default=100000,
+        description="Trigger moment building after N tokens (~50-78% of typical context windows)",
+    )
+
+    load_max_messages: int = Field(
+        default=50,
+        description="Maximum messages to load via CTE query (recent messages in conversation order)",
+    )
+
+    insert_partition_event: bool = Field(
+        default=True,
+        description=(
+            "Insert a session_partition tool event at compression boundary. "
+            "When True, the partition event contains user_key and moment_keys, "
+            "so context_builder doesn't need to add extra hints."
+        ),
+    )
+
+    recent_moment_count: int = Field(
+        default=5,
+        description="Number of recent moment keys to include in context hint (when insert_partition_event=False)",
+    )
+
+    prompt_resource_uri: str | None = Field(
+        default=None,
+        description=(
+            "URI of a Resource entity containing custom moment builder prompt. "
+            "Example: 'rem://prompts/moment-builder'. If not set, uses default prompt."
+        ),
+    )
+
+    page_size: int = Field(
+        default=25,
+        description="Page size for moment list pagination (rem://moments/{page})",
+    )
+
+    # Lag settings - ensures moment events are inserted "in the past"
+    # This prevents the LLM from seeing a moment boundary right before recent messages
+    lag_messages: int = Field(
+        default=10,
+        description=(
+            "Minimum number of messages to keep AFTER the moment boundary. "
+            "The moment builder compresses messages up to (total - lag_messages), "
+            "ensuring the partition event appears 'in the past' from the LLM's perspective. "
+            "This prevents confusing the LLM with a moment boundary right before recent context."
+        ),
+    )
+
+    lag_percentage: float = Field(
+        default=0.3,
+        ge=0.1,
+        le=0.5,
+        description=(
+            "Percentage of messages to keep after the moment boundary (0.1-0.5). "
+            "The actual lag is max(lag_messages, total_messages * lag_percentage). "
+            "Default 30% means if there are 100 messages, we compress up to message 70."
+        ),
+    )
+
+
 class Settings(BaseSettings):
     """
     Global application settings.
@@ -1836,6 +1944,7 @@ class Settings(BaseSettings):
     content: ContentSettings = Field(default_factory=ContentSettings)
     schema_search: SchemaSettings = Field(default_factory=SchemaSettings)
     email: EmailSettings = Field(default_factory=EmailSettings)
+    moment_builder: MomentBuilderSettings = Field(default_factory=MomentBuilderSettings)
     test: TestSettings = Field(default_factory=TestSettings)
     debug: DebugSettings = Field(default_factory=DebugSettings)
 

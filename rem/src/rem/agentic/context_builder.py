@@ -207,12 +207,20 @@ class ContextBuilder:
             # ALWAYS load session history (if session_id provided)
             # - Long assistant messages are compressed on load with REM LOOKUP hints
             # - Tool messages are never compressed (contain structured metadata)
+            # - When moment builder enabled, use max_messages limit via CTE
             if context.session_id and settings.postgres.enabled:
                 store = SessionMessageStore(user_id=context.user_id or "default")
-                session_history = await store.load_session_messages(
+
+                # Use CTE limit when moment builder is enabled
+                max_messages = None
+                if settings.moment_builder.enabled:
+                    max_messages = settings.moment_builder.load_max_messages
+
+                session_history, has_partition_event = await store.load_session_messages(
                     session_id=context.session_id,
                     user_id=context.user_id,
                     compress_on_load=True,  # Compress long assistant messages
+                    max_messages=max_messages,
                 )
 
                 # Convert to ContextMessage format
@@ -239,7 +247,10 @@ class ContextBuilder:
                         )
                     )
 
-                logger.debug(f"Loaded {len(session_history)} messages for session {context.session_id}")
+                logger.debug(
+                    f"Loaded {len(session_history)} messages for session {context.session_id} "
+                    f"(has_partition={has_partition_event}, max={max_messages})"
+                )
 
             # Add new messages from request
             if new_messages:

@@ -8,6 +8,8 @@ The SSE Simulator is a special programmatic "agent" that generates
 scripted SSE events for testing and demonstration - it doesn't use an LLM.
 
 Agent Manager provides functions for saving/loading user-created agents.
+
+Moment Builder compresses session messages into discrete moments.
 """
 
 from .sse_simulator import (
@@ -24,6 +26,12 @@ from .agent_manager import (
     build_agent_spec,
 )
 
+from .moment_builder import (
+    MomentBuilder,
+    MomentBuilderResult,
+    run_moment_builder,
+)
+
 __all__ = [
     # SSE Simulator (programmatic, no LLM)
     "stream_simulator_events",
@@ -35,4 +43,8 @@ __all__ = [
     "list_agents",
     "delete_agent",
     "build_agent_spec",
+    # Moment Builder
+    "MomentBuilder",
+    "MomentBuilderResult",
+    "run_moment_builder",
 ]

@@ -7,6 +7,11 @@ Sessions group related messages together and can have different modes:
 
 Sessions allow overriding settings like model, temperature, and custom prompts
 for evaluation and experimentation purposes.
+
+Moment Building:
+- Sessions track message_count and total_tokens for moment builder thresholds
+- last_moment_message_idx tracks which messages have been compacted into moments
+- When thresholds are crossed, moment builder compacts messages since last compaction
 """
 
 from enum import Enum
@@ -79,6 +84,11 @@ class Session(CoreModel):
     total_tokens: int | None = Field(
         default=None,
         description="Total tokens used in this session",
+    )
+    # Moment builder tracking
+    last_moment_message_idx: int | None = Field(
+        default=None,
+        description="Index of last message included in a moment (for incremental compaction)",
     )
 
     model_config = {"use_enum_values": True}

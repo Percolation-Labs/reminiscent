@@ -763,6 +763,161 @@ def register_user_resources(mcp: FastMCP):
             await pg.disconnect()
 
 
+def register_moment_resources(mcp: FastMCP):
+    """
+    Register moment resources for session compression and history.
+
+    Moments are user-scoped - all queries filter by user_id from connection context.
+
+    Available Resources:
+    - rem://moments or rem://moments/{page} - Paginated list of moment keys
+    - rem://moments/key/{key} - Get specific moment detail
+
+    Args:
+        mcp: FastMCP server instance
+    """
+
+    @mcp.resource("rem://moments/{page}")
+    async def get_moments_page(page: int = 1) -> str:
+        """
+        List paginated moment keys for navigation (user-scoped).
+
+        Returns lightweight moment entries (key, date, topics) for navigation.
+        Use rem://moments/key/{key} to retrieve full moment details.
+
+        Page size is 25. Pages go backwards in time (page 1 = most recent).
+
+        Args:
+            page: Page number (1-indexed, default: 1)
+
+        Returns:
+            JSON string with paginated moment keys and metadata
+        """
+        import json
+        from ...services.postgres import get_postgres_service
+        from ...settings import settings
+
+        # NOTE: In production, user_id should come from MCP connection context
+        # For now, this will need to be enhanced when we add proper context passing
+        # to MCP resources. The API endpoints handle this via get_user_id_from_request.
+
+        pg = get_postgres_service()
+        await pg.connect()
+
+        try:
+            page_size = settings.moment_builder.page_size
+            if page < 1:
+                page = 1
+            offset = (page - 1) * page_size
+
+            # Get total count
+            count_query = """
+                SELECT COUNT(*) FROM moments
+                WHERE deleted_at IS NULL
+            """
+
+            # Get paginated moments
+            list_query = """
+                SELECT name, starts_timestamp, ends_timestamp, topic_tags
+                FROM moments
+                WHERE deleted_at IS NULL
+                ORDER BY starts_timestamp DESC
+                LIMIT $1 OFFSET $2
+            """
+
+            total_count = await pg.fetchval(count_query)
+            rows = await pg.fetch(list_query, page_size, offset)
+
+            total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 1
+
+            moments = []
+            for row in rows:
+                starts = row["starts_timestamp"]
+                ends = row["ends_timestamp"]
+
+                date_str = starts.strftime("%Y-%m-%d") if starts else ""
+                time_range = None
+                if starts and ends:
+                    time_range = f"{starts.strftime('%H:%M')}-{ends.strftime('%H:%M')}"
+                elif starts:
+                    time_range = starts.strftime("%H:%M")
+
+                moments.append({
+                    "key": row["name"] or "",
+                    "date": date_str,
+                    "time_range": time_range,
+                    "topics": row["topic_tags"] or [],
+                })
+
+            result = {
+                "page": page,
+                "page_size": page_size,
+                "total_pages": total_pages,
+                "total_moments": total_count or 0,
+                "moments": moments,
+            }
+
+            return json.dumps(result, indent=2)
+
+        finally:
+            await pg.disconnect()
+
+    @mcp.resource("rem://moments/key/{key}")
+    async def get_moment_detail(key: str) -> str:
+        """
+        Get full details of a specific moment by key (user-scoped).
+
+        Returns complete moment information including:
+        - Summary (detailed description)
+        - Topic and emotion tags
+        - Start and end timestamps
+        - Source session and previous moment keys
+
+        Args:
+            key: Moment key/name
+
+        Returns:
+            JSON string with full moment detail, or error if not found
+        """
+        import json
+        from ...services.postgres import get_postgres_service
+
+        pg = get_postgres_service()
+        await pg.connect()
+
+        try:
+            query = """
+                SELECT name, summary, topic_tags, emotion_tags,
+                       starts_timestamp, ends_timestamp, source_session_id,
+                       previous_moment_keys, category
+                FROM moments
+                WHERE name = $1 AND deleted_at IS NULL
+                LIMIT 1
+            """
+
+            row = await pg.fetchrow(query, key)
+
+            if not row:
+                return json.dumps({"error": f"Moment '{key}' not found"})
+
+            result = {
+                "key": row["name"] or key,
+                "summary": row["summary"],
+                "topic_tags": row["topic_tags"] or [],
+                "emotion_tags": row["emotion_tags"] or [],
+                "starts_timestamp": row["starts_timestamp"].isoformat() if row["starts_timestamp"] else None,
+                "ends_timestamp": row["ends_timestamp"].isoformat() if row["ends_timestamp"] else None,
+                "source_session_id": row["source_session_id"],
+                "previous_moment_keys": row["previous_moment_keys"] or [],
+                "category": row["category"],
+            }
+
+            return json.dumps(result, indent=2)
+
+        finally:
+            await pg.disconnect()
+
+
 # Resource dispatcher for read_resource tool
 async def load_resource(uri: str) -> dict | str:
     """
@@ -794,6 +949,7 @@ async def load_resource(uri: str) -> dict | str:
     register_status_resources(mcp)
     register_session_resources(mcp)
     register_user_resources(mcp)
+    register_moment_resources(mcp)
 
     # 1. Try exact match in regular resources
     resources = await mcp.get_resources()

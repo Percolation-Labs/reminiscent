@@ -259,7 +259,7 @@ async def generate_embeddings_stub(
 
 def validate_record_for_kv_store(
     record: BaseModel,
-    entity_key_field: str,
+    entity_key_field: str | None,
     tenant_id: str | None = None,
 ) -> tuple[bool, str]:
     """
@@ -267,7 +267,7 @@ def validate_record_for_kv_store(
 
     Args:
         record: Pydantic model instance
-        entity_key_field: Field name to use as entity_key
+        entity_key_field: Field name to use as entity_key (None skips KV store validation)
         tenant_id: Optional tenant_id override
 
     Returns:
@@ -280,6 +280,10 @@ def validate_record_for_kv_store(
         >>> valid
         True
     """
+    # If no entity_key_field, skip KV store validation (record will use random UUID)
+    if entity_key_field is None:
+        return True, ""
+
     # Check entity_key field exists and has value
     if not hasattr(record, entity_key_field):
         return False, f"Record missing entity_key field: {entity_key_field}"

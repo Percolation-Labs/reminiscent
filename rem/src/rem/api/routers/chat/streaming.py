@@ -943,3 +943,78 @@ async def stream_openai_response_with_save(
                     except Exception as e:
                         logger.warning(f"Failed to update session description: {e}")
                     break
+
+        # Check if moment building should be triggered (fire-and-forget)
+        if settings.moment_builder.enabled and session_id and user_id:
+            asyncio.create_task(
+                _maybe_trigger_moment_builder(session_id, user_id)
+            )
+
+
+async def _maybe_trigger_moment_builder(session_id: str, user_id: str) -> None:
+    """
+    Check thresholds and trigger moment building if needed.
+
+    This runs as a fire-and-forget background task after streaming completes.
+    Errors are logged but don't affect the user's response.
+    """
+    try:
+        from ....models.entities import Session
+        from ....services.postgres import Repository
+
+        repo = Repository(Session, table_name="sessions")
+        session = await repo.get_by_id(session_id)
+
+        if not session:
+            return
+
+        # Check thresholds (whichever is hit first)
+        message_threshold = settings.moment_builder.message_threshold
+        token_threshold = settings.moment_builder.token_threshold
+
+        # Calculate unprocessed messages since last compaction
+        last_processed = session.last_moment_message_idx or 0
+        unprocessed_count = session.message_count - last_processed
+
+        # Also check total tokens (if tracked)
+        total_tokens = session.total_tokens or 0
+
+        should_trigger = (
+            unprocessed_count >= message_threshold
+            or total_tokens >= token_threshold
+        )
+
+        if not should_trigger:
+            logger.debug(
+                f"Moment builder threshold not met: "
+                f"messages={unprocessed_count}/{message_threshold}, "
+                f"tokens={total_tokens}/{token_threshold}"
+            )
+            return
+
+        logger.info(
+            f"Moment builder threshold crossed: "
+            f"messages={unprocessed_count}, tokens={total_tokens}, "
+            f"triggering for session={session_id}"
+        )
+
+        # Trigger moment builder (fire-and-forget)
+        from ....agentic.agents import run_moment_builder
+
+        result = await run_moment_builder(
+            session_id=session_id,
+            user_id=user_id,
+            force=False,
+        )
+
+        if result.success:
+            logger.info(
+                f"Moment builder completed: "
+                f"moments_created={result.moments_created}, "
+                f"partition_inserted={result.partition_event_inserted}"
+            )
+        else:
+            logger.error(f"Moment builder failed: {result.error}")
+
+    except Exception as e:
+        logger.error(f"Error in moment builder trigger: {e}")

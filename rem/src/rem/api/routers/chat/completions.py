@@ -517,7 +517,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
     if context.session_id and settings.postgres.enabled:
         try:
             store = SessionMessageStore(user_id=context.user_id or settings.test.effective_user_id)
-            raw_session_history = await store.load_session_messages(
+            raw_session_history, _has_partition = await store.load_session_messages(
                 session_id=context.session_id,
                 user_id=context.user_id,
                 compress_on_load=False,  # Don't compress - we need full data for reconstruction

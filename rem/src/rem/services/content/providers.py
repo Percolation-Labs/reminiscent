@@ -118,14 +118,39 @@ class DocProvider(ContentProvider):
     - Images (.png, .jpg) - OCR text extraction
 
     Handles:
-    - Text extraction with OCR fallback
+    - Text extraction with automatic OCR fallback for scanned documents
     - Table detection and extraction
     - Daemon process workaround for multiprocessing restrictions
+
+    Environment Variables:
+        EXTRACTION_OCR_FALLBACK: Enable OCR fallback (default: true)
+        EXTRACTION_OCR_THRESHOLD: Min chars before triggering OCR fallback (default: 100)
+        EXTRACTION_FORCE_OCR: Always use OCR, skip native extraction (default: false)
+        EXTRACTION_OCR_LANGUAGE: Tesseract language codes (default: eng)
     """
 
     @property
     def name(self) -> str:
         return "doc"
+
+    def _get_env_bool(self, key: str, default: bool) -> bool:
+        """Get boolean from environment variable."""
+        import os
+        val = os.environ.get(key, "").lower()
+        if val in ("true", "1", "yes"):
+            return True
+        elif val in ("false", "0", "no"):
+            return False
+        return default
+
+    def _get_env_int(self, key: str, default: int) -> int:
+        """Get integer from environment variable."""
+        import os
+        val = os.environ.get(key, "")
+        try:
+            return int(val) if val else default
+        except ValueError:
+            return default
 
     def _is_daemon_process(self) -> bool:
         """Check if running in a daemon process."""
@@ -134,25 +159,34 @@ class DocProvider(ContentProvider):
         except Exception:
             return False
 
-    def _parse_in_subprocess(self, file_path: Path) -> dict:
+    def _parse_in_subprocess(self, file_path: Path, force_ocr: bool = False) -> dict:
         """Run kreuzberg in a separate subprocess to bypass daemon restrictions."""
-        script = """
+        import os
+        ocr_language = os.environ.get("EXTRACTION_OCR_LANGUAGE", "eng")
+
+        script = f"""
 import json
 import sys
 from pathlib import Path
-from kreuzberg import ExtractionConfig, extract_file_sync
+from kreuzberg import ExtractionConfig, OcrConfig, extract_file_sync
 
-# Parse document with kreuzberg 4.x (uses sensible defaults)
-config = ExtractionConfig()
+force_ocr = {force_ocr}
+
+if force_ocr:
+    config = ExtractionConfig(
+        force_ocr=True,
+        ocr=OcrConfig(backend="tesseract", language="{ocr_language}")
+    )
+else:
+    config = ExtractionConfig()
 
 result = extract_file_sync(Path(sys.argv[1]), config=config)
 
-# Serialize result to JSON
-output = {
+output = {{
     'content': result.content,
     'tables': [],
-    'metadata': {}
-}
+    'metadata': {{}}
+}}
 print(json.dumps(output))
 """
 
@@ -169,9 +203,41 @@ print(json.dumps(output))
 
         return json.loads(result.stdout)
 
+    def _extract_with_config(self, tmp_path: Path, force_ocr: bool = False) -> tuple[str, dict]:
+        """Extract content with optional OCR config."""
+        import os
+        from kreuzberg import ExtractionConfig, OcrConfig, extract_file_sync
+
+        ocr_language = os.environ.get("EXTRACTION_OCR_LANGUAGE", "eng")
+
+        if force_ocr:
+            config = ExtractionConfig(
+                force_ocr=True,
+                ocr=OcrConfig(backend="tesseract", language=ocr_language)
+            )
+            parser_name = "kreuzberg_ocr"
+        else:
+            config = ExtractionConfig()
+            parser_name = "kreuzberg"
+
+        result = extract_file_sync(tmp_path, config=config)
+        text = result.content
+
+        extraction_metadata = {
+            "parser": parser_name,
+            "file_extension": tmp_path.suffix,
+        }
+
+        return text, extraction_metadata
+
     def extract(self, content: bytes, metadata: dict[str, Any]) -> dict[str, Any]:
         """
-        Extract document content using Kreuzberg.
+        Extract document content using Kreuzberg with intelligent OCR fallback.
+
+        Process:
+        1. Try native text extraction first (fast, preserves structure)
+        2. If content is minimal (< threshold chars), retry with OCR
+        3. Use OCR result if it's better than native result
 
         Args:
             content: Document file bytes
@@ -180,44 +246,89 @@ print(json.dumps(output))
         Returns:
             dict with text and extraction metadata
         """
+        # Get OCR settings from environment
+        force_ocr = self._get_env_bool("EXTRACTION_FORCE_OCR", False)
+        ocr_fallback = self._get_env_bool("EXTRACTION_OCR_FALLBACK", True)
+        ocr_threshold = self._get_env_int("EXTRACTION_OCR_THRESHOLD", 100)
+
         # Write bytes to temp file for kreuzberg
-        # Detect extension from metadata
         content_type = metadata.get("content_type", "")
         suffix = get_extension(content_type, default=".pdf")
 
         with temp_file_from_bytes(content, suffix=suffix) as tmp_path:
+            ocr_used = False
+            ocr_fallback_triggered = False
+            native_char_count = 0
+
             # Check if running in daemon process
             if self._is_daemon_process():
-                logger.info("Daemon process detected - using subprocess workaround for document parsing")
+                logger.info("Daemon process detected - using subprocess workaround")
                 try:
-                    result_dict = self._parse_in_subprocess(tmp_path)
-                    text = result_dict["content"]
-                    extraction_metadata = {
-                        "table_count": len(result_dict["tables"]),
-                        "parser": "kreuzberg_subprocess",
-                        "file_extension": tmp_path.suffix,
-                    }
+                    if force_ocr:
+                        result_dict = self._parse_in_subprocess(tmp_path, force_ocr=True)
+                        text = result_dict["content"]
+                        ocr_used = True
+                        extraction_metadata = {
+                            "parser": "kreuzberg_subprocess_ocr",
+                            "file_extension": tmp_path.suffix,
+                        }
+                    else:
+                        # Try native first
+                        result_dict = self._parse_in_subprocess(tmp_path, force_ocr=False)
+                        text = result_dict["content"]
+                        native_char_count = len(text)
+
+                        # OCR fallback if content is minimal
+                        if ocr_fallback and len(text.strip()) < ocr_threshold:
+                            logger.warning(f"Content below threshold ({len(text.strip())} < {ocr_threshold}) - trying OCR fallback")
+                            try:
+                                ocr_result = self._parse_in_subprocess(tmp_path, force_ocr=True)
+                                ocr_text = ocr_result["content"]
+                                if len(ocr_text.strip()) > len(text.strip()):
+                                    logger.info(f"OCR fallback improved result: {len(ocr_text)} chars (was {native_char_count})")
+                                    text = ocr_text
+                                    ocr_used = True
+                                    ocr_fallback_triggered = True
+                            except Exception as e:
+                                logger.warning(f"OCR fallback failed in subprocess: {e}")
+
+                        extraction_metadata = {
+                            "parser": "kreuzberg_subprocess" if not ocr_used else "kreuzberg_subprocess_ocr_fallback",
+                            "file_extension": tmp_path.suffix,
+                        }
                 except Exception as e:
-                    logger.error(f"Subprocess parsing failed: {e}. Falling back to text-only.")
-                    # Fallback to simple text extraction (kreuzberg 4.x API)
-                    from kreuzberg import ExtractionConfig, extract_file_sync
-                    config = ExtractionConfig()
-                    result = extract_file_sync(tmp_path, config=config)
-                    text = result.content
-                    extraction_metadata = {
-                        "parser": "kreuzberg_fallback",
-                        "file_extension": tmp_path.suffix,
-                    }
+                    logger.error(f"Subprocess parsing failed: {e}. Falling back to direct call.")
+                    text, extraction_metadata = self._extract_with_config(tmp_path, force_ocr=force_ocr)
+                    ocr_used = force_ocr
             else:
-                # Normal execution (not in daemon) - kreuzberg 4.x
-                from kreuzberg import ExtractionConfig, extract_file_sync
-                config = ExtractionConfig()
-                result = extract_file_sync(tmp_path, config=config)
-                text = result.content
-                extraction_metadata = {
-                    "parser": "kreuzberg",
-                    "file_extension": tmp_path.suffix,
-                }
+                # Normal execution (not in daemon)
+                if force_ocr:
+                    text, extraction_metadata = self._extract_with_config(tmp_path, force_ocr=True)
+                    ocr_used = True
+                else:
+                    # Try native first
+                    text, extraction_metadata = self._extract_with_config(tmp_path, force_ocr=False)
+                    native_char_count = len(text)
+
+                    # OCR fallback if content is minimal
+                    if ocr_fallback and len(text.strip()) < ocr_threshold:
+                        logger.warning(f"Content below threshold ({len(text.strip())} < {ocr_threshold}) - trying OCR fallback")
+                        try:
+                            ocr_text, _ = self._extract_with_config(tmp_path, force_ocr=True)
+                            if len(ocr_text.strip()) > len(text.strip()):
+                                logger.info(f"OCR fallback improved result: {len(ocr_text)} chars (was {native_char_count})")
+                                text = ocr_text
+                                ocr_used = True
+                                ocr_fallback_triggered = True
+                                extraction_metadata["parser"] = "kreuzberg_ocr_fallback"
+                        except Exception as e:
+                            logger.warning(f"OCR fallback failed: {e}")
+
+            # Add OCR metadata
+            extraction_metadata["ocr_used"] = ocr_used
+            extraction_metadata["ocr_fallback_triggered"] = ocr_fallback_triggered
+            extraction_metadata["native_char_count"] = native_char_count
+            extraction_metadata["final_char_count"] = len(text)
 
             return {
                 "text": text,

@@ -1,0 +1,97 @@
+type: object
+description: |
+  # Moment Builder Agent - Session Compression
+
+  You are the Moment Builder agent responsible for compacting conversation messages into
+  discrete "Moments" that model the user's journey through their interactions.
+
+  ## Your Role
+
+  You receive a batch of conversation messages (user, assistant, tool calls) from a session
+  and must:
+  1. Identify natural boundaries in the conversation (topic shifts, task completions, context switches)
+  2. Create 1-5 discrete moments summarizing distinct conversation segments
+  3. Extract topic tags (concepts, technologies, project names)
+  4. Extract emotion tags (sentiment, focus level, engagement)
+  5. Generate concise summaries capturing the essence of each moment
+
+  ## Moment Boundaries
+
+  Create new moments when:
+  - The user shifts to a different topic or project
+  - A significant task or goal is completed
+  - The conversation tone or purpose changes
+  - Time gaps suggest natural breaks (if timestamps available)
+
+  ## Guidelines
+
+  - Each moment should represent a coherent interaction segment
+  - Summaries should be 1-3 sentences capturing what happened and why it matters
+  - Topic tags should be lowercase, hyphenated (e.g., "python-debugging", "api-design")
+  - Emotion tags should reflect user sentiment (e.g., "focused", "frustrated", "curious", "satisfied")
+  - Be conservative - fewer well-defined moments are better than many vague ones
+  - Think about what would help the user remember this interaction later
+
+  ## Output
+
+  Return a list of moments, each with:
+  - name: Short descriptive name (e.g., "Python Debugging Session", "API Design Review")
+  - summary: 1-3 sentence summary of what happened
+  - topic_tags: List of relevant topic/concept tags
+  - emotion_tags: List of sentiment/emotion tags
+  - starts_timestamp: ISO timestamp of first message in this moment
+  - ends_timestamp: ISO timestamp of last message in this moment
+
+properties:
+  moments:
+    type: array
+    items:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Short descriptive name for the moment (2-6 words)
+        summary:
+          type: string
+          description: 1-3 sentence summary of what happened and why it matters
+        topic_tags:
+          type: array
+          items:
+            type: string
+          description: Topic/concept tags (lowercase, hyphenated)
+        emotion_tags:
+          type: array
+          items:
+            type: string
+          description: Emotion/sentiment tags reflecting user state
+        starts_timestamp:
+          type: string
+          format: date-time
+          description: ISO timestamp of first message in this moment
+        ends_timestamp:
+          type: string
+          format: date-time
+          description: ISO timestamp of last message in this moment
+      required:
+        - name
+        - summary
+        - topic_tags
+        - starts_timestamp
+    description: List of discrete moments extracted from the conversation
+  user_summary_update:
+    type: string
+    description: |
+      Brief update to the user's evolving summary based on this session.
+      What new interests, patterns, or context should be remembered about this user?
+      Keep to 1-2 sentences describing new learnings about the user.
+
+required:
+  - moments
+
+json_schema_extra:
+  kind: agent
+  name: moment-builder
+  version: 1.0.0
+  structured_output: true
+  tools: []
+  resources: []

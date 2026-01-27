@@ -73,15 +73,15 @@ async def test_ingest_contract_pdf(postgres_service: PostgresService, monkeypatc
     monkeypatch.setattr(settings.chunking, "min_chunk_size", 1)
     monkeypatch.setattr(settings.chunking, "chunk_size", 10)
 
-    user_id=settings.test.effective_user_id
-    contract_path = Path("tests/data/content-examples/pdf/service_contract.pdf")
+    # Use path relative to this test file's location
+    test_dir = Path(__file__).parent.parent
+    contract_path = test_dir / "data/content-examples/pdf/service_contract.pdf"
 
-    assert contract_path.exists(), "Contract PDF not found"
+    assert contract_path.exists(), f"Contract PDF not found at {contract_path}"
 
-    # Ingest the file (tenant_id removed - using user_id for partitioning)
+    # Ingest the file - ingest_into_rem creates PUBLIC resources
     result = await ingest_into_rem(
         file_uri=str(contract_path.absolute()),
-        user_id=user_id,
         is_local_server=True,
     )
 
@@ -128,9 +128,11 @@ async def test_run_contract_extractor_agent(monkeypatch):
     mock_result_instance = MockAgentRunResult()
     monkeypatch.setattr("pydantic_ai.agent.Agent.run", AsyncMock(return_value=mock_result_instance))
 
-    # Load the agent schema
-    schema_path = Path("src/rem/schemas/agents/examples/contract-extractor.yaml")
-    assert schema_path.exists(), "Contract extractor schema not found"
+    # Load the agent schema - use path relative to package location
+    import rem
+    rem_package_dir = Path(rem.__file__).parent
+    schema_path = rem_package_dir / "schemas/agents/examples/contract-extractor.yaml"
+    assert schema_path.exists(), f"Contract extractor schema not found at {schema_path}"
     with open(schema_path, "r") as f:
         agent_schema = yaml.safe_load(f)
 

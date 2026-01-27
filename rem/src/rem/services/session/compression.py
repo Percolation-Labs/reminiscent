@@ -395,8 +395,12 @@ class SessionMessageStore:
         return compressed_messages
 
     async def load_session_messages(
-        self, session_id: str, user_id: str | None = None, compress_on_load: bool = True
-    ) -> list[dict[str, Any]]:
+        self,
+        session_id: str,
+        user_id: str | None = None,
+        compress_on_load: bool = True,
+        max_messages: int | None = None,
+    ) -> tuple[list[dict[str, Any]], bool]:
         """
         Load session messages from database, optionally compressing long assistant messages.
 
@@ -405,21 +409,34 @@ class SessionMessageStore:
         - User messages are returned as-is
         - Assistant messages MAY be compressed if long (>400 chars) with REM LOOKUP hints
 
+        CTE Query Pattern (when max_messages is set):
+        - Uses CTE to select last N messages (DESC order)
+        - Returns them in conversation order (ASC order)
+        - Efficiently limits context while preserving chronological flow
+
         Args:
             session_id: Session identifier
             user_id: Optional user identifier for filtering
             compress_on_load: Whether to compress long assistant messages (default: True)
+            max_messages: Optional limit on messages to load (uses CTE for efficiency)
 
         Returns:
-            List of session messages in chronological order, with long assistant
-            messages optionally compressed with REM LOOKUP hints
+            Tuple of:
+            - List of session messages in chronological order
+            - Boolean indicating if a session_partition event was found in loaded messages
         """
         if not settings.postgres.enabled:
             logger.debug("Postgres disabled, returning empty message list")
-            return []
+            return [], False
 
         try:
-            # Load messages from repository
+            # Use CTE query when max_messages is specified for efficient limiting
+            if max_messages is not None:
+                return await self._load_with_cte(
+                    session_id, user_id, compress_on_load, max_messages
+                )
+
+            # Standard query (load all messages)
             # Note: tenant_id column in messages table maps to user_id (user-scoped partitioning)
             filters = {"session_id": session_id, "tenant_id": self.user_id}
             if user_id:
@@ -429,6 +446,8 @@ class SessionMessageStore:
 
             # Convert Message entities to dict format
             message_dicts = []
+            has_partition_event = False
+
             for idx, msg in enumerate(messages):
                 role = msg.message_type or "assistant"
                 msg_dict = {
@@ -445,6 +464,9 @@ class SessionMessageStore:
                         msg_dict["tool_call_id"] = msg.metadata["tool_call_id"]
                     if msg.metadata.get("tool_name"):
                         msg_dict["tool_name"] = msg.metadata["tool_name"]
+                        # Check for partition event
+                        if msg.metadata["tool_name"] == "session_partition":
+                            has_partition_event = True
                     if msg.metadata.get("tool_arguments"):
                         msg_dict["tool_arguments"] = msg.metadata["tool_arguments"]
 
@@ -462,13 +484,113 @@ class SessionMessageStore:
 
             logger.debug(
                 f"Loaded {len(message_dicts)} messages for session {session_id} "
-                f"(compress_on_load={compress_on_load})"
+                f"(compress_on_load={compress_on_load}, has_partition={has_partition_event})"
             )
-            return message_dicts
+            return message_dicts, has_partition_event
 
         except Exception as e:
             logger.error(f"Failed to load session messages: {e}")
-            return []
+            return [], False
+
+    async def _load_with_cte(
+        self,
+        session_id: str,
+        user_id: str | None,
+        compress_on_load: bool,
+        max_messages: int,
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """
+        Load last N messages using CTE query, returned in conversation order.
+
+        SQL Pattern:
+        WITH recent_messages AS (
+            SELECT * FROM messages
+            WHERE session_id = $1 AND user_id = $2
+            ORDER BY created_at DESC
+            LIMIT $3
+        )
+        SELECT * FROM recent_messages ORDER BY created_at ASC;
+
+        This efficiently fetches only the most recent messages while
+        returning them in chronological order for context building.
+        """
+        from rem.services.postgres import get_postgres_service
+
+        postgres = get_postgres_service()
+        if not postgres:
+            return [], False
+
+        await postgres.connect()
+        try:
+            effective_user_id = user_id or self.user_id
+
+            # CTE query: get last N messages, return in chronological order
+            query = """
+                WITH recent_messages AS (
+                    SELECT *
+                    FROM messages
+                    WHERE session_id = $1
+                      AND user_id = $2
+                      AND deleted_at IS NULL
+                    ORDER BY created_at DESC
+                    LIMIT $3
+                )
+                SELECT * FROM recent_messages
+                ORDER BY created_at ASC
+            """
+
+            rows = await postgres.fetch(query, session_id, effective_user_id, max_messages)
+
+            # Convert rows to message dicts
+            message_dicts = []
+            has_partition_event = False
+
+            for idx, row in enumerate(rows):
+                role = row["message_type"] or "assistant"
+                content = row["content"] or ""
+                metadata = row["metadata"] or {}
+
+                msg_dict = {
+                    "role": role,
+                    "content": content,
+                    "timestamp": row["created_at"].isoformat() if row["created_at"] else None,
+                }
+
+                # For tool messages, reconstruct tool call metadata
+                if role == "tool" and metadata:
+                    if metadata.get("tool_call_id"):
+                        msg_dict["tool_call_id"] = metadata["tool_call_id"]
+                    if metadata.get("tool_name"):
+                        msg_dict["tool_name"] = metadata["tool_name"]
+                        # Check for partition event
+                        if metadata["tool_name"] == "session_partition":
+                            has_partition_event = True
+                    if metadata.get("tool_arguments"):
+                        msg_dict["tool_arguments"] = metadata["tool_arguments"]
+
+                # Also check tool_name column directly
+                if row.get("tool_name") == "session_partition":
+                    has_partition_event = True
+
+                # Compress long ASSISTANT messages on load (never tool messages)
+                if (
+                    compress_on_load
+                    and role == "assistant"
+                    and len(content) > self.compressor.min_length_for_compression
+                ):
+                    entity_key = truncate_key(f"session-{session_id}-msg-{idx}")
+                    msg_dict = self.compressor.compress_message(msg_dict, entity_key)
+
+                message_dicts.append(msg_dict)
+
+            logger.debug(
+                f"Loaded {len(message_dicts)} messages via CTE for session {session_id} "
+                f"(max={max_messages}, has_partition={has_partition_event})"
+            )
+            return message_dicts, has_partition_event
+
+        finally:
+            await postgres.disconnect()
 
     async def retrieve_full_message(self, session_id: str, message_index: int) -> str | None:
         """

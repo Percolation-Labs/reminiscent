@@ -1351,7 +1351,7 @@ async def ask_agent(
             from ...agentic.schema import get_system_prompt
 
             store = SessionMessageStore(user_id=child_context.user_id or "default")
-            raw_session_history = await store.load_session_messages(
+            raw_session_history, _has_partition = await store.load_session_messages(
                 session_id=child_context.session_id,
                 user_id=child_context.user_id,
                 compress_on_load=False,  # Need full data for reconstruction
@@ -1653,3 +1653,206 @@ async def test_error_handling(
                 "timestamp": str(asyncio.get_event_loop().time()),
             },
         }
+
+
+# =============================================================================
+# Vision Tools
+# =============================================================================
+
+
+@mcp_tool_error_handler
+async def analyze_pages(
+    file_uri: str,
+    start_page: int = 1,
+    end_page: int | None = None,
+    prompt: str = "Extract all text and tables from these pages",
+    provider: str = "anthropic",
+    model: str | None = None,
+    page_batch_size: int = 5,
+) -> dict[str, Any]:
+    """
+    Analyze PDF or image pages using vision models via Pydantic AI.
+
+    Batches pages together in single API calls for efficiency.
+    Uses Pydantic AI for full OpenTelemetry tracing and cost tracking.
+
+    Args:
+        file_uri: Path to PDF or image file (local path, s3://, or https://)
+        start_page: First page to analyze (1-indexed)
+        end_page: Last page to analyze (inclusive, defaults to last page)
+        prompt: Instruction for what to extract/analyze
+        provider: Vision provider (anthropic, openai, gemini)
+        model: Optional model override (e.g., "claude-sonnet-4.5", "gpt-4.1", "gpt-4o")
+        page_batch_size: How many pages to send to the model at once (default: 5)
+
+    Returns:
+        Dict with vision analysis results including:
+        - pages: List of page numbers processed
+        - page_count: Number of pages processed
+        - result: Vision analysis output text
+        - provider: Provider used
+        - model: Model identifier used
+        - usage: Token usage statistics
+
+    Examples:
+        # Extract text from a PDF
+        analyze_pages(
+            file_uri="s3://bucket/document.pdf",
+            prompt="Extract all text and tables"
+        )
+
+        # Analyze specific pages with GPT-4
+        analyze_pages(
+            file_uri="/path/to/invoice.pdf",
+            start_page=1,
+            end_page=3,
+            prompt="Extract invoice line items as JSON",
+            provider="openai",
+            model="gpt-4o"
+        )
+
+        # Process an image
+        analyze_pages(
+            file_uri="/path/to/scan.png",
+            prompt="Describe what you see in this image"
+        )
+    """
+    from pathlib import Path
+    from ...services.vision import analyze_images_async, VisionProvider, MIME_TYPES
+
+    file_path = Path(file_uri)
+    if not file_path.exists():
+        return {"status": "error", "error": f"File not found: {file_uri}"}
+
+    suffix = file_path.suffix.lower()
+
+    # For single image files, just process directly
+    if suffix in [".png", ".jpg", ".jpeg", ".webp", ".gif"]:
+        image_bytes = file_path.read_bytes()
+        media_type = MIME_TYPES.get(suffix, "image/png")
+        try:
+            provider_enum = VisionProvider(provider.lower())
+            result = await analyze_images_async(
+                images=[(image_bytes, media_type)],
+                prompt=prompt,
+                provider=provider_enum,
+                model=model,
+            )
+            return {
+                "status": "success",
+                "pages": [1],
+                "page_count": 1,
+                "prompt": prompt,
+                "result": result.description,
+                "provider": provider,
+                "model": result.model,
+                "usage": result.usage,
+            }
+        except Exception as e:
+            logger.error(f"Vision analysis failed: {e}")
+            return {"status": "error", "error": f"Vision analysis failed: {e}"}
+
+    # For PDFs, render pages to images using PyMuPDF
+    if suffix != ".pdf":
+        return {"status": "error", "error": f"Unsupported file type: {suffix}"}
+
+    try:
+        import fitz  # PyMuPDF
+
+        doc = fitz.open(file_path)
+        total_pages = len(doc)
+
+        # Determine page range
+        if end_page is None:
+            end_page = total_pages
+
+        # Validate page range (1-indexed input, 0-indexed internal)
+        start_page = max(1, min(start_page, total_pages))
+        end_page = max(start_page, min(end_page, total_pages))
+
+        # Render requested pages to images
+        page_images = []
+        for page_num in range(start_page - 1, end_page):  # Convert to 0-indexed
+            page = doc[page_num]
+            # Render at 150 DPI for good quality while keeping size reasonable
+            mat = fitz.Matrix(150 / 72, 150 / 72)
+            pix = page.get_pixmap(matrix=mat)
+            image_bytes = pix.tobytes("png")
+            page_images.append((page_num + 1, image_bytes))  # Store 1-indexed page number
+
+        doc.close()
+
+        if not page_images:
+            return {
+                "status": "error",
+                "error": f"No pages found in range {start_page}-{end_page}",
+                "total_pages": total_pages
+            }
+
+        logger.info(f"analyze_pages: Processing {len(page_images)} pages in batches of {page_batch_size}")
+
+        # Process pages in batches
+        all_results = []
+        all_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "requests": 0}
+        provider_enum = VisionProvider(provider.lower())
+        model_used = None
+        pages_processed = []
+
+        for batch_start in range(0, len(page_images), page_batch_size):
+            batch = page_images[batch_start:batch_start + page_batch_size]
+            batch_pages = [page_num for page_num, _ in batch]
+
+            # Prepare images for batch
+            images_data = [(img_bytes, "image/png") for _, img_bytes in batch]
+
+            # Add page context to prompt for multi-page batches
+            batch_prompt = prompt
+            if len(batch) > 1:
+                batch_prompt = f"Pages {batch_pages[0]}-{batch_pages[-1]}: {prompt}"
+
+            try:
+                batch_result = await analyze_images_async(
+                    images=images_data,
+                    prompt=batch_prompt,
+                    provider=provider_enum,
+                    model=model,
+                )
+
+                all_results.append(batch_result.description)
+                model_used = batch_result.model
+                pages_processed.extend(batch_pages)
+
+                # Aggregate usage
+                if batch_result.usage:
+                    all_usage["input_tokens"] += batch_result.usage.get("input_tokens", 0)
+                    all_usage["output_tokens"] += batch_result.usage.get("output_tokens", 0)
+                    all_usage["total_tokens"] += batch_result.usage.get("total_tokens", 0)
+                    all_usage["requests"] += batch_result.usage.get("requests", 0)
+
+                logger.info(f"analyze_pages: Batch complete, pages {batch_pages}")
+
+            except Exception as e:
+                logger.error(f"Batch analysis failed for pages {batch_pages}: {e}")
+                all_results.append(f"[Error processing pages {batch_pages}: {e}]")
+
+        # Combine results
+        combined_result = "\n\n---\n\n".join(all_results) if len(all_results) > 1 else all_results[0] if all_results else ""
+
+        return {
+            "status": "success",
+            "pages": pages_processed,
+            "page_count": len(pages_processed),
+            "batch_size": page_batch_size,
+            "batches_processed": (len(page_images) + page_batch_size - 1) // page_batch_size,
+            "prompt": prompt,
+            "result": combined_result,
+            "provider": provider,
+            "model": model_used,
+            "usage": all_usage,
+        }
+
+    except ImportError:
+        return {"status": "error", "error": "PyMuPDF (fitz) not available. Install with: pip install pymupdf"}
+    except Exception as e:
+        logger.error(f"Vision analysis failed: {e}")
+        return {"status": "error", "error": f"Vision analysis failed: {e}"}

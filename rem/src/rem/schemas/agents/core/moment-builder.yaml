@@ -176,3 +176,4 @@ json_schema_extra:
   - moment-extraction
   - temporal-analysis
   category: agent
+  structured_output: true
