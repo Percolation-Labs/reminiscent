@@ -40,6 +40,10 @@ class MomentBuildRequest(BaseModel):
     """Request to trigger moment building for a session."""
 
     session_id: str = Field(description="Session ID to build moments for")
+    user_id: str | None = Field(
+        default=None,
+        description="User ID to build moments for. If not provided, uses authenticated user.",
+    )
     force: bool = Field(
         default=False,
         description="Bypass threshold check and force moment building",
@@ -139,7 +143,8 @@ async def build_moments(
     if not settings.postgres.enabled:
         raise HTTPException(status_code=503, detail="Database not enabled")
 
-    user_id = get_user_id_from_request(request)
+    # Use explicit user_id from body if provided, otherwise fall back to request user
+    user_id = body.user_id or get_user_id_from_request(request)
 
     # Generate job ID for tracking
     import uuid
