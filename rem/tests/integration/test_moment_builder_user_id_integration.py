@@ -4,6 +4,9 @@ This test verifies that when we POST to /api/v1/moments/build with an explicit
 user_id in the request body, the moment builder uses THAT user_id and actually
 processes messages for that user.
 
+IMPORTANT: Uses FIXED UUIDs to enable longitudinal testing across weeks/months.
+Messages accumulate under the same user_id/session_id for realistic long-term testing.
+
 Run with:
     POSTGRES__CONNECTION_STRING='postgresql://rem:rem@localhost:5050/rem' \
     MOMENT_BUILDER__ENABLED=true \
@@ -22,9 +25,10 @@ from rem.api.main import create_app
 from rem.services.postgres import PostgresService, get_postgres_service
 
 
-# Use fixed UUIDs for reproducibility (must be valid UUID format for DB)
-TEST_USER_ID = str(uuid.uuid4())
-TEST_SESSION_ID = str(uuid.uuid4())
+# FIXED UUIDs for longitudinal testing - DO NOT CHANGE
+# These allow messages to accumulate over time for realistic long-term session testing
+TEST_USER_ID = "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"  # Longitudinal test patient
+TEST_SESSION_ID = "e2e01234-5678-4abc-def0-123456789abc"  # Dedicated test session
 
 
 @pytest.fixture
@@ -38,27 +42,36 @@ async def db():
 
 @pytest.fixture
 async def setup_test_data(db: PostgresService):
-    """Insert test user and messages."""
-    now = datetime.now(timezone.utc)
+    """Insert test user and messages for longitudinal testing.
 
-    # Create test user (tenant_id required)
+    IMPORTANT: Uses FIXED IDs and does NOT delete data after test.
+    This allows messages to accumulate over time for realistic long-term testing.
+    """
+    # Create test user (upsert - may already exist from previous runs)
     await db.pool.execute(
         """
         INSERT INTO users (id, tenant_id, name, email, created_at, updated_at)
         VALUES ($1, $2, $3, $4, NOW(), NOW())
-        ON CONFLICT (id) DO NOTHING
+        ON CONFLICT (id) DO UPDATE SET updated_at = NOW()
         """,
         TEST_USER_ID,
         "test",  # tenant_id
-        "E2E Test User",
-        f"e2e-test-{uuid.uuid4().hex[:8]}@test.com",
+        "Longitudinal Test Patient",
+        "longitudinal-test@siggy.ai",  # Fixed email for this test user
     )
 
-    # Insert test messages - enough to process
+    # Count existing messages in this session
+    existing_count = await db.pool.fetchval(
+        "SELECT COUNT(*) FROM messages WHERE session_id = $1",
+        TEST_SESSION_ID,
+    )
+
+    # Insert test messages - these ADD to existing messages for longitudinal testing
+    messages_added = 0
     for i in range(10):
-        msg_id = str(uuid.uuid4())
+        msg_id = str(uuid.uuid4())  # Random message IDs are fine - they're unique per message
         role = "user" if i % 2 == 0 else "assistant"
-        content = f"Test message {i} from {role}"
+        content = f"Test message batch at {datetime.now(timezone.utc).isoformat()} - msg {i}"
 
         await db.pool.execute(
             """
@@ -72,16 +85,17 @@ async def setup_test_data(db: PostgresService):
             role,
             content,
         )
+        messages_added += 1
 
-    print(f"\n✓ Created test user: {TEST_USER_ID}")
-    print(f"✓ Created 10 test messages in session: {TEST_SESSION_ID}")
+    total_messages = existing_count + messages_added
+    print(f"\n✓ Test user: {TEST_USER_ID}")
+    print(f"✓ Session: {TEST_SESSION_ID}")
+    print(f"✓ Added {messages_added} messages (total now: {total_messages})")
 
     yield
 
-    # Cleanup
-    await db.pool.execute("DELETE FROM messages WHERE user_id = $1", TEST_USER_ID)
-    await db.pool.execute("DELETE FROM users WHERE id = $1", TEST_USER_ID)
-    print(f"✓ Cleaned up test data")
+    # NO CLEANUP - data persists for longitudinal testing
+    print(f"✓ Data preserved for longitudinal testing (session has {total_messages} messages)")
 
 
 @pytest.mark.asyncio

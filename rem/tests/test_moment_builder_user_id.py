@@ -1,4 +1,7 @@
-"""Test that moment builder uses explicit user_id from request body."""
+"""Test that moment builder uses explicit user_id from request body.
+
+Uses FIXED UUIDs for longitudinal testing consistency.
+"""
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -7,6 +10,11 @@ from fastapi.testclient import TestClient
 
 from rem.api.routers.moments import router, MomentBuildRequest, build_moments
 from rem.settings import settings
+
+
+# FIXED UUIDs for longitudinal testing - matches integration tests
+TEST_USER_ID = "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"
+TEST_SESSION_ID = "e2e01234-5678-4abc-def0-123456789abc"
 
 
 @pytest.fixture
@@ -39,10 +47,10 @@ class TestMomentBuildRequest:
     def test_user_id_can_be_provided(self):
         """user_id should accept explicit value."""
         req = MomentBuildRequest(
-            session_id="test-session",
-            user_id="explicit-user-id"
+            session_id=TEST_SESSION_ID,
+            user_id=TEST_USER_ID
         )
-        assert req.user_id == "explicit-user-id"
+        assert req.user_id == TEST_USER_ID
 
     def test_force_defaults_to_false(self):
         """force should default to False."""
@@ -52,12 +60,12 @@ class TestMomentBuildRequest:
     def test_all_fields(self):
         """Test all fields together."""
         req = MomentBuildRequest(
-            session_id="sess-123",
-            user_id="user-456",
+            session_id=TEST_SESSION_ID,
+            user_id=TEST_USER_ID,
             force=True
         )
-        assert req.session_id == "sess-123"
-        assert req.user_id == "user-456"
+        assert req.session_id == TEST_SESSION_ID
+        assert req.user_id == TEST_USER_ID
         assert req.force is True
 
 
@@ -65,8 +73,8 @@ class TestMomentBuildRequest:
 async def test_build_moments_uses_explicit_user_id(mock_request, mock_settings):
     """Test that build_moments uses explicit user_id from body when provided."""
     body = MomentBuildRequest(
-        session_id="test-session-123",
-        user_id="explicit-user-a1b2c3d4"
+        session_id=TEST_SESSION_ID,
+        user_id=TEST_USER_ID
     )
 
     with patch('rem.api.routers.moments.asyncio.create_task') as mock_task:
@@ -91,8 +99,8 @@ async def test_build_moments_uses_explicit_user_id(mock_request, mock_settings):
 async def test_build_moments_falls_back_to_request_user(mock_request, mock_settings):
     """Test that build_moments falls back to request user when user_id not provided."""
     body = MomentBuildRequest(
-        session_id="test-session-123"
-        # user_id not provided
+        session_id=TEST_SESSION_ID
+        # user_id not provided - should fall back to request context
     )
 
     with patch('rem.api.routers.moments.asyncio.create_task') as mock_task:
