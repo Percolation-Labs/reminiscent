@@ -375,6 +375,9 @@ async def stream_openai_response(
                                             extra_data[field] = metadata[field]
                                     if metadata.get("extra"):
                                         extra_data.update(metadata["extra"])
+                                    # Add context stats if available
+                                    if agent_context and agent_context.context_stats:
+                                        extra_data["context_stats"] = agent_context.context_stats
 
                                     yield format_sse_event(MetadataEvent(
                                         message_id=message_id,

@@ -247,6 +247,13 @@ class ContextBuilder:
                         )
                     )
 
+                # Track message counts for debugging/testing
+                context.context_stats = {
+                    "user": sum(1 for m in session_history if m.get("role") == "user"),
+                    "assistant": sum(1 for m in session_history if m.get("role") == "assistant"),
+                    "tool": sum(1 for m in session_history if m.get("role") == "tool"),
+                }
+
                 logger.debug(
                     f"Loaded {len(session_history)} messages for session {context.session_id} "
                     f"(has_partition={has_partition_event}, max={max_messages})"

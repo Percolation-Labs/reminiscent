@@ -228,6 +228,11 @@ class AgentContext(BaseModel):
         description="Client identifier (e.g., 'web', 'mobile', 'cli') set via X-Client-Id header",
     )
 
+    context_stats: dict | None = Field(
+        default=None,
+        description="Message counts loaded into context {user, assistant, tool}",
+    )
+
     model_config = {"populate_by_name": True}
 
     def child_context(
