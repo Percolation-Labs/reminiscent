@@ -1820,10 +1820,19 @@ class MomentBuilderSettings(BaseSettings):
         description="Trigger moment building after N tokens (~50-78% of typical context windows)",
     )
 
-    load_max_messages: int = Field(
-        default=50,
-        description="Maximum messages to load via CTE query (recent messages in conversation order)",
+    load_max_messages: int | None = Field(
+        default=None,
+        description=(
+            "Maximum messages to load via CTE query. "
+            "If not set, defaults to message_threshold to ensure all messages "
+            "up to the moment boundary are loaded."
+        ),
     )
+
+    @property
+    def effective_load_max_messages(self) -> int:
+        """Return load_max_messages or fall back to message_threshold."""
+        return self.load_max_messages if self.load_max_messages is not None else self.message_threshold
 
     insert_partition_event: bool = Field(
         default=True,

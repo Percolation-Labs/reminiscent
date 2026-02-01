@@ -212,9 +212,10 @@ class ContextBuilder:
                 store = SessionMessageStore(user_id=context.user_id or "default")
 
                 # Use CTE limit when moment builder is enabled
+                # Defaults to message_threshold to load all messages up to moment boundary
                 max_messages = None
                 if settings.moment_builder.enabled:
-                    max_messages = settings.moment_builder.load_max_messages
+                    max_messages = settings.moment_builder.effective_load_max_messages
 
                 session_history, has_partition_event = await store.load_session_messages(
                     session_id=context.session_id,
