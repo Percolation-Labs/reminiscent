@@ -39,13 +39,21 @@ REM LOOKUP Pattern:
 - Agent can retrieve full content on-demand using the LOOKUP key
 - Keeps context window efficient while preserving data integrity
 
+Token Threshold Safety:
+- filter_within_token_threshold() ensures loaded messages fit within context window
+- Estimates tokens as chars/4 (reasonable approximation)
+- When truncating, finds latest moment for session and inserts it temporally
+- Moment summary provides lookback to older memories that were truncated
+
 Key Design Decisions:
 1. Store everything uncompressed - full audit trail in database
 2. Compress only on reload - optimize for LLM context window
 3. Never compress tool messages - structured metadata must stay intact
 4. REM LOOKUP enables on-demand retrieval of full assistant responses
+5. Token threshold safety prevents context overflow with moment-based fallback
 """
 
+import json
 from typing import Any
 
 from loguru import logger
@@ -548,7 +556,15 @@ class SessionMessageStore:
             for idx, row in enumerate(rows):
                 role = row["message_type"] or "assistant"
                 content = row["content"] or ""
-                metadata = row["metadata"] or {}
+                # Handle metadata - might be a JSON string or dict
+                metadata_raw = row["metadata"] or {}
+                if isinstance(metadata_raw, str):
+                    try:
+                        metadata = json.loads(metadata_raw)
+                    except json.JSONDecodeError:
+                        metadata = {}
+                else:
+                    metadata = metadata_raw
 
                 msg_dict = {
                     "role": role,
@@ -608,3 +624,255 @@ class SessionMessageStore:
         """
         entity_key = truncate_key(f"session-{session_id}-msg-{message_index}")
         return await self.retrieve_message(entity_key)
+
+
+async def calculate_session_tokens(
+    session_id: str,
+    user_id: str,
+    last_moment_idx: int = 0,
+    model: str | None = None,
+) -> int:
+    """
+    Calculate total tokens for unprocessed messages in a session using tiktoken.
+
+    This provides accurate token counting for moment builder trigger decisions,
+    replacing the defunct session.total_tokens field which was never updated.
+
+    Args:
+        session_id: Session identifier
+        user_id: User identifier for tenant filtering
+        last_moment_idx: Index of last message included in a moment (0 if no moments)
+        model: Optional model name for tiktoken encoding
+
+    Returns:
+        Total tokens for messages after last_moment_idx
+    """
+    from rem.services.postgres import get_postgres_service
+    from rem.settings import settings
+    from rem.utils.agentic_chunking import estimate_tokens
+
+    if not settings.postgres.enabled:
+        return 0
+
+    postgres = get_postgres_service()
+    if not postgres:
+        return 0
+
+    await postgres.connect()
+    try:
+        # Query message content for unprocessed messages
+        # Using row_number to identify messages after last_moment_idx
+        query = """
+            WITH numbered AS (
+                SELECT
+                    content,
+                    ROW_NUMBER() OVER (ORDER BY created_at) as rn
+                FROM messages
+                WHERE session_id = $1
+                  AND user_id = $2
+                  AND deleted_at IS NULL
+            )
+            SELECT content
+            FROM numbered
+            WHERE rn > $3
+        """
+        rows = await postgres.fetch(query, (session_id, user_id, last_moment_idx))
+
+        total_tokens = 0
+        for row in rows:
+            content = row.get("content") or ""
+            # Add ~4 tokens overhead per message for role/structure
+            total_tokens += estimate_tokens(content, model) + 4
+
+        logger.debug(
+            f"Calculated {total_tokens} tokens for session {session_id} "
+            f"({len(rows)} messages after idx {last_moment_idx})"
+        )
+        return total_tokens
+
+    finally:
+        await postgres.disconnect()
+
+
+async def filter_within_token_threshold(
+    messages: list[dict[str, Any]],
+    session_id: str,
+    user_id: str,
+    token_threshold: int,
+    model: str | None = None,
+) -> tuple[list[dict[str, Any]], int]:
+    """
+    Filter messages to fit within token threshold, inserting moment summary if truncated.
+
+    Uses tiktoken for accurate token counting. When messages are truncated, finds the
+    latest moment for the session and inserts it at the correct temporal position
+    to maintain lookback capability to older memories.
+
+    Args:
+        messages: List of message dicts (chronological order, oldest first)
+        session_id: Session ID for moment lookup
+        user_id: User ID for moment lookup
+        token_threshold: Maximum tokens allowed (from settings.moment_builder.token_threshold)
+        model: Optional model name for tiktoken encoding
+
+    Returns:
+        Tuple of (filtered messages, total tokens used)
+
+    Example:
+        >>> messages = [msg1, msg2, msg3, ...]  # 150K tokens
+        >>> filtered, tokens = await filter_within_token_threshold(
+        ...     messages, session_id, user_id, token_threshold=90000
+        ... )
+        >>> # Returns most recent messages + moment summary for truncated portion
+    """
+    from rem.utils.agentic_chunking import estimate_tokens
+
+    if not messages:
+        return [], 0
+
+    # Calculate tokens for each message (content + role overhead ~4 tokens)
+    message_tokens = []
+    for msg in messages:
+        content = msg.get("content") or ""
+        tokens = estimate_tokens(content, model) + 4  # overhead for role/structure
+        message_tokens.append(tokens)
+
+    total_tokens = sum(message_tokens)
+
+    # If within threshold, return as-is
+    if total_tokens <= token_threshold:
+        logger.debug(f"Messages within token threshold: {total_tokens}/{token_threshold}")
+        return messages, total_tokens
+
+    # Need to truncate - work backwards from most recent to find cutoff
+    # Reserve 10% of threshold for moment summary
+    available_tokens = int(token_threshold * 0.9)
+    accumulated = 0
+    cutoff_idx = len(messages)
+
+    for i in range(len(messages) - 1, -1, -1):
+        if accumulated + message_tokens[i] > available_tokens:
+            cutoff_idx = i + 1  # Keep messages from i+1 onwards
+            break
+        accumulated += message_tokens[i]
+
+    # If we'd keep all messages, just return them
+    if cutoff_idx == 0:
+        return messages, total_tokens
+
+    # Truncate older messages
+    kept_messages = messages[cutoff_idx:]
+    truncated_count = cutoff_idx
+
+    logger.info(
+        f"Token threshold exceeded ({total_tokens}/{token_threshold}), "
+        f"truncating {truncated_count} oldest messages, keeping {len(kept_messages)}"
+    )
+
+    # Check if a moment system message is already in the kept messages
+    # (e.g., from a previous load that already included it)
+    has_moment = any(
+        msg.get("_moment_id") or "[CONVERSATION HISTORY SUMMARY]" in (msg.get("content") or "")
+        for msg in kept_messages
+        if msg.get("role") == "system"
+    )
+
+    if has_moment:
+        logger.debug("Moment summary already present in messages, skipping moment lookup")
+        return kept_messages, accumulated
+
+    # Try to find moment summary for the truncated portion
+    moment_message = await _get_moment_for_truncated_messages(
+        session_id, user_id, messages[:cutoff_idx]
+    )
+
+    if moment_message:
+        # Insert moment at the beginning (it summarizes the truncated older messages)
+        kept_messages = [moment_message] + kept_messages
+        moment_tokens = estimate_tokens(moment_message.get("content", ""), model)
+        accumulated += moment_tokens
+        logger.info(
+            f"Inserted moment summary ({moment_tokens} tokens) for {truncated_count} truncated messages"
+        )
+
+    return kept_messages, accumulated
+
+
+async def _get_moment_for_truncated_messages(
+    session_id: str,
+    user_id: str,
+    truncated_messages: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """
+    Find the latest moment that covers the truncated messages.
+
+    Queries the moments table for session-compression moments linked to this session,
+    ordered by ends_timestamp DESC, and returns the most recent one as a system message.
+
+    Args:
+        session_id: Session ID to find moments for
+        user_id: User ID for tenant filtering
+        truncated_messages: The messages being truncated (for timestamp reference)
+
+    Returns:
+        A system message dict with the moment summary, or None if no moment found
+    """
+    from rem.services.postgres import get_postgres_service
+    from rem.settings import settings
+
+    if not settings.postgres.enabled:
+        return None
+
+    postgres = get_postgres_service()
+    if not postgres:
+        return None
+
+    await postgres.connect()
+    try:
+        # Query for the latest session-compression moment for this session
+        query = """
+            SELECT id, name, summary, starts_timestamp, ends_timestamp, previous_moment_keys
+            FROM moments
+            WHERE source_session_id = $1
+              AND user_id = $2
+              AND category = 'session-compression'
+              AND deleted_at IS NULL
+            ORDER BY ends_timestamp DESC
+            LIMIT 1
+        """
+
+        row = await postgres.fetchrow(query, session_id, user_id)
+
+        if not row:
+            logger.debug(f"No moment found for session {session_id}")
+            return None
+
+        summary = row["summary"]
+        moment_name = row["name"]
+        ends_ts = row["ends_timestamp"]
+        previous_keys = row["previous_moment_keys"] or []
+
+        # Build a system message with the moment summary
+        # Include hint about previous moments for deeper lookback
+        content = f"[CONVERSATION HISTORY SUMMARY]\n{summary}"
+
+        if previous_keys:
+            content += f"\n\n[For older history, see previous moments: {', '.join(previous_keys[:3])}]"
+
+        logger.info(
+            f"Found moment '{moment_name}' (ends: {ends_ts}) for truncated session context"
+        )
+
+        return {
+            "role": "system",
+            "content": content,
+            "_moment_id": str(row["id"]),
+            "_moment_name": moment_name,
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get moment for truncated messages: {e}")
+        return None
+
+    finally:
+        await postgres.disconnect()

@@ -208,7 +208,10 @@ class ContextBuilder:
             # - Long assistant messages are compressed on load with REM LOOKUP hints
             # - Tool messages are never compressed (contain structured metadata)
             # - When moment builder enabled, use max_messages limit via CTE
+            # - Token threshold safety: filter to fit within context window
             if context.session_id and settings.postgres.enabled:
+                from ..services.session.compression import filter_within_token_threshold
+
                 store = SessionMessageStore(user_id=context.user_id or "default")
 
                 # Use CTE limit when moment builder is enabled
@@ -223,6 +226,22 @@ class ContextBuilder:
                     compress_on_load=True,  # Compress long assistant messages
                     max_messages=max_messages,
                 )
+
+                # Safety: Filter messages to fit within token threshold
+                # This handles edge cases where few messages have very high token count
+                # (e.g., 70 messages with 120K tokens would exceed context window)
+                if settings.moment_builder.enabled and session_history:
+                    session_history, total_tokens = await filter_within_token_threshold(
+                        messages=session_history,
+                        session_id=context.session_id,
+                        user_id=context.user_id or "default",
+                        token_threshold=settings.moment_builder.token_threshold,
+                        model=context.default_model,
+                    )
+                    logger.debug(
+                        f"Token threshold filter: {total_tokens} tokens, "
+                        f"{len(session_history)} messages kept"
+                    )
 
                 # Convert to ContextMessage format
                 # For tool messages, wrap content with clear markers so the agent

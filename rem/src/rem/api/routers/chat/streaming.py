@@ -960,10 +960,15 @@ async def _maybe_trigger_moment_builder(session_id: str, user_id: str) -> None:
 
     This runs as a fire-and-forget background task after streaming completes.
     Errors are logged but don't affect the user's response.
+
+    Thresholds checked:
+    1. Message count (fast check first)
+    2. Token count using tiktoken (accurate, on-demand calculation)
     """
     try:
         from ....models.entities import Session
         from ....services.postgres import Repository
+        from ....services.session.compression import calculate_session_tokens
 
         repo = Repository(Session, table_name="sessions")
         session = await repo.get_by_id(session_id)
@@ -977,29 +982,36 @@ async def _maybe_trigger_moment_builder(session_id: str, user_id: str) -> None:
 
         # Calculate unprocessed messages since last compaction
         last_processed = session.last_moment_message_idx or 0
-        unprocessed_count = session.message_count - last_processed
+        unprocessed_count = (session.message_count or 0) - last_processed
 
-        # Also check total tokens (if tracked)
-        total_tokens = session.total_tokens or 0
-
-        should_trigger = (
-            unprocessed_count >= message_threshold
-            or total_tokens >= token_threshold
-        )
-
-        if not should_trigger:
-            logger.debug(
-                f"Moment builder threshold not met: "
+        # Fast path: check message threshold first (no DB query needed)
+        if unprocessed_count >= message_threshold:
+            logger.info(
+                f"Moment builder message threshold crossed: "
                 f"messages={unprocessed_count}/{message_threshold}, "
-                f"tokens={total_tokens}/{token_threshold}"
+                f"triggering for session={session_id}"
             )
-            return
+        else:
+            # Slow path: calculate tokens using tiktoken (accurate but requires query)
+            total_tokens = await calculate_session_tokens(
+                session_id=session_id,
+                user_id=user_id,
+                last_moment_idx=last_processed,
+            )
 
-        logger.info(
-            f"Moment builder threshold crossed: "
-            f"messages={unprocessed_count}, tokens={total_tokens}, "
-            f"triggering for session={session_id}"
-        )
+            if total_tokens < token_threshold:
+                logger.debug(
+                    f"Moment builder threshold not met: "
+                    f"messages={unprocessed_count}/{message_threshold}, "
+                    f"tokens={total_tokens}/{token_threshold}"
+                )
+                return
+
+            logger.info(
+                f"Moment builder token threshold crossed: "
+                f"tokens={total_tokens}/{token_threshold}, "
+                f"triggering for session={session_id}"
+            )
 
         # Trigger moment builder (fire-and-forget)
         from ....agentic.agents import run_moment_builder
