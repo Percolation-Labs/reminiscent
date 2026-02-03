@@ -137,11 +137,13 @@ Example Request:
 """
 
 import base64
+import json
 import tempfile
 import time
 import uuid
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
@@ -198,6 +200,80 @@ def get_tracer():
         return trace.get_tracer("rem.chat.completions")
     except Exception:
         return None
+
+
+def extract_tool_calls_from_result(result: Any, timestamp: str, trace_id: str | None, span_id: str | None) -> list[dict]:
+    """Extract tool call messages from pydantic-ai agent result.
+
+    Iterates through result.all_messages() to find ToolReturnPart and ToolCallPart
+    and converts them to the storage format expected by SessionMessageStore.
+
+    Args:
+        result: The pydantic-ai agent run result
+        timestamp: ISO timestamp for the messages
+        trace_id: OpenTelemetry trace ID
+        span_id: OpenTelemetry span ID
+
+    Returns:
+        List of tool message dicts ready for storage
+    """
+    tool_messages = []
+
+    try:
+        # Track tool calls (name + args) by tool_call_id so we can match with results
+        tool_call_info: dict[str, dict] = {}
+
+        for msg in result.new_messages():
+            if not hasattr(msg, 'parts'):
+                continue
+
+            for part in msg.parts:
+                part_type = type(part).__name__
+
+                # Capture tool call info (arguments)
+                if part_type == 'ToolCallPart':
+                    tool_call_id = getattr(part, 'tool_call_id', None)
+                    if tool_call_id:
+                        tool_call_info[tool_call_id] = {
+                            'tool_name': getattr(part, 'tool_name', 'unknown'),
+                            'args': getattr(part, 'args', {}),
+                        }
+
+                # Capture tool return (result)
+                elif part_type == 'ToolReturnPart':
+                    tool_call_id = getattr(part, 'tool_call_id', None)
+                    tool_name = getattr(part, 'tool_name', 'unknown')
+                    content = getattr(part, 'content', None)
+
+                    # Get arguments from matching ToolCallPart
+                    args = {}
+                    if tool_call_id and tool_call_id in tool_call_info:
+                        args = tool_call_info[tool_call_id].get('args', {})
+
+                    # Serialize content to JSON
+                    if content is not None:
+                        if isinstance(content, (dict, list)):
+                            content_str = json.dumps(content, default=str)
+                        else:
+                            content_str = json.dumps({'result': str(content)}, default=str)
+                    else:
+                        content_str = '{}'
+
+                    tool_messages.append({
+                        'role': 'tool',
+                        'content': content_str,
+                        'timestamp': timestamp,
+                        'trace_id': trace_id,
+                        'span_id': span_id,
+                        'tool_call_id': tool_call_id,
+                        'tool_name': tool_name,
+                        'tool_arguments': args,
+                    })
+
+    except Exception as e:
+        logger.warning(f"Failed to extract tool calls from result: {e}")
+
+    return tool_messages
 
 
 async def ensure_session_with_metadata(
@@ -511,6 +587,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
     # Load raw session history for proper pydantic-ai message_history format
     # This enables proper tool call/return pairing for LLM API compatibility
     from ....services.session import SessionMessageStore, session_to_pydantic_messages, audit_session_history
+    from ....services.session.compression import filter_within_token_threshold
     from ....agentic.schema import get_system_prompt
 
     pydantic_message_history = None
@@ -523,6 +600,18 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
                 compress_on_load=False,  # Don't compress - we need full data for reconstruction
             )
             if raw_session_history:
+                # CRITICAL: Apply token threshold filter to prevent context_length_exceeded
+                # This is the safety net for sessions with large history
+                if settings.moment_builder.enabled:
+                    raw_session_history, total_tokens = await filter_within_token_threshold(
+                        messages=raw_session_history,
+                        session_id=context.session_id,
+                        user_id=context.user_id or settings.test.effective_user_id,
+                        token_threshold=settings.moment_builder.token_threshold,
+                        model=body.model if body.model else context.default_model,
+                    )
+                    logger.debug(f"Filtered session history to {len(raw_session_history)} messages, {total_tokens} tokens")
+
                 # CRITICAL: Extract and pass the agent's system prompt
                 # pydantic-ai only auto-adds system prompts when message_history is empty
                 # When we pass message_history, we must include the system prompt ourselves
@@ -650,22 +739,30 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
 
     # Save conversation messages to database (if session_id and postgres enabled)
     if settings.postgres.enabled and context.session_id:
+        timestamp = datetime.utcnow().isoformat()
+
         # Extract just the new user message (last message from body)
         user_message = {
             "role": "user",
             "content": body.messages[-1].content if body.messages else "",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": timestamp,
             "trace_id": trace_id,
             "span_id": span_id,
         }
 
+        # Extract tool calls from agent result (same as streaming mode)
+        tool_messages = extract_tool_calls_from_result(result, timestamp, trace_id, span_id)
+
         assistant_message = {
             "role": "assistant",
             "content": content,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": timestamp,
             "trace_id": trace_id,
             "span_id": span_id,
         }
+
+        # Build messages list: user -> tool calls -> assistant
+        messages_to_store = [user_message] + tool_messages + [assistant_message]
 
         try:
             # Store messages with compression
@@ -673,12 +770,12 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
 
             await store.store_session_messages(
                 session_id=context.session_id,
-                messages=[user_message, assistant_message],
+                messages=messages_to_store,
                 user_id=context.user_id,
                 compress=True,
             )
 
-            logger.info(f"Saved conversation to session {context.session_id}")
+            logger.info(f"Saved conversation to session {context.session_id} ({len(tool_messages)} tool calls)")
         except Exception as e:
             # Log error but don't fail the request - session storage is non-critical
             logger.error(f"Failed to save session messages: {e}", exc_info=True)
