@@ -855,19 +855,44 @@ async def stream_openai_response_with_save(
 
         messages_to_store = []
 
-        # First, store tool call messages (message_type: "tool")
+        # Store tool call messages (message_type: "tool")
+        # IMPORTANT: We always store tool_arguments (for history reconstruction),
+        # but we only store the result content for ask_agent with structured_output=true.
+        # This prevents large tool results (like read_file content) from bloating session history
+        # and causing context overflow on session recovery.
         for tool_call in tool_calls:
             if not tool_call:
                 continue
+
+            tool_name = tool_call.get("tool_name")
+            result = tool_call.get("result", {})
+
+            # Determine if we should persist the result content
+            # Only persist result for ask_agent calls with structured output
+            # (child agent returned a Pydantic model, not just text)
+            should_persist_result = (
+                tool_name == "ask_agent"
+                and isinstance(result, dict)
+                and result.get("is_structured_output") is True
+            )
+
+            if should_persist_result:
+                # Store full result for structured agent delegations
+                content = json.dumps(result, default=str)
+            else:
+                # Store only arguments (not result) for other tools
+                # This allows session reconstruction without bloating context
+                content = json.dumps(tool_call.get("arguments", {}), default=str)
+
             tool_message = {
                 "role": "tool",
-                "content": json.dumps(tool_call.get("result", {}), default=str),
+                "content": content,
                 "timestamp": timestamp,
                 "trace_id": captured_trace_id,
                 "span_id": captured_span_id,
                 # Store tool call details in a way that can be reconstructed
                 "tool_call_id": tool_call.get("tool_id"),
-                "tool_name": tool_call.get("tool_name"),
+                "tool_name": tool_name,
                 "tool_arguments": tool_call.get("arguments"),
             }
             messages_to_store.append(tool_message)
